@@ -268,7 +268,7 @@ def main():
     max_per_org   = int(getenv("INTEL_MAX_PER_ORG", "5"))
     g_api_key = getenv("GOOGLE_API_KEY")
     g_cse_id  = getenv("GOOGLE_CSE_ID")
-    profile_subject = getenv("PROFILE_SUBJECT", "Org Profile — Will Mitchell")
+    profile_subject = getenv("NEWS_PROFILE_SUBJECT", "Org Profile — Will Mitchell")
 
     # Gmail service
     svc = build_service(
@@ -279,7 +279,7 @@ def main():
     user = getenv("GMAIL_USER") or os.environ["GMAIL_USER"]
 
     # Load latest weekly CSV via Gmail
-    msgs = search_messages(svc, user, getenv("GMAIL_QUERY"), max_results=5)
+    msgs = search_messages(svc, user, getenv("NEWS_GMAIL_QUERY"), max_results=5)
     df = None
     for m in msgs:
         msg = get_message(svc, user, m["id"])
