@@ -50,12 +50,13 @@ jobs:
           GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}   # optional
           # Tune the Gmail search for your weekly CSV if you want to reuse it as the org source:
-          GMAIL_QUERY: 'from:metabase subject:"Weekly Diff — Will Mitchell" has:attachment filename:csv newer_than:10d'
+          GMAIL_QUERY: 'from:metabase@mercury.com subject:"Alert: Wills Accounts Demographics has results" has:attachment filename:csv newer_than:10d'
           ATTACHMENT_REGEX: '.*\.csv$'
           INTEL_LOOKBACK_DAYS: '10'
           INTEL_MAX_PER_ORG: '5'
           DIGEST_TO: ${{ secrets.DIGEST_TO }}
           DIGEST_CC: ${{ secrets.DIGEST_CC }}
           DIGEST_BCC: ${{ secrets.DIGEST_BCC }}
+          PROFILE_SUBJECT: 'Alert: Wills Accounts Demographics has results'
         run: |
           python -m app.news_job
