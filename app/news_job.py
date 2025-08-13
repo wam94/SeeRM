@@ -221,11 +221,11 @@ INTEL_TEMPLATE = Template("""
   {% for org in orgs %}
     <div class="section">
       <div class="h1">{{ org.callsign }}{% if org.dba %} — {{ org.dba }}{% endif %}</div>
-      {% if org.items %}
+      {% if org["items"] %}
         <table>
           <thead><tr><th>Title</th><th>Source</th></tr></thead>
           <tbody>
-          {% for it in org.items %}
+          {% for it in org["items"] %}
             <tr>
               <td><a href="{{ it.url }}">{{ it.title }}</a><div class="src">{{ it.snippet }}</div></td>
               <td class="src">{{ it.source }}</td>
