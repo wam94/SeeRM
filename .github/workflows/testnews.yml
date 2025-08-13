@@ -62,5 +62,10 @@ jobs:
           DIGEST_TO: ${{ inputs.send_to || secrets.DIGEST_TO }}
           DIGEST_CC: ${{ secrets.DIGEST_CC }}
           DIGEST_BCC: ${{ secrets.DIGEST_BCC }}
+                    # Content fetching & summarization knobs
+          FETCH_ARTICLE_CONTENT: 'true'      # set 'false' to disable fulltext fetch
+          FETCH_MAX_PER_ORG: '3'             # number of articles to fetch per org
+          ARTICLE_READ_TIMEOUT: '15'         # seconds per download
+          ARTICLE_MAX_BYTES: '400000'        # cap per-article payload
         run: |
           python -m app.news_job
