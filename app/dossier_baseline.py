@@ -1,6 +1,7 @@
+# app/dossier_baseline.py
 from __future__ import annotations
-import os, io, json
-from datetime import datetime, timedelta
+import os, io, json, requests
+from datetime import datetime
 from typing import List, Dict, Any
 
 import pandas as pd
@@ -14,6 +15,9 @@ from app.news_job import (
     fetch_csv_by_subject, build_queries, try_rss_feeds,
     google_cse_search, dedupe, within_days
 )
+
+# Notion helpers
+from app.notion_client import upsert_company_page, set_needs_dossier
 
 # ---------------------- Env helpers ----------------------
 
@@ -123,7 +127,7 @@ Use the following sections and headings exactly:
 - Who we’re talking about; how you resolved the identity (DBA vs brand vs domain); HQ if available.
 
 🏢 Company Overview
-- One short paragraph on what round of funding they've achieved, who their investors are, and number of employees
+- One short paragraph on stage, size (if inferable), compliance posture if clearly public (e.g., SOC 2 / ISO).
 
 🚀 Product & Use Cases
 - 3–6 bullets: product, core capabilities, typical users, high-level use cases.
@@ -223,25 +227,51 @@ def generate_narrative(org: dict, news_items: list[dict], people_bg: list[dict])
         lines.append("- (no background findings)")
     return "\n".join(lines)
 
-    data = openai_structured(prompt)
-    if data is None:
-        # graceful fallback: a minimal JSON with just basic info
-        return {
-            "resolved_company": {
-                "name": org.get("dba") or (org.get("domain_root") or org.get("callsign") or ""),
-                "website": org.get("website") or "",
-                "confidence": 0.4,
-            },
-            "executive_summary": "LLM unavailable; baseline includes recent links below.",
-            "company_overview": "",
-            "products_services": [],
-            "recent_announcements": [{"date": it.get("published_at",""), "title": it.get("title",""), "url": it.get("url","")} for it in news_items[:3]],
-            "key_customers": [],
-            "people": [{"name": p["name"], "role": "", "bio": ""} for p in people_bg],
-            "risks_unknowns": ["Structured generation unavailable; review evidence links."],
-            "next_actions": ["Skim the listed links; confirm identity via website/about page."]
-        }
-    return data
+# ---------------------- Notion push ----------------------
+
+def push_dossier_to_notion(callsign: str, org: dict, markdown_body: str):
+    token = os.getenv("NOTION_API_KEY")
+    companies_db = os.getenv("NOTION_COMPANIES_DB_ID")
+    if not (token and companies_db):
+        return
+    # Upsert company page (ensure the "Company" prop is filled)
+    page_id = upsert_company_page(companies_db, {
+        "callsign": callsign,
+        "company":  org.get("dba") or "",
+        "dba":      org.get("dba") or "",  # send both for backward-compat
+        "website":  org.get("website") or "",
+        "domain":   org.get("domain_root") or "",
+        "owners":   org.get("owners") or [],
+        "needs_dossier": False,
+    })
+    # Append a 'Dossier' section (heading + paragraphs)
+    hdr = {
+        "object": "block",
+        "type": "heading_2",
+        "heading_2": {"rich_text": [{"type": "text", "text": {"content": "Dossier"}}]}
+    }
+    # Chunk text for Notion API size limits
+    chunks = [markdown_body[i:i+1800] for i in range(0, len(markdown_body), 1800)] or [markdown_body]
+    paras = [{
+        "object": "block",
+        "type": "paragraph",
+        "paragraph": {"rich_text": [{"type": "text", "text": {"content": ch}}]}
+    } for ch in chunks]
+    requests.patch(
+        f"https://api.notion.com/v1/blocks/{page_id}/children",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Notion-Version": os.getenv("NOTION_VERSION","2022-06-28"),
+            "Content-Type": "application/json",
+        },
+        json={"children": [hdr] + paras},
+        timeout=30
+    ).raise_for_status()
+    # Clear the “Needs Dossier” flag
+    try:
+        set_needs_dossier(page_id, False)
+    except Exception:
+        pass
 
 # ---------------------- Main ----------------------
 
@@ -264,8 +294,8 @@ def main():
     user = getenv("GMAIL_USER") or os.environ["GMAIL_USER"]
 
     # Load profile + weekly CSVs
-    profile_subject = getenv("NEWS_PROFILE_SUBJECT") or "Org Profile — Will Mitchell"
-    weekly_query = getenv("NEWS_GMAIL_QUERY") or 'from:metabase subject:"Weekly Diff — Will Mitchell" has:attachment filename:csv newer_than:30d'
+    profile_subject = getenv("NEWS_PROFILE_SUBJECT")
+    weekly_query = getenv("NEWS_GMAIL_QUERY")
     df_profile = fetch_csv_by_subject(svc, user, profile_subject)
     weekly = load_latest_weekly_csv(svc, user, weekly_query, getenv("ATTACHMENT_REGEX", r".*\.csv$"))
 
@@ -311,7 +341,7 @@ def main():
                     owners = base.get("owners") or (r[wcols.get("beneficial_owners")] if wcols.get("beneficial_owners") else "")
                     base["owners"] = [s.strip() for s in str(owners).split(",") if s.strip()]
                 else:
-                    if not base.get(k) and wcols.get(k):
+                    if (not base.get(k)) and wcols.get(k):
                         base[k] = r[wcols.get(k)]
             prof[cs] = base
 
@@ -332,6 +362,12 @@ def main():
         narr = generate_narrative(org, news_items, people_bg)
         dossiers.append({"callsign": org.get("callsign"), "body_md": narr})
 
+        # Push to Notion (if configured)
+        try:
+            push_dossier_to_notion((org.get("callsign") or "").strip(), org, narr)
+        except Exception as e:
+            print("Notion dossier push error:", e)
+
     # Output / email
     preview = getenv("PREVIEW_ONLY", "true").lower() in ("1","true","yes","y")
     if preview:
@@ -344,11 +380,9 @@ def main():
     # Simple HTML wrapper for email
     body = ["<html><body><h2>Baselines</h2>"]
     for d in dossiers:
-        body.append(f"<h3>{d.get('callsign')}</h3>")
-        # keep markdown as preformatted text for now (simple, no extra deps)
-        body.append(f"<pre style='white-space:pre-wrap'>{d['body_md']}</pre><hr/>")
+        body.append(f"<h3>{d.get('callsign')}</h3><pre style='white-space:pre-wrap'>{d['body_md']}</pre><hr/>")
     body.append("</body></html>")
-    html = "\n".join(body)    
+    html = "\n".join(body)
 
     to = getenv("DIGEST_TO") or getenv("GMAIL_USER") or ""
     send_html_email(build_service(
