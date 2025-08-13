@@ -1,4 +1,4 @@
-name: Preflight
+name: Weekly Digest
 
 on:
   schedule:
@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    # If you stored Environment secrets (e.g., "prod"), uncomment:
+    # If you stored Environment secrets (e.g., "prod"), uncomment the next line:
     # environment: prod
     steps:
       - name: Checkout
@@ -26,25 +26,52 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # --- Preflight checks: prove secrets are present (length only; values masked) ---
-      - name: Preflight env check
+      # --- Preflight: show if values exist as SECRETS or as VARIABLES (length only) ---
+      - name: Preflight presence check
+        env:
+          # Secrets
+          S_GCID: ${{ secrets.GMAIL_CLIENT_ID }}
+          S_GCSEC: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          S_GRT: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          S_GU: ${{ secrets.GMAIL_USER }}
+          # Variables (non-sensitive, if you accidentally put them here)
+          V_GCID: ${{ vars.GMAIL_CLIENT_ID }}
+          V_GCSEC: ${{ vars.GMAIL_CLIENT_SECRET }}
+          V_GRT: ${{ vars.GMAIL_REFRESH_TOKEN }}
+          V_GU: ${{ vars.GMAIL_USER }}
         run: |
           python - <<'PY'
           import os
-          def show(name):
+          def show(label, name):
               val = os.getenv(name)
-              print(f"{name}: present={bool(val)} length={len(val) if val else 0}")
-          for n in ["GMAIL_CLIENT_ID","GMAIL_CLIENT_SECRET","GMAIL_REFRESH_TOKEN","GMAIL_USER"]:
-              show(n)
+              print(f"{label} {name}: present={bool(val)} length={len(val) if val else 0}")
+          for prefix in ["S","V"]:
+              for key in ["GCID","GCSEC","GRT","GU"]:
+                  show(prefix, f"{prefix}_{key}")
           PY
-        env:
-          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
-          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
-          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
 
-      # --- Optional: quick import sanity check (remove after first success) ---
+      # --- Build runtime env with fallback: Secrets first, else Variables ---
+      - name: Export runtime env
+        shell: bash
+        env:
+          S_GCID: ${{ secrets.GMAIL_CLIENT_ID }}
+          S_GCSEC: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          S_GRT: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          S_GU: ${{ secrets.GMAIL_USER }}
+          V_GCID: ${{ vars.GMAIL_CLIENT_ID }}
+          V_GCSEC: ${{ vars.GMAIL_CLIENT_SECRET }}
+          V_GRT: ${{ vars.GMAIL_REFRESH_TOKEN }}
+          V_GU: ${{ vars.GMAIL_USER }}
+        run: |
+          echo "GMAIL_CLIENT_ID=${S_GCID:-$V_GCID}" >> $GITHUB_ENV
+          echo "GMAIL_CLIENT_SECRET=${S_GCSEC:-$V_GCSEC}" >> $GITHUB_ENV
+          echo "GMAIL_REFRESH_TOKEN=${S_GRT:-$V_GRT}" >> $GITHUB_ENV
+          echo "GMAIL_USER=${S_GU:-$V_GU}" >> $GITHUB_ENV
+
+      # --- Optional import sanity check (remove after first success) ---
       - name: Debug import path
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           python - <<'PY'
           import sys, os, importlib.util
@@ -54,25 +81,27 @@ jobs:
           print("sys.path (first 3):", sys.path[:3])
           print("find_spec('app'):", importlib.util.find_spec("app"))
           PY
-        env:
-          PYTHONPATH: ${{ github.workspace }}
 
-      # --- Run the weekly digest ---
+      # --- Run the weekly digest (fails fast if any required env missing) ---
       - name: Run weekly digest
         env:
           PYTHONPATH: ${{ github.workspace }}
-          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
-          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
-          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
-          # Optional overrides (add these repo secrets only if you need them):
           DIGEST_TO: ${{ secrets.DIGEST_TO }}
           DIGEST_CC: ${{ secrets.DIGEST_CC }}
           DIGEST_BCC: ${{ secrets.DIGEST_BCC }}
-          # You can also set repo Variables and read them in code; the app already has sane defaults
+          # Optional repo Variables (non-sensitive knobs):
           # GMAIL_QUERY: ${{ vars.GMAIL_QUERY }}
           # ATTACHMENT_REGEX: ${{ vars.ATTACHMENT_REGEX }}
           # TOP_MOVERS: ${{ vars.TOP_MOVERS }}
           # DIGEST_SUBJECT: ${{ vars.DIGEST_SUBJECT }}
         run: |
-          python -m app.main
+          python - <<'PY'
+          import os, sys
+          required = ["GMAIL_CLIENT_ID","GMAIL_CLIENT_SECRET","GMAIL_REFRESH_TOKEN","GMAIL_USER"]
+          missing = [k for k in required if not os.getenv(k)]
+          if missing:
+              raise SystemExit("Missing required env(s): " + ", ".join(missing))
+          import runpy
+          sys.path.insert(0, os.getcwd())
+          runpy.run_module("app.main", run_name="__main__")
+          PY
