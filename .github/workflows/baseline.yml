@@ -31,9 +31,9 @@ jobs:
           GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GMAIL_QUERY: 'from:metabase subject:"Weekly Diff — Will Mitchell" has:attachment filename:csv newer_than:30d'
+          GMAIL_QUERY: ${{ vars.GMAIL_QUERY }}
           ATTACHMENT_REGEX: '.*\.csv$'
-          PROFILE_SUBJECT: 'Org Profile — Will Mitchell'
+          PROFILE_SUBJECT: ${{ vars.PROFILE_SUBJECT }}
           BASELINE_CALLSIGNS: ${{ inputs.callsigns }}
           PREVIEW_ONLY: ${{ inputs.preview_only }}
           DIGEST_TO: ${{ secrets.DIGEST_TO }}
