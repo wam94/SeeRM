@@ -96,9 +96,9 @@ def main():
     user = getenv("GMAIL_USER") or os.environ["GMAIL_USER"]
 
     # Load profile + weekly CSVs
-    profile_subject = getenv("PROFILE_SUBJECT","Org Profile — Will Mitchell")
+    profile_subject = getenv("NEWS_PROFILE_SUBJECT","Org Profile — Will Mitchell")
     df_profile = fetch_csv_by_subject(svc, user, profile_subject)
-    weekly = load_latest_weekly_csv(svc, user, getenv("GMAIL_QUERY",""), getenv("ATTACHMENT_REGEX", r".*\.csv$"))
+    weekly = load_latest_weekly_csv(svc, user, getenv("NEWS_GMAIL_QUERY",""), getenv("ATTACHMENT_REGEX", r".*\.csv$"))
     if df_profile is None and weekly is None:
         raise SystemExit("Need at least one CSV (profile or weekly) to build a baseline.")
 
