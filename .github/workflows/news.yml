@@ -1,0 +1,61 @@
+name: External Intel
+
+on:
+  schedule:
+    - cron: '30 14 * * MON'     # Mondays 14:30 UTC (~10:30 ET)
+  workflow_dispatch: {}
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Quick preflight (length only; values are masked)
+      - name: Preflight env
+        run: |
+          python - <<'PY'
+          import os
+          for k in ["GMAIL_CLIENT_ID","GMAIL_CLIENT_SECRET","GMAIL_REFRESH_TOKEN","GMAIL_USER","GOOGLE_API_KEY","GOOGLE_CSE_ID"]:
+              v = os.getenv(k)
+              print(f"{k}: present={bool(v)} len={len(v) if v else 0}")
+          PY
+        env:
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
+
+      - name: Run external intel
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}   # optional
+          # Tune the Gmail search for your weekly CSV if you want to reuse it as the org source:
+          GMAIL_QUERY: 'from:metabase subject:"Weekly Diff — Will Mitchell" has:attachment filename:csv newer_than:10d'
+          ATTACHMENT_REGEX: '.*\.csv$'
+          INTEL_LOOKBACK_DAYS: '10'
+          INTEL_MAX_PER_ORG: '5'
+          DIGEST_TO: ${{ secrets.DIGEST_TO }}
+          DIGEST_CC: ${{ secrets.DIGEST_CC }}
+          DIGEST_BCC: ${{ secrets.DIGEST_BCC }}
+        run: |
+          python -m app.news_job
