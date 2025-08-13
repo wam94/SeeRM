@@ -59,12 +59,17 @@ jobs:
           pip install -r requirements.txt
 
       - name: Notion preflight (optional but recommended)
-        if: ${{ secrets.NOTION_API_KEY != '' && secrets.NOTION_COMPANIES_DB_ID != '' && secrets.NOTION_INTEL_DB_ID != '' }}
         env:
-          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
-          NOTION_COMPANIES_DB_ID: ${{ secrets.NOTION_COMPANIES_DB_ID }}
-          NOTION_INTEL_DB_ID: ${{ secrets.NOTION_INTEL_DB_ID }}
+          # Map secrets into env; default to empty string so the step never errors on missing secrets
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY || '' }}
+          NOTION_COMPANIES_DB_ID: ${{ secrets.NOTION_COMPANIES_DB_ID || '' }}
+          NOTION_INTEL_DB_ID: ${{ secrets.NOTION_INTEL_DB_ID || '' }}
         run: |
+          if [ -z "${NOTION_API_KEY}" ] || [ -z "${NOTION_COMPANIES_DB_ID}" ] || [ -z "${NOTION_INTEL_DB_ID}" ]; then
+            echo "Skipping Notion preflight (one or more NOTION_* secrets missing)."
+            exit 0
+          fi
+
           python - <<'PY'
           import os, requests, sys
           hdr = {
