@@ -51,9 +51,9 @@ jobs:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}   # optional
-          GMAIL_QUERY: 'from:metabase subject:"Weekly Diff — Will Mitchell" has:attachment filename:csv newer_than:10d'
+          GMAIL_QUERY: ${{ vars.GMAIL_QUERY }}
           ATTACHMENT_REGEX: '.*\.csv$'
-          PROFILE_SUBJECT: 'Org Profile — Will Mitchell'
+          PROFILE_SUBJECT: ${{ vars.PROFILE_SUBJECT }}'
           # map inputs -> env the app reads
           FILTER_CALLSIGNS: ${{ inputs.callsigns }}
           PREVIEW_ONLY: ${{ inputs.preview_only }}
