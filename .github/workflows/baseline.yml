@@ -31,9 +31,9 @@ jobs:
           GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GMAIL_QUERY: ${{ vars.GMAIL_QUERY }}
+          NEWS_GMAIL_QUERY: ${{ vars.NEWS_GMAIL_QUERY }}
           ATTACHMENT_REGEX: '.*\.csv$'
-          PROFILE_SUBJECT: ${{ vars.PROFILE_SUBJECT }}
+          NEWS_PROFILE_SUBJECT: ${{ vars.NEWS_PROFILE_SUBJECT }}
           BASELINE_CALLSIGNS: ${{ inputs.callsigns }}
           PREVIEW_ONLY: ${{ inputs.preview_only }}
           DIGEST_TO: ${{ secrets.DIGEST_TO }}
