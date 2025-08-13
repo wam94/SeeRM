@@ -246,7 +246,7 @@ def main():
     max_per_org   = int(getenv("INTEL_MAX_PER_ORG", "5"))
     g_api_key = getenv("GOOGLE_API_KEY")
     g_cse_id  = getenv("GOOGLE_CSE_ID")
-    profile_subject = getenv("PROFILE_SUBJECT", "Org Profile — Will Mitchell")
+    profile_subject = getenv("PROFILE_SUBJECT", "Alert: Will Accounts Demographics has results")
 
     # Gmail service
     svc = build_service(
