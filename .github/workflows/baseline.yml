@@ -1,0 +1,41 @@
+name: Baseline Dossiers
+
+on:
+  workflow_dispatch:
+    inputs:
+      callsigns:
+        description: 'Comma-separated callsigns'
+        required: true
+      preview_only:
+        description: 'Print to logs instead of emailing'
+        required: false
+        default: 'true'
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run baselines
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GMAIL_QUERY: 'from:metabase subject:"Weekly Diff — Will Mitchell" has:attachment filename:csv newer_than:30d'
+          ATTACHMENT_REGEX: '.*\.csv$'
+          PROFILE_SUBJECT: 'Org Profile — Will Mitchell'
+          BASELINE_CALLSIGNS: ${{ inputs.callsigns }}
+          PREVIEW_ONLY: ${{ inputs.preview_only }}
+          DIGEST_TO: ${{ secrets.DIGEST_TO }}
+        run: |
+          python -m app.dossier_baseline
