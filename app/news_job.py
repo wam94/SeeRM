@@ -59,21 +59,29 @@ def fetch_csv_by_subject(service, user, subject, attachment_regex=r".*\.csv$", m
     return None
 
 # ---------- Query building ----------
-def build_queries(dba: str, website: str, owners: list[str] | None):
-    # Focused company queries; tweak as needed
+def build_queries(dba: str, website: str, owners: list[str] | None,
+                  domain_root: str = None, aka_names: str = None, tags: str = None):
+    names = [n for n in [dba] + (aka_names.split(",") if aka_names else []) if n]
+    names = list(dict.fromkeys([n.strip() for n in names]))  # de-dupe/preserve order
+
     base = []
-    site = (website or "").strip()
-    if site:
-        base.append(f'site:{site} (launch OR announces OR announcement OR product OR release OR funding OR raised OR partners OR integrates)')
-        base.append(f'site:{site} blog')
-        base.append(f'site:{site} press')
-    # general web
-    if dba:
-        base.append(f'"{dba}" (launch OR announces OR product OR release OR funding OR raised OR partners OR integrates)')
-    # light owner flavor (to catch exec blog posts)
+    # Site-centric queries
+    root = domain_root or (website or "").lower().replace("https://","").replace("http://","").replace("www.","").strip("/")
+    if root:
+        base.append(f'site:{root} (launch OR announces OR announcement OR product OR release OR funding OR raised OR partners OR integrates)')
+        base.append(f'site:{root} blog')
+        base.append(f'site:{root} press')
+    # Name-centric queries
+    for n in names[:2]:
+        base.append(f'"{n}" (launch OR product OR release OR funding OR partners OR integrates)')
+    # Owner mentions
     for p in (owners or [])[:2]:
-        base.append(f'"{p}" "{dba}"') if dba else base.append(f'"{p}"')
-    return [q for q in base if q]
+        if p: base.append(f'"{p}" "{names[0] if names else dba}"' if names else f'"{p}"')
+    # Tags/industry boost
+    if tags:
+        base.append(f'{names[0] if names else (dba or "")} {tags} news')
+
+    return [q for q in base if q and len(q) > 3]
 
 # ---------- Sources ----------
 def try_rss_feeds(website: str):
