@@ -41,21 +41,43 @@ TEMPLATE = Template("""
 
     {% if top_movers %}
     <div class=\"section\">
-      <div class=\"h1\">Top balance movers</div>
-      <table>
-        <thead><tr><th>Callsign</th><th>Δ Balance</th><th>%</th></tr></thead>
-        <tbody>
-          {% for r in top_movers %}
-          <tr>
-            <td>{{ r.callsign }}</td>
-            <td class=\"mono\">{{ "{:,.0f}".format(r.balance_delta) }}</td>
-            <td class=\"mono\">{{ "" if r.balance_pct_delta_pct is none else "{:.2f}%".format(r.balance_pct_delta_pct) }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% endif %}
+      {% if top_pct_gainers or top_pct_losers %}
+      <div class="section">
+        <div class="h1">Top % balance movers</div>
+      
+        {% if top_pct_gainers %}
+        <div><strong>Biggest % increases</strong></div>
+        <table>
+          <thead><tr><th>Callsign</th><th>%</th><th>Δ Balance</th></tr></thead>
+          <tbody>
+            {% for r in top_pct_gainers %}
+            <tr>
+              <td>{{ r.callsign }}</td>
+              <td class="mono">{{ "{:+.2f}%".format(r.pct) }}</td>
+              <td class="mono">{{ "" if r.balance_delta is none else "{:,.0f}".format(r.balance_delta) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+      
+        {% if top_pct_losers %}
+        <div style="margin-top:10px;"><strong>Biggest % decreases</strong></div>
+        <table>
+          <thead><tr><th>Callsign</th><th>%</th><th>Δ Balance</th></tr></thead>
+          <tbody>
+            {% for r in top_pct_losers %}
+            <tr>
+              <td>{{ r.callsign }}</td>
+              <td class="mono">{{ "{:+.2f}%".format(r.pct) }}</td>
+              <td class="mono">{{ "" if r.balance_delta is none else "{:,.0f}".format(r.balance_delta) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+      </div>
+      {% endif %}
 
     {% if product_starts or product_stops %}
     <div class=\"section\">
