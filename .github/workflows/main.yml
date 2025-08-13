@@ -31,7 +31,7 @@ jobs:
           DIGEST_TO: ${{ secrets.DIGEST_TO }}
           DIGEST_CC: ${{ secrets.DIGEST_CC }}
           DIGEST_BCC: ${{ secrets.DIGEST_BCC }}
-          GMAIL_QUERY: 'from:metabase@mercury.com subject:"Alert: SeeRM Master Query has results" has:attachment filename:csv newer_than:10d'
+          GMAIL_QUERY: ${{ vars.GMAIL_QUERY }}
           ATTACHMENT_REGEX: '.*\.csv$'
         run: |
           python -m app.main
