@@ -102,101 +102,126 @@ def collect_people_background(org: Dict[str, Any], lookback_days: int, g_api_key
         })
     return results
 
-# ---------------------- Prompting ----------------------
+# ---------- Narrative prompt (executive summary style) ----------
 
-JSON_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "resolved_company": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "website": {"type": "string"},
-                "confidence": {"type": "number"}
-            },
-            "required": ["name", "confidence"]
-        },
-        "executive_summary": {"type": "string"},
-        "company_overview": {"type": "string"},
-        "products_services": {
-            "type": "array",
-            "items": {"type": "object", "properties": {
-                "name": {"type": "string"},
-                "use_cases": {"type": "array", "items": {"type": "string"}},
-                "notes": {"type": "string"}
-            }}
-        },
-        "recent_announcements": {
-            "type": "array",
-            "items": {"type": "object", "properties": {
-                "date": {"type": "string"},
-                "title": {"type": "string"},
-                "url": {"type": "string"},
-                "summary": {"type": "string"}
-            }}
-        },
-        "key_customers": {"type": "array", "items": {"type": "string"}},
-        "people": {
-            "type": "array",
-            "items": {"type": "object", "properties": {
-                "name": {"type": "string"},
-                "role": {"type": "string"},
-                "bio": {"type": "string"}
-            }}
-        },
-        "risks_unknowns": {"type": "array", "items": {"type": "string"}},
-        "next_actions": {"type": "array", "items": {"type": "string"}}
-    },
-    "required": ["resolved_company", "executive_summary"]
-}
+DOSSIER_GUIDANCE = """
+You are an account manager at a banking technology company serving startups (often growth-stage, 5–100 employees).
+Produce a concise, executive-style client profile based ONLY on the evidence provided below and the internal fields.
+Do not invent facts; if identity or facts are uncertain, say so briefly.
 
-GUIDANCE = """You are an account manager at a banking technology company serving startups (often growth-stage, 5–100 employees).
-Cross-reference the DBA (company name), website, and the provided contacts to decide which business is being examined.
-Some companies change names/websites—do not treat either as gospel.
+Process to follow:
+1) Cross-reference the DBA/company name, website, and the named contacts to decide which business we’re examining.
+   Some companies change names or websites—do not treat either as gospel; resolve the most likely identity.
+2) Pull key company info: what they do, products/services and use cases, any publicly mentioned key customers.
+3) Find recent announcements (last 6 months): launches, funding, partnerships. Summarize the 1–2 most relevant.
+4) Add short background notes on key people (the provided contacts and any clearly relevant leaders): prior roles/companies/startups.
 
-Then, using the evidence provided:
-- Pull key facts about the company: what they do, products/services and use cases, any key customers mentioned publicly.
-- Identify recent announcements (last 6 months): launches, funding, major partnerships; include 1–2 short summaries.
-- Provide short background on key people (contacts and any clearly relevant leaders): prior roles/companies/startups.
+Output format: Markdown. Keep it tight (~400–600 words), crisp, factual, and skimmable. Avoid hype.
+Use the following sections and headings exactly:
 
-Return a single VALID JSON object only (no markdown, no extra text), using this schema:
-{schema}
+🔍 Company & Identity
+- Who we’re talking about; how you resolved the identity (DBA vs brand vs domain); HQ if available.
 
-Keep language crisp and factual, no hype. If data is missing or uncertain, include a short note in risks/unknowns.
+🏢 Company Overview
+- One short paragraph on stage, size (if inferable), compliance posture if clearly public (e.g., SOC 2 / ISO).
+
+🚀 Product & Use Cases
+- 3–6 bullets: product, core capabilities, typical users, high-level use cases.
+
+📰 Recent Announcements (last ~6 months)
+- 1–2 bullets with a date, 1–2 sentence summary, and source name. Prefer company sources; include one credible external if useful.
+
+👥 Your Contacts & Key Team
+- 2–4 bullets: each person, role, most relevant prior roles/companies/startups.
+
+(Optional) Risks/Unknowns
+- 1–3 bullets for uncertainty, gaps, or identity ambiguities that need confirmation.
 """
 
-def openai_structured(prompt: str) -> Dict[str, Any] | None:
+def _build_evidence_block(org: dict, news_items: list[dict], people_bg: list[dict]) -> str:
+    news_lines = []
+    for n in news_items[:8]:
+        date = n.get("date") or n.get("published_at", "")
+        src  = n.get("source", "")
+        title = n.get("title", "")
+        url = n.get("url", "")
+        news_lines.append(f"- {date} — {title} — {src} {url}")
+
+    ppl_lines = []
+    for p in people_bg:
+        name = p.get("name") or ""
+        finds = p.get("findings", [])[:4]
+        inner = "\n  ".join([f"- {it.get('title','')} — {it.get('source','')} {it.get('url','')}" for it in finds])
+        ppl_lines.append(f"* {name}:\n  {inner}" if inner else f"* {name}")
+
+    evidence = []
+    evidence.append("Internal fields:")
+    evidence.append(f"- Callsign: {org.get('callsign')}")
+    evidence.append(f"- DBA: {org.get('dba')}")
+    evidence.append(f"- Website: {org.get('website')}")
+    evidence.append(f"- Domain root: {org.get('domain_root')}")
+    evidence.append(f"- AKA: {org.get('aka_names')}")
+    evidence.append(f"- Contacts: {', '.join(org.get('owners') or [])}")
+    evidence.append(f"- Tags: {org.get('industry_tags')}")
+    evidence.append("")
+    evidence.append("Recent items (last 6 months):")
+    evidence.append("\n".join(news_lines) if news_lines else "(none)")
+    evidence.append("")
+    evidence.append("People background findings:")
+    evidence.append("\n".join(ppl_lines) if ppl_lines else "(none)")
+    return "\n".join(evidence)
+
+def _openai_write_narrative(prompt: str) -> str | None:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return None
     try:
         import openai
         client = openai.OpenAI(api_key=api_key)
-        # Ask for JSON only; we'll parse it
         resp = client.chat.completions.create(
-            model=os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
+            model=os.getenv("OPENAI_CHAT_MODEL","gpt-4o-mini"),
             messages=[{"role":"user","content":prompt}],
-            temperature=0.2,
+            temperature=0.25,
         )
-        content = resp.choices[0].message.content.strip()
-        # try to extract JSON
-        start = content.find("{")
-        end = content.rfind("}")
-        if start >= 0 and end > start:
-            return json.loads(content[start:end+1])
+        return resp.choices[0].message.content.strip()
     except Exception:
         return None
-    return None
 
-def make_dossier_json(org: Dict[str, Any], news_items: List[Dict[str, Any]], people_bg: List[Dict[str, Any]]) -> Dict[str, Any]:
-    # Prepare evidence text (simple, compact)
-    news_str = "\n".join([f'- {n.get("title","")} — {n.get("source","")} ({n.get("date") or n.get("published_at","")}) {n.get("url","")}' for n in news_items[:8]])
-    people_str = "\n".join([f'* {p["name"]}:\n  ' + "\n  ".join([f'- {it.get("title","")} ({it.get("source","")}) {it.get("url","")}' for it in p.get("findings", [])[:4]]) for p in people_bg])
+def generate_narrative(org: dict, news_items: list[dict], people_bg: list[dict]) -> str:
+    evidence = _build_evidence_block(org, news_items, people_bg)
+    prompt = f"{DOSSIER_GUIDANCE}\n\nEVIDENCE START\n{evidence}\nEVIDENCE END\n\nWrite the profile now."
+    text = _openai_write_narrative(prompt)
+    if text:
+        return text
 
-    prompt = GUIDANCE.format(schema=json.dumps(JSON_SCHEMA, indent=2)) + "\n\n" + \
-        f"Company (from internal profile):\n- Callsign: {org.get('callsign')}\n- DBA: {org.get('dba')}\n- Website: {org.get('website')}\n- Domain: {org.get('domain_root')}\n- AKA: {org.get('aka_names')}\n- Contacts: {', '.join(org.get('owners') or [])}\n- Tags: {org.get('industry_tags')}\n\n" + \
-        f"Recent public items (last 6 months):\n{news_str or '(none found)'}\n\n" + \
-        f"Background notes on people:\n{people_str or '(none)'}\n"
+    # Fallback if no OpenAI lib/key: a compact template from evidence.
+    lines = []
+    lines.append("🔍 Company & Identity")
+    lines.append(f"- DBA: {org.get('dba') or org.get('domain_root') or org.get('callsign')}")
+    lines.append(f"- Website: {org.get('website') or '—'}")
+    lines.append("")
+    lines.append("🏢 Company Overview")
+    lines.append("- (LLM not available) See recent items and people notes below.")
+    lines.append("")
+    lines.append("🚀 Product & Use Cases")
+    lines.append("- (summarize after LLM is enabled)")
+    lines.append("")
+    lines.append("📰 Recent Announcements (last ~6 months)")
+    if news_items:
+        for n in news_items[:4]:
+            date = n.get("date") or n.get("published_at","")
+            src  = n.get("source","")
+            lines.append(f"- {date} — {n.get('title','')} — {src} {n.get('url','')}")
+    else:
+        lines.append("- None found")
+    lines.append("")
+    lines.append("👥 Your Contacts & Key Team")
+    if people_bg:
+        for p in people_bg:
+            lines.append(f"- {p.get('name')}")
+    else:
+        lines.append("- (no background findings)")
+    return "\n".join(lines)
 
     data = openai_structured(prompt)
     if data is None:
@@ -304,23 +329,26 @@ def main():
     for org in targets:
         news_items = collect_recent_news(org, lookback_days, g_api_key, g_cse_id)
         people_bg  = collect_people_background(org, lookback_days, g_api_key, g_cse_id)
-        data = make_dossier_json(org, news_items, people_bg)
-        dossiers.append({"callsign": org.get("callsign"), "data": data})
+        narr = generate_narrative(org, news_items, people_bg)
+        dossiers.append({"callsign": org.get("callsign"), "body_md": narr})
 
     # Output / email
     preview = getenv("PREVIEW_ONLY", "true").lower() in ("1","true","yes","y")
     if preview:
-        # Print first ~2k chars of JSON for quick inspection
-        js = json.dumps(dossiers, indent=2)
-        print(js[:2000])
+        for d in dossiers:
+            print(f"\n=== {d.get('callsign')} ===\n")
+            print(d["body_md"][:2500])
+            print("\n----------------------------")
         return
 
     # Simple HTML wrapper for email
     body = ["<html><body><h2>Baselines</h2>"]
     for d in dossiers:
-        body.append(f"<h3>{d.get('callsign')}</h3><pre>{json.dumps(d['data'], indent=2)}</pre><hr/>")
+        body.append(f"<h3>{d.get('callsign')}</h3>")
+        # keep markdown as preformatted text for now (simple, no extra deps)
+        body.append(f"<pre style='white-space:pre-wrap'>{d['body_md']}</pre><hr/>")
     body.append("</body></html>")
-    html = "\n".join(body)
+    html = "\n".join(body)    
 
     to = getenv("DIGEST_TO") or getenv("GMAIL_USER") or ""
     send_html_email(build_service(
