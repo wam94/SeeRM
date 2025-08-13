@@ -179,39 +179,47 @@ def google_cse_search(api_key: str, cse_id: str, query: str, date_restrict: str 
         })
     return out
 
-# -------- Full-article fetching & extraction --------
+# ------------------------ Full-article fetching & LLM summaries ------------------------
 
 def extract_article_text(url: str, timeout: int = 15, max_bytes: int = 400_000) -> str | None:
     """
     Try to download and extract main text from an article URL.
-    1) trafilatura (best)
+    1) trafilatura (best) via fetch_url + extract
     2) requests + BeautifulSoup (fallback)
     Returns plain text or None.
     """
     if not url:
         return None
+    # Trafilatura path
     try:
         import trafilatura
-        # trafilatura handles download internally
-        text = trafilatura.extract(url, timeout=timeout, favor_recall=True, include_comments=False, include_tables=False)
-        if text:
-            return text[:max_bytes]
+        downloaded = trafilatura.fetch_url(url)
+        if downloaded:
+            text = trafilatura.extract(
+                downloaded,
+                favor_recall=True,
+                include_comments=False,
+                include_tables=False
+            )
+            if text:
+                return text[:max_bytes]
     except Exception:
         pass
 
-    # Fallback: requests + bs4 (less precise)
+    # Fallback: requests + bs4
     try:
-        import requests
         from bs4 import BeautifulSoup
-        r = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0 (GitHubActions; ExternalIntel)"})
+        r = requests.get(
+            url,
+            timeout=timeout,
+            headers={"User-Agent": "Mozilla/5.0 (GitHubActions; ExternalIntel)"}
+        )
         r.raise_for_status()
         html = r.content[:max_bytes]
         soup = BeautifulSoup(html, "html.parser")
-        # Drop script/style
         for tag in soup(["script", "style", "noscript"]):
             tag.extract()
         txt = soup.get_text("\n", strip=True)
-        # Basic sanity
         return txt[:max_bytes] if txt and len(txt) > 200 else None
     except Exception:
         return None
@@ -223,7 +231,7 @@ def enrich_with_fulltext(items, per_org_cap: int, timeout: int, max_bytes: int):
     out = []
     fetched = 0
     for it in items:
-        it = dict(it)  # copy
+        it = dict(it)  # shallow copy
         if fetched < per_org_cap:
             txt = extract_article_text(it.get("url"), timeout=timeout, max_bytes=max_bytes)
             if txt:
@@ -239,7 +247,7 @@ def summarize_items_with_llm(items, org_label: str) -> str:
     """
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        # Fallback summary from titles
+        # Fallback summary from titles only
         lines = []
         for it in items[:5]:
             src = it.get("source", "")
@@ -253,7 +261,6 @@ def summarize_items_with_llm(items, org_label: str) -> str:
         src   = it.get("source") or ""
         url   = it.get("url") or ""
         body  = it.get("fulltext") or it.get("snippet") or ""
-        # Trim body to keep token usage sane
         body  = body.strip().replace("\r", " ").replace("\n", " ")
         if len(body) > 2000:
             body = body[:2000] + " …"
@@ -284,26 +291,6 @@ def summarize_items_with_llm(items, org_label: str) -> str:
             src = it.get("source", "")
             lines.append(f"- {it.get('title','')}{' — ' + src if src else ''}")
         return "\n".join(lines)[:800]
-
-# ------------------------ Optional LLM summarizer ------------------------
-
-def summarize_text(texts: List[str]) -> str:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        # simple fallback summary
-        return "\n".join([t.strip() for t in texts if t][:4])[:800]
-    try:
-        import openai  # if you want LLM summaries, add 'openai' to requirements
-        client = openai.OpenAI(api_key=api_key)
-        prompt = "Summarize into 2–4 crisp bullets:\n\n" + "\n".join(texts[:8])
-        resp = client.chat.completions.create(
-            model=os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-        )
-        return resp.choices[0].message.content.strip()
-    except Exception:
-        return "\n".join([t.strip() for t in texts if t][:4])[:800]
 
 # ------------------------ HTML template ------------------------
 
@@ -374,7 +361,26 @@ def main():
     max_per_org   = int(getenv("INTEL_MAX_PER_ORG", "5"))
     g_api_key = getenv("GOOGLE_API_KEY")
     g_cse_id  = getenv("GOOGLE_CSE_ID")
-    profile_subject = getenv("NEWS_PROFILE_SUBJECT", "Org Profile — Will Mitchell")
+
+    # Use news-specific variables; fall back to generic names or defaults
+    weekly_query = getenv("NEWS_GMAIL_QUERY") or \
+                   getenv("GMAIL_QUERY") or \
+                   'from:metabase subject:"Weekly Diff — Will Mitchell" has:attachment filename:csv newer_than:10d'
+    profile_subject = getenv("NEWS_PROFILE_SUBJECT") or \
+                      getenv("PROFILE_SUBJECT") or \
+                      "Org Profile — Will Mitchell"
+
+    # Cost-control knobs for CSE
+    only_if_rss_below = int(getenv("CSE_ONLY_IF_RSS_BELOW", "999"))
+    max_q_per_org     = int(getenv("CSE_MAX_QUERIES_PER_ORG", "999"))
+    disable_owner     = getenv("CSE_DISABLE_OWNER_QUERIES", "false").lower() in ("1","true","yes")
+    disable_tag       = getenv("CSE_DISABLE_TAG_QUERIES", "false").lower() in ("1","true","yes")
+
+    # Article fetching knobs
+    fetch_fulltext    = getenv("FETCH_ARTICLE_CONTENT", "true").lower() in ("1","true","yes","y")
+    fetch_max_per_org = int(getenv("FETCH_MAX_PER_ORG", "3"))
+    article_timeout   = int(getenv("ARTICLE_READ_TIMEOUT", "15"))
+    article_max_bytes = int(getenv("ARTICLE_MAX_BYTES", "400000"))
 
     # Gmail service
     svc = build_service(
@@ -385,7 +391,7 @@ def main():
     user = getenv("GMAIL_USER") or os.environ["GMAIL_USER"]
 
     # Load latest weekly CSV via Gmail
-    msgs = search_messages(svc, user, getenv("NEWS_GMAIL_QUERY"), max_results=5)
+    msgs = search_messages(svc, user, weekly_query, max_results=5)
     df = None
     for m in msgs:
         msg = get_message(svc, user, m["id"])
@@ -396,7 +402,7 @@ def main():
         df = pd.read_csv(io.BytesIO(data))
         break
     if df is None:
-        raise SystemExit("No weekly CSV found via Gmail. Adjust GMAIL_QUERY or wait for the Metabase email.")
+        raise SystemExit("No weekly CSV found via Gmail. Adjust NEWS_GMAIL_QUERY (or GMAIL_QUERY) or wait for the Metabase email.")
 
     # Load Org Profile CSV
     df_profile = fetch_csv_by_subject(svc, user, profile_subject)
@@ -461,46 +467,53 @@ def main():
     # Fetch intel
     enriched = []
     for org in orgs:
-        items = []
+        items: List[Dict[str, Any]] = []
 
         # Official RSS/blog
         site_for_rss = org.get("blog_url") or org.get("website")
         if site_for_rss:
             items += try_rss_feeds(site_for_rss)
 
-        # Google CSE
+        # Google CSE (with cost-control knobs)
         if g_api_key and g_cse_id:
-            queries = build_queries(
-                org.get("dba"),
-                org.get("website"),
-                org.get("owners"),
-                domain_root=org.get("domain_root"),
-                aka_names=org.get("aka_names"),
-                tags=org.get("industry_tags"),
-            )
-            for q in queries:
-                try:
-                    items += google_cse_search(g_api_key, g_cse_id, q, date_restrict=f"d{lookback_days}", num=max_per_org)
-                except Exception:
-                    continue
+            # Skip CSE entirely if RSS already produced enough items
+            should_use_cse = len(items) < only_if_rss_below
+            if should_use_cse:
+                queries = build_queries(
+                    org.get("dba"),
+                    org.get("website"),
+                    [] if disable_owner else org.get("owners"),
+                    domain_root=org.get("domain_root"),
+                    aka_names=org.get("aka_names"),
+                    tags=None if disable_tag else org.get("industry_tags"),
+                )
+                for q in queries[:max_q_per_org]:
+                    try:
+                        items += google_cse_search(g_api_key, g_cse_id, q, date_restrict=f"d{lookback_days}", num=max_per_org)
+                    except Exception:
+                        continue
 
-            # Clean & limit
+        # Clean & limit
         items = dedupe(items, key=lambda x: x["url"])
         items = [x for x in items if within_days(x.get("published_at", datetime.utcnow()), lookback_days)]
         items = items[:max_per_org]
 
         # Optional: fetch & extract article content (capped)
-        if getenv("FETCH_ARTICLE_CONTENT", "true").lower() in ("1","true","yes","y"):
-            per_org_cap   = int(getenv("FETCH_MAX_PER_ORG", "3"))           # fetch at most 3 articles/org
-            timeout_s     = int(getenv("ARTICLE_READ_TIMEOUT", "15"))
-            max_bytes     = int(getenv("ARTICLE_MAX_BYTES", "400000"))
-            items = enrich_with_fulltext(items, per_org_cap, timeout_s, max_bytes)
+        if fetch_fulltext and items:
+            items = enrich_with_fulltext(items, fetch_max_per_org, article_timeout, article_max_bytes)
 
         # Summarize (prefers fulltext when available)
         summary = ""
         if items:
             org_label = (org.get("dba") or org.get("domain_root") or org.get("callsign") or "").strip()
             summary = summarize_items_with_llm(items, org_label)
+
+        enriched.append({
+            "callsign": org["callsign"],
+            "dba": org.get("dba"),
+            "items": items,
+            "summary": summary,
+        })
 
     # Render
     html = INTEL_TEMPLATE.render(
@@ -514,7 +527,7 @@ def main():
         print("\n--- HTML PREVIEW (truncated) ---")
         print("\n".join(html.splitlines()[:200]))
         print("\n--- END PREVIEW ---")
-        return  # <-- safely inside main()
+        return  # safely inside main()
 
     # Send email
     to = getenv("DIGEST_TO") or user
