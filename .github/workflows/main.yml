@@ -1,14 +1,3 @@
-- name: Preflight env check
-  run: |
-    python - <<'PY'
-    import os
-    def show(name):
-      val = os.getenv(name)
-      print(f"{name}: present={bool(val)} length={len(val) if val else 0}")
-    for n in ["GMAIL_CLIENT_ID","GMAIL_CLIENT_SECRET","GMAIL_REFRESH_TOKEN","GMAIL_USER"]:
-      show(n)
-    PY
-
 name: Weekly Digest
 
 on:
