@@ -58,44 +58,99 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Notion preflight (optional but recommended)
-        env:
-          # Map secrets into env; default to empty string so the step never errors on missing secrets
-          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY || '' }}
-          NOTION_COMPANIES_DB_ID: ${{ secrets.NOTION_COMPANIES_DB_ID || '' }}
-          NOTION_INTEL_DB_ID: ${{ secrets.NOTION_INTEL_DB_ID || '' }}
-        run: |
-          if [ -z "${NOTION_API_KEY}" ] || [ -z "${NOTION_COMPANIES_DB_ID}" ] || [ -z "${NOTION_INTEL_DB_ID}" ]; then
-            echo "Skipping Notion preflight (one or more NOTION_* secrets missing)."
-            exit 0
-          fi
+      - name: Notion preflight (robust)
+  env:
+    NOTION_API_KEY: ${{ secrets.NOTION_API_KEY || '' }}
+    NOTION_COMPANIES_DB_ID: ${{ secrets.NOTION_COMPANIES_DB_ID || '' }}
+    NOTION_INTEL_DB_ID: ${{ secrets.NOTION_INTEL_DB_ID || '' }}
+  run: |
+    if [ -z "${NOTION_API_KEY}" ] || [ -z "${NOTION_COMPANIES_DB_ID}" ] || [ -z "${NOTION_INTEL_DB_ID}" ]; then
+      echo "Skipping Notion preflight (missing NOTION_* secrets)."; exit 0
+    fi
+    python - <<'PY'
+    import os, re, sys, requests
 
-          python - <<'PY'
-          import os, requests, sys
-          hdr = {
-            "Authorization": f"Bearer {os.environ['NOTION_API_KEY']}",
-            "Notion-Version": "2022-06-28",
-          }
-          def props(dbid):
-            r = requests.get(f"https://api.notion.com/v1/databases/{dbid}", headers=hdr, timeout=30); r.raise_for_status()
-            return set(r.json()["properties"].keys())
+    token = os.environ["NOTION_API_KEY"]
+    comp  = os.environ["NOTION_COMPANIES_DB_ID"]
+    intel = os.environ["NOTION_INTEL_DB_ID"]
+    H = {"Authorization": f"Bearer {token}", "Notion-Version": "2022-06-28"}
 
-          comp = props(os.environ["NOTION_COMPANIES_DB_ID"])
-          intel = props(os.environ["NOTION_INTEL_DB_ID"])
+    def undash(uuid_str):
+      return uuid_str.replace("-", "")
 
-          need_comp = {"Callsign","Company","Website","Domain","Owners","Latest Intel","Last Intel At","Needs Dossier"}
-          need_intel = {"Company","Callsign","Date","Summary"}
+    def dash32(hex32):
+      # insert dashes 8-4-4-4-12 if it's exactly 32 hex chars
+      if re.fullmatch(r"[0-9a-fA-F]{32}", hex32):
+        return f"{hex32[0:8]}-{hex32[8:12]}-{hex32[12:16]}-{hex32[16:20]}-{hex32[20:]}"
+      return hex32
 
-          missing_comp = need_comp - comp
-          missing_intel = need_intel - intel
+    def fetch_db(dbid):
+      # try as-is
+      r = requests.get(f"https://api.notion.com/v1/databases/{dbid}", headers=H, timeout=30)
+      if r.status_code == 200:
+        return r.json()
+      # try hyphenless
+      dbid2 = undash(dbid)
+      if dbid2 != dbid:
+        r = requests.get(f"https://api.notion.com/v1/databases/{dbid2}", headers=H, timeout=30)
+        if r.status_code == 200:
+          return r.json()
+      # try hyphenated
+      dbid3 = dash32(dbid2)
+      if dbid3 != dbid and dbid3 != dbid2:
+        r = requests.get(f"https://api.notion.com/v1/databases/{dbid3}", headers=H, timeout=30)
+        if r.status_code == 200:
+          return r.json()
+      # return last response for diagnostics
+      return {"error": True, "status": r.status_code, "body": r.text, "tried": [dbid, dbid2, dbid3]}
 
-          if missing_comp or missing_intel:
-            print("Companies missing:", missing_comp)
-            print("Intel missing:", missing_intel)
-            sys.exit(1)
-          else:
-            print("Notion preflight OK.")
-          PY
+    def search_databases(query="SeeRM"):
+      payload = {"query": query, "filter": {"property":"object","value":"database"}}
+      r = requests.post("https://api.notion.com/v1/search", headers=H, json=payload, timeout=30)
+      if r.ok:
+        res = r.json().get("results", [])
+        print(f"Search returned {len(res)} databases visible to this integration:")
+        for i,x in enumerate(res,1):
+          name = x["title"][0]["plain_text"] if x.get("title") else "(no title)"
+          print(f"  {i}. {name} — id: {x['id']}")
+      else:
+        print("Search failed:", r.status_code, r.text)
+
+    comp_res = fetch_db(comp)
+    intel_res = fetch_db(intel)
+
+    ok = True
+    if "error" in comp_res:
+      ok = False
+      print("\n❌ Companies DB check failed.")
+      print("Status:", comp_res["status"])
+      print("Tried IDs:", comp_res["tried"])
+      print("Body:", comp_res["body"][:500])
+    else:
+      print("✅ Companies DB OK:", comp_res.get("title",[{"plain_text":"(no title)"}])[0]["plain_text"])
+
+    if "error" in intel_res:
+      ok = False
+      print("\n❌ Intel DB check failed.")
+      print("Status:", intel_res["status"])
+      print("Tried IDs:", intel_res["tried"])
+      print("Body:", intel_res["body"][:500])
+    else:
+      print("✅ Intel DB OK:", intel_res.get("title",[{"plain_text":"(no title)"}])[0]["plain_text"])
+
+    if not ok:
+      print("\nHint: Notion returns 404 both for non-existent IDs and when the integration lacks access.")
+      print("1) Open each DB as a page → Share → invite your integration with edit access.")
+      print("2) Ensure you're using the actual database ID (32 hex).")
+      print("   - From the DB page URL, copy the 32-char ID just before ?v= (hyphens OK).")
+      print("3) If inline DB, click 'Open as page' first; copying a view link can give a view or page ID.")
+      print("\nDatabases visible to this integration (via /search):")
+      search_databases("SeeRM")
+      search_databases("Will")
+      sys.exit(1)
+    else:
+      print("Notion preflight OK.")
+    PY
 
       - name: Run external intel
         env:
