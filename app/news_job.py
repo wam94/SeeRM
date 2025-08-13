@@ -375,6 +375,26 @@ def main():
             "summary": summary
         })
 
+    # --- Optional: filter to a few callsigns for testing
+    only = getenv("FILTER_CALLSIGNS")
+    if only:
+        want = {c.strip().lower() for c in only.split(",") if c.strip()}
+        orgs = [o for o in orgs if o.get("callsign","").lower() in want]
+
+    # --- Render HTML and either email or just print (preview mode)
+html = INTEL_TEMPLATE.render(
+    today=now_utc_date(),
+    lookback_days=lookback_days,
+    orgs=enriched,
+)
+
+if getenv("PREVIEW_ONLY", "false").lower() in ("1","true","yes","y"):
+    # print first 50 lines to logs so you can eyeball it in Actions
+    print("\n--- HTML PREVIEW (truncated) ---")
+    print("\n".join(html.splitlines()[:200]))
+    print("\n--- END PREVIEW ---")
+    return
+    
     # --- Render HTML and send email ---
     html = INTEL_TEMPLATE.render(
         today=now_utc_date(),
