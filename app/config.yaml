@@ -1,0 +1,12 @@
+# Defaults; can be overridden by env vars
+gmail:
+  query: "from:metabase subject:'Weekly Diff — Will Mitchell' has:attachment filename:csv newer_than:10d"
+  attachment_regex: ".*\.csv$"
+  user: null  # from env GMAIL_USER
+
+digest:
+  to: null     # default to GMAIL_USER if not set
+  cc: null
+  bcc: null
+  subject: "Client Weekly Digest — {{ now_date }}"
+  top_movers: 15
