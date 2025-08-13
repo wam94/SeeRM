@@ -1,60 +1,126 @@
-name: TEST External Intel
+name: External Intel (News)
 
 on:
-  schedule:
-    - cron: '30 14 * * MON'   # Mondays 14:30 UTC (~10:30 ET)
   workflow_dispatch:
     inputs:
       callsigns:
-        description: 'Comma-separated callsigns to include (optional)'
+        description: "Optional: comma-separated callsigns to limit run"
         required: false
+        type: string
       preview_only:
-        description: 'Print HTML to logs instead of emailing'
+        description: "Preview (no email) — true/false"
         required: false
-        default: 'false'
-      send_to:
-        description: 'Override recipient email (optional)'
-        required: false
+        default: "true"
+        type: choice
+        options: ["true","false"]
       lookback_days:
-        description: 'Days to look back'
+        description: "Intel lookback window (days)"
         required: false
-        default: '10'
+        default: "10"
+        type: string
       max_per_org:
-        description: 'Max items per org'
+        description: "Max items per org (after dedupe)"
         required: false
-        default: '5'
+        default: "5"
+        type: string
+      send_to:
+        description: "Override recipient (defaults to GMAIL_USER)"
+        required: false
+        type: string
+  schedule:
+    # Mondays 13:00 UTC (~9am ET during DST). Adjust as you like.
+    - cron: "0 13 * * MON"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: news-weekly-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  run:
+  external-intel:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
+    timeout-minutes: 40
 
-      - uses: actions/setup-python@v5
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
+          cache: "pip"
 
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Notion preflight (optional but recommended)
+        if: ${{ secrets.NOTION_API_KEY != '' && secrets.NOTION_COMPANIES_DB_ID != '' && secrets.NOTION_INTEL_DB_ID != '' }}
+        env:
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_COMPANIES_DB_ID: ${{ secrets.NOTION_COMPANIES_DB_ID }}
+          NOTION_INTEL_DB_ID: ${{ secrets.NOTION_INTEL_DB_ID }}
+        run: |
+          python - <<'PY'
+          import os, requests, sys
+          hdr = {
+            "Authorization": f"Bearer {os.environ['NOTION_API_KEY']}",
+            "Notion-Version": "2022-06-28",
+          }
+          def props(dbid):
+            r = requests.get(f"https://api.notion.com/v1/databases/{dbid}", headers=hdr, timeout=30); r.raise_for_status()
+            return set(r.json()["properties"].keys())
+
+          comp = props(os.environ["NOTION_COMPANIES_DB_ID"])
+          intel = props(os.environ["NOTION_INTEL_DB_ID"])
+
+          need_comp = {"Callsign","Company","Website","Domain","Owners","Latest Intel","Last Intel At","Needs Dossier"}
+          need_intel = {"Company","Callsign","Date","Summary"}
+
+          missing_comp = need_comp - comp
+          missing_intel = need_intel - intel
+
+          if missing_comp or missing_intel:
+            print("Companies missing:", missing_comp)
+            print("Intel missing:", missing_intel)
+            sys.exit(1)
+          else:
+            print("Notion preflight OK.")
+          PY
+
       - name: Run external intel
         env:
           PYTHONPATH: ${{ github.workspace }}
+
+          # Gmail auth (secrets)
           GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
           GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
           GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
+
+          # Google CSE for web search (secrets)
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}   # optional
+
+          # LLM (optional; falls back gracefully if absent)
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_CHAT_MODEL: ${{ vars.OPENAI_CHAT_MODEL }}
+
+          # Notion (to write Latest + Intel archive)
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_COMPANIES_DB_ID: ${{ secrets.NOTION_COMPANIES_DB_ID }}
+          NOTION_INTEL_DB_ID: ${{ secrets.NOTION_INTEL_DB_ID }}
+
+          # Email filtering (repo vars so you can change names without code)
           NEWS_GMAIL_QUERY: ${{ vars.NEWS_GMAIL_QUERY }}
+          NEWS_PROFILE_SUBJECT: ${{ vars.NEWS_PROFILE_SUBJECT }}
           ATTACHMENT_REGEX: '.*\.csv$'
-          NEWS_PROFILE_SUBJECT: ${{ vars.NEWS_PROFILE_SUBJECT }}'
-          # map inputs -> env the app reads
+
+          # Runtime inputs / knobs
           FILTER_CALLSIGNS: ${{ inputs.callsigns }}
           PREVIEW_ONLY: ${{ inputs.preview_only }}
           INTEL_LOOKBACK_DAYS: ${{ inputs.lookback_days }}
@@ -62,10 +128,60 @@ jobs:
           DIGEST_TO: ${{ inputs.send_to || secrets.DIGEST_TO }}
           DIGEST_CC: ${{ secrets.DIGEST_CC }}
           DIGEST_BCC: ${{ secrets.DIGEST_BCC }}
-                    # Content fetching & summarization knobs
-          FETCH_ARTICLE_CONTENT: 'true'      # set 'false' to disable fulltext fetch
-          FETCH_MAX_PER_ORG: '3'             # number of articles to fetch per org
-          ARTICLE_READ_TIMEOUT: '15'         # seconds per download
-          ARTICLE_MAX_BYTES: '400000'        # cap per-article payload
+
+          # Cost & runtime controls (optional repo vars)
+          CSE_ONLY_IF_RSS_BELOW: ${{ vars.CSE_ONLY_IF_RSS_BELOW }}
+          CSE_MAX_QUERIES_PER_ORG: ${{ vars.CSE_MAX_QUERIES_PER_ORG }}
+          CSE_DISABLE_OWNER_QUERIES: ${{ vars.CSE_DISABLE_OWNER_QUERIES }}
+          CSE_DISABLE_TAG_QUERIES: ${{ vars.CSE_DISABLE_TAG_QUERIES }}
+
+          # Full-article fetching (optional repo vars; code has safe defaults)
+          FETCH_ARTICLE_CONTENT: ${{ vars.FETCH_ARTICLE_CONTENT }}
+          FETCH_MAX_PER_ORG: ${{ vars.FETCH_MAX_PER_ORG }}
+          ARTICLE_READ_TIMEOUT: ${{ vars.ARTICLE_READ_TIMEOUT }}
+          ARTICLE_MAX_BYTES: ${{ vars.ARTICLE_MAX_BYTES }}
         run: |
           python -m app.news_job
+
+      - name: Read new callsigns (if any)
+        id: newcs
+        run: |
+          if [ -f /tmp/new_callsigns.txt ]; then
+            CS=$(cat /tmp/new_callsigns.txt)
+            echo "callsigns=$CS" >> $GITHUB_OUTPUT
+            echo "New callsigns: $CS"
+          else
+            echo "No new callsigns file found."
+          fi
+
+      - name: Generate baselines for new accounts
+        if: ${{ steps.newcs.outputs.callsigns != '' }}
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+          # Gmail auth (secrets)
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+
+          # LLM + search (optional)
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
+
+          # Use same email filters or baseline-specific ones
+          NEWS_GMAIL_QUERY: ${{ vars.BASELINE_GMAIL_QUERY || vars.NEWS_GMAIL_QUERY }}
+          NEWS_PROFILE_SUBJECT: ${{ vars.BASELINE_PROFILE_SUBJECT || vars.NEWS_PROFILE_SUBJECT }}
+          ATTACHMENT_REGEX: '.*\.csv$'
+
+          # Dossier inputs
+          BASELINE_CALLSIGNS: ${{ steps.newcs.outputs.callsigns }}
+          PREVIEW_ONLY: 'false'
+          BASELINE_LOOKBACK_DAYS: ${{ vars.BASELINE_LOOKBACK_DAYS }}
+
+          # Notion (for dossier)
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_COMPANIES_DB_ID: ${{ secrets.NOTION_COMPANIES_DB_ID }}
+        run: |
+          python -m app.dossier_baseline
