@@ -1,9 +1,8 @@
-# app/digest_render.py
 from __future__ import annotations
 from jinja2 import Template
 from datetime import datetime
 
-TEMPLATE = Template(r"""
+TEMPLATE = Template("""
 <!doctype html>
 <html>
   <head>
@@ -40,7 +39,6 @@ TEMPLATE = Template(r"""
       </div>
     </div>
 
-    {# ---------- NEW: Top % balance movers (gainers & losers) ---------- #}
     {% if top_pct_gainers or top_pct_losers %}
     <div class="section">
       <div class="h1">Top % balance movers</div>
@@ -54,7 +52,13 @@ TEMPLATE = Template(r"""
           <tr>
             <td>{{ r.callsign }}</td>
             <td class="mono">{{ "{:+.2f}%".format(r.pct) }}</td>
-            <td class="mono">{{ "" if r.balance_delta is none else "{:,.0f}".format(r.balance_delta) }}</td>
+            <td class="mono">
+              {% if r.balance_delta is not none %}
+                {{ "{:,.0f}".format(r.balance_delta) }}
+              {% else %}
+                —
+              {% endif %}
+            </td>
           </tr>
           {% endfor %}
         </tbody>
@@ -70,31 +74,18 @@ TEMPLATE = Template(r"""
           <tr>
             <td>{{ r.callsign }}</td>
             <td class="mono">{{ "{:+.2f}%".format(r.pct) }}</td>
-            <td class="mono">{{ "" if r.balance_delta is none else "{:,.0f}".format(r.balance_delta) }}</td>
+            <td class="mono">
+              {% if r.balance_delta is not none %}
+                {{ "{:,.0f}".format(r.balance_delta) }}
+              {% else %}
+                —
+              {% endif %}
+            </td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
       {% endif %}
-    </div>
-    {% endif %}
-
-    {# Keep the original $-based list if you still want it #}
-    {% if top_movers %}
-    <div class="section">
-      <div class="h1">Top balance movers ($)</div>
-      <table>
-        <thead><tr><th>Callsign</th><th>Δ Balance</th><th>%</th></tr></thead>
-        <tbody>
-          {% for r in top_movers %}
-          <tr>
-            <td>{{ r.callsign }}</td>
-            <td class="mono">{{ "{:,.0f}".format(r.balance_delta) }}</td>
-            <td class="mono">{{ "" if r.balance_pct_delta_pct is none else "{:.2f}%".format(r.balance_pct_delta_pct) }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
     </div>
     {% endif %}
 
@@ -117,18 +108,6 @@ TEMPLATE = Template(r"""
         {% endfor %}
       </ul>
       {% endif %}
-    </div>
-    {% endif %}
-
-    {% if unchanged %}
-    <div class="section">
-      <div class="h1">Stable accounts (no change)</div>
-      <div class="muted">Showing up to 50</div>
-      <ul>
-        {% for cs in unchanged[:50] %}
-        <li>{{ cs }}</li>
-        {% endfor %}
-      </ul>
     </div>
     {% endif %}
 
