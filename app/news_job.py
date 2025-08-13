@@ -48,7 +48,7 @@ def within_days(dt: datetime, days: int) -> bool:
         return True
 
 def fetch_csv_by_subject(service, user, subject, attachment_regex=r".*\.csv$", max_results=5):
-    q = f'subject:"{subject}" has:attachment filename:csv newer_than:30d'
+    q = f'subject:"{subject}" has:attachment filename:csv newer_than:10d'
     msgs = search_messages(service, user, q, max_results=max_results)
     for m in msgs:
         msg = get_message(service, user, m["id"])
