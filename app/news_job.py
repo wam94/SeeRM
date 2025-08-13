@@ -47,6 +47,17 @@ def within_days(dt: datetime, days: int) -> bool:
     except Exception:
         return True
 
+def fetch_csv_by_subject(service, user, subject, attachment_regex=r".*\.csv$", max_results=5):
+    q = f'subject:"{subject}" has:attachment filename:csv newer_than:30d'
+    msgs = search_messages(service, user, q, max_results=max_results)
+    for m in msgs:
+        msg = get_message(service, user, m["id"])
+        atts = extract_csv_attachments(service, user, msg, attachment_regex)
+        if atts:
+            name, data = atts[0]
+            return pd.read_csv(io.BytesIO(data))
+    return None
+
 # ---------- Query building ----------
 def build_queries(dba: str, website: str, owners: list[str] | None):
     # Focused company queries; tweak as needed
