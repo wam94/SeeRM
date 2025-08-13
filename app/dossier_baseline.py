@@ -123,7 +123,7 @@ Use the following sections and headings exactly:
 - Who we’re talking about; how you resolved the identity (DBA vs brand vs domain); HQ if available.
 
 🏢 Company Overview
-- One short paragraph on stage, size (if inferable), compliance posture if clearly public (e.g., SOC 2 / ISO).
+- One short paragraph on what round of funding they've achieved, who their investors are, and number of employees
 
 🚀 Product & Use Cases
 - 3–6 bullets: product, core capabilities, typical users, high-level use cases.
