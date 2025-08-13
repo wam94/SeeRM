@@ -18,6 +18,14 @@ from app.gmail_client import (
     send_html_email,
 )
 
+# Notion helpers (ensure app/notion_client.py is in repo and patched to use "Company" prop)
+from app.notion_client import (
+    upsert_company_page,
+    set_latest_intel,
+    append_intel_log,
+    set_needs_dossier,
+)
+
 # ------------------------ Utilities ------------------------
 
 def getenv(name: str, default=None):
@@ -363,9 +371,9 @@ def main():
     g_cse_id  = getenv("GOOGLE_CSE_ID")
 
     # Use news-specific variables; fall back to generic names or defaults
-    weekly_query = getenv("NEWS_GMAIL_QUERY")
-    profile_subject = getenv("NEWS_PROFILE_SUBJECT")
-
+    weekly_query = getenv("NEWS_GMAIL_QUERY") or \
+    profile_subject = getenv("NEWS_PROFILE_SUBJECT") or \
+ 
     # Cost-control knobs for CSE
     only_if_rss_below = int(getenv("CSE_ONLY_IF_RSS_BELOW", "999"))
     max_q_per_org     = int(getenv("CSE_MAX_QUERIES_PER_ORG", "999"))
@@ -377,6 +385,12 @@ def main():
     fetch_max_per_org = int(getenv("FETCH_MAX_PER_ORG", "3"))
     article_timeout   = int(getenv("ARTICLE_READ_TIMEOUT", "15"))
     article_max_bytes = int(getenv("ARTICLE_MAX_BYTES", "400000"))
+
+    # Notion envs
+    notion_token  = os.getenv("NOTION_API_KEY")
+    companies_db  = os.getenv("NOTION_COMPANIES_DB_ID")
+    intel_db      = os.getenv("NOTION_INTEL_DB_ID")
+    notion_enabled = bool(notion_token and companies_db and intel_db)
 
     # Gmail service
     svc = build_service(
@@ -413,7 +427,7 @@ def main():
             if not cs:
                 continue
             prof[cs] = {
-                "dba": pget(r, "dba"),
+                "dba": pget(r, "dba"),  # used for display; Notion "Company" will receive this
                 "website": pget(r, "website"),
                 "domain_root": pget(r, "domain_root"),
                 "aka_names": pget(r, "aka_names"),
@@ -432,14 +446,26 @@ def main():
     # Merge weekly rows with profile (by callsign)
     cols = {c.lower().strip(): c for c in df.columns}
     def col(k): return cols.get(k)
+    is_new_col = cols.get("is_new_account")
 
     orgs = []
     seen_cs = set()
+    new_flags: Dict[str, bool] = {}
     for _, r in df.iterrows():
         cs = (str(r.get(col("callsign")) or "")).strip()
         if not cs or cs in seen_cs:
             continue
         seen_cs.add(cs)
+
+        is_new = False
+        if is_new_col:
+            try:
+                val = r[is_new_col]
+                is_new = str(val).strip().lower() not in ("0", "false", "", "nan", "none")
+            except Exception:
+                is_new = False
+        new_flags[cs] = is_new
+
         base = {
             "callsign": cs,
             "dba": r.get(col("dba")),
@@ -495,7 +521,10 @@ def main():
         items = items[:max_per_org]
 
         # Optional: fetch & extract article content (capped)
-        if fetch_fulltext and items:
+        if getenv("FETCH_ARTICLE_CONTENT", "true").lower() in ("1","true","yes","y") and items:
+            fetch_max_per_org = int(getenv("FETCH_MAX_PER_ORG", "3"))
+            article_timeout   = int(getenv("ARTICLE_READ_TIMEOUT", "15"))
+            article_max_bytes = int(getenv("ARTICLE_MAX_BYTES", "400000"))
             items = enrich_with_fulltext(items, fetch_max_per_org, article_timeout, article_max_bytes)
 
         # Summarize (prefers fulltext when available)
@@ -503,6 +532,27 @@ def main():
         if items:
             org_label = (org.get("dba") or org.get("domain_root") or org.get("callsign") or "").strip()
             summary = summarize_items_with_llm(items, org_label)
+
+        # --- Notion sync (Companies + Intel Log) ---
+        if notion_enabled:
+            try:
+                page_id = upsert_company_page(companies_db, {
+                    "callsign": org["callsign"],
+                    "company":  org.get("dba") or "",  # "Company" property in Notion
+                    "dba":      org.get("dba") or "",  # also send 'dba' for backward-compat
+                    "website":  org.get("website") or "",
+                    "domain":   org.get("domain_root") or "",
+                    "owners":   org.get("owners") or [],
+                    "tags": (org.get("industry_tags") or "").split(",") if org.get("industry_tags") else [],
+                    "needs_dossier": new_flags.get(org["callsign"], False),
+                })
+                set_latest_intel(page_id, summary or "", now_utc_date())
+                append_intel_log(intel_db, page_id, org["callsign"], now_utc_date(), summary or "", items)
+                # If we flagged Needs Dossier, ensure checkbox true
+                if new_flags.get(org["callsign"], False):
+                    set_needs_dossier(page_id, True)
+            except Exception as e:
+                print("Notion sync error for", org["callsign"], ":", e)
 
         enriched.append({
             "callsign": org["callsign"],
@@ -517,6 +567,17 @@ def main():
         lookback_days=lookback_days,
         orgs=enriched,
     )
+
+    # Write new callsigns to a temp file for the workflow to consume
+    new_list = [cs for cs, is_new in new_flags.items() if is_new]
+    if new_list:
+        p = "/tmp/new_callsigns.txt"
+        try:
+            with open(p, "w") as f:
+                f.write(",".join(new_list))
+            print(f"Wrote {len(new_list)} new callsigns to {p}: {new_list}")
+        except Exception as e:
+            print("Unable to write new callsigns file:", e)
 
     # Preview mode: print and exit early
     if getenv("PREVIEW_ONLY", "false").lower() in ("1", "true", "yes", "y"):
