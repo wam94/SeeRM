@@ -13,7 +13,7 @@ def getenv(name: str, default=None):
 def load_config():
     return {
         "gmail": {
-            "query": getenv("GMAIL_QUERY", "from:metabase subject:\"Weekly Diff — Will Mitchell\" has:attachment filename:csv newer_than:10d"),
+            "query": getenv("GMAIL_QUERY", "from:metabase@mercury.com subject:\"Alert: SeeRM Master Query has results\" has:attachment filename:csv newer_than:10d"),
             "attachment_regex": getenv("ATTACHMENT_REGEX", r".*\.csv$"),
             "user": getenv("GMAIL_USER"),
         },
