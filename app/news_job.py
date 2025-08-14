@@ -282,7 +282,7 @@ def summarize_items_with_llm(items, org_label: str) -> str:
     )
     try:
         import openai
-        model = os.getenv("OPENAI_CHAT_MODEL") or "gpt-4o-mini"
+        model = os.getenv("OPENAI_CHAT_MODEL")
         client = openai.OpenAI(api_key=api_key)
         resp = client.chat.completions.create(
             model=model,
