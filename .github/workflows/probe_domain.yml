@@ -1,0 +1,51 @@
+name: Probe Domain
+
+on:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: 'Company name / DBA (e.g., "Aalo Atomics")'
+        required: true
+        type: string
+      owners:
+        description: 'Comma-separated key people (optional, e.g., "Matthew Loszak")'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run probe_domain
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
+          BASELINE_DEBUG: 'true'   # show debug lines from the probe if available
+        run: |
+          set -euo pipefail
+          echo "== Probe Domain =="
+          echo "Company: ${{ inputs.name }}"
+          if [ -n "${{ inputs.owners }}" ]; then
+            echo "Owners:  ${{ inputs.owners }}"
+            python -m scripts.probe_domain "${{ inputs.name }}" "${{ inputs.owners }}"
+          else
+            python -m scripts.probe_domain "${{ inputs.name }}"
+          fi
