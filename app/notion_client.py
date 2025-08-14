@@ -43,6 +43,18 @@ def _ensure_http(u: Optional[str]) -> Optional[str]:
         s = "https://" + s
     return s
 
+def _prop_type(schema: Dict[str, Any], name: str) -> str | None:
+    meta = schema.get("properties", {}).get(name)
+    return meta.get("type") if meta else None
+
+def _ensure_http(u: str | None) -> str | None:
+    if not u: return None
+    s = u.strip()
+    if not s: return None
+    if not s.startswith(("http://","https://")):
+        s = "https://" + s
+    return s
+
 # ---------- Basic HTTP ----------
 
 def notion_get(path: str) -> requests.Response:
@@ -85,22 +97,15 @@ def prop_type(schema: Dict[str, Any], name: str) -> Optional[str]:
     meta = schema.get("properties", {}).get(name)
     return meta.get("type") if meta else None
 
-# ---------- Company page lookup / upsert ----------
-
-def find_company_page(companies_db_id: str, callsign: str, title_prop: str) -> Optional[str]:
-    data = notion_query_db(companies_db_id, {
-        "filter": {"property": title_prop, "title": {"equals": callsign}}
-    })
-    results = data.get("results", [])
-    return results[0]["id"] if results else None
+# ---------- Company page lookup / upsert ---------- 
 
 def upsert_company_page(companies_db_id: str, payload: Dict[str, Any]) -> str:
     """
     payload must include: callsign;
     optional keys: company/dba, website, domain, owners, tags, needs_dossier (bool)
 
-    Writes Domain as URL if the Notion property 'Domain' is typed 'url',
-    otherwise falls back to rich_text. Website is optional.
+    Writes 'Domain' whether the Notion property is URL or rich_text.
+    If URL, we send a proper URL (https://domain.tld).
     """
     schema = get_db_schema(companies_db_id)
     title_prop = get_title_prop_name(schema)
@@ -109,57 +114,51 @@ def upsert_company_page(companies_db_id: str, payload: Dict[str, Any]) -> str:
     pid = find_company_page(companies_db_id, cs, title_prop)
 
     company_name = payload.get("company") or payload.get("dba") or ""
-    website = payload.get("website") or None
-    domain = payload.get("domain") or None
-    owners = payload.get("owners") or []
-    tags = payload.get("tags")
-    needs_dossier = payload.get("needs_dossier")
+    domain_root  = (payload.get("domain") or "").strip() or None
+    website_url  = _ensure_http(payload.get("website"))
 
     props: Dict[str, Any] = {title_prop: _title(cs)}
 
-    # Company
+    # Company name
     if prop_exists(schema, "Company", "rich_text"):
         props["Company"] = _rt(company_name)
 
-    # Website (optional, only if DB has it)
-    if prop_exists(schema, "Website", "url") and website:
-        props["Website"] = _url(_ensure_http(website))
+    # Website (URL type)
+    if prop_exists(schema, "Website", "url"):
+        props["Website"] = _url(website_url)
 
-    # Domain (prefer URL type, but fall back to rich_text if that's how the DB is configured)
-    dom_typ = prop_type(schema, "Domain")
-    if domain and dom_typ == "url":
-        props["Domain"] = _url(_ensure_http(domain))
-    elif domain and dom_typ == "rich_text":
-        props["Domain"] = _rt(domain)
+    # Domain: support URL or rich_text
+    dom_type = _prop_type(schema, "Domain")
+    if dom_type == "url":
+        # If DB’s Domain is a URL prop, give it a clickable URL
+        dom_url = _ensure_http(domain_root) if domain_root else None
+        props["Domain"] = _url(dom_url)
+    elif dom_type == "rich_text":
+        # If DB’s Domain is rich_text, store the bare domain root
+        props["Domain"] = _rt(domain_root or "")
 
-    # Owners
+    # Owners (compact text)
     if prop_exists(schema, "Owners", "rich_text"):
-        props["Owners"] = _rt(", ".join(owners) if isinstance(owners, list) else str(owners))
+        props["Owners"] = _rt(", ".join(payload.get("owners") or []))
 
-    # Tags
-    if prop_exists(schema, "Tags", "multi_select") and tags:
-        props["Tags"] = _multi_select(tags)
+    # Tags (multi-select)
+    if prop_exists(schema, "Tags", "multi_select") and payload.get("tags"):
+        props["Tags"] = _multi_select(payload["tags"])
 
     # Needs Dossier
-    if prop_exists(schema, "Needs Dossier", "checkbox") and needs_dossier is not None:
-        props["Needs Dossier"] = _checkbox(bool(needs_dossier))
+    if prop_exists(schema, "Needs Dossier", "checkbox") and payload.get("needs_dossier") is not None:
+        props["Needs Dossier"] = _checkbox(bool(payload["needs_dossier"]))
 
-    try:
-        if pid:
-            notion_patch(f"/pages/{pid}", {"properties": props})
-            return pid
-        else:
-            res = notion_post("/pages", {
-                "parent": {"database_id": companies_db_id},
-                "properties": props
-            }).json()
-            return res["id"]
-    except requests.HTTPError as e:
-        try:
-            print("UPSERT error body:", e.response.text[:800])
-        except Exception:
-            pass
-        raise
+    # Create or update
+    if pid:
+        notion_patch(f"/pages/{pid}", {"properties": props})
+        return pid
+    else:
+        res = notion_post("/pages", {
+            "parent": {"database_id": companies_db_id},
+            "properties": props
+        }).json()
+        return res["id"]
 
 # ---------- Updates on company page ----------
 
