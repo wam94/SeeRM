@@ -19,8 +19,87 @@ from app.news_job import (
 )
 from app.notion_client import upsert_company_page, set_needs_dossier
 
+# ---- Domain helpers (add near imports) ----
+import re
+from urllib.parse import urlparse
+import tldextract
+
+SOCIAL_BLOCKLIST = {
+    "linkedin.com","x.com","twitter.com","facebook.com","youtube.com",
+    "github.com","crunchbase.com","angel.co","pitchbook.com",
+    "medium.com","substack.com","notion.so"
+}
+
+def normalize_domain(url_or_domain: str | None) -> str | None:
+    if not url_or_domain:
+        return None
+    s = str(url_or_domain).strip()
+    if not s or "@" in s:
+        return None
+    if not s.startswith(("http://", "https://")):
+        s_ = "http://" + s
+    else:
+        s_ = s
+    try:
+        u = urlparse(s_)
+        host = u.netloc or u.path
+        ext = tldextract.extract(host)
+        return ext.registered_domain.lower() if ext.registered_domain else None
+    except Exception:
+        return None
+
+def verify_domain_http(domain: str) -> bool:
+    try:
+        for scheme in ("https", "http"):
+            r = requests.head(f"{scheme}://{domain}", timeout=6, allow_redirects=True,
+                              headers={"User-Agent": "SeeRM/1.0 (+github actions)"})
+            # accept any non-5xx as "exists"
+            if r.status_code and r.status_code < 500:
+                return True
+    except Exception:
+        pass
+    return False
+
+def discover_domain(org: dict, g_api_key: str | None, g_cse_id: str | None) -> tuple[str | None, bool]:
+    """Return (domain_root, verified_by_http)."""
+    # 1) explicit fields
+    dom = normalize_domain(org.get("domain_root") or org.get("website"))
+    if dom:
+        verified = verify_domain_http(dom)
+        return dom, verified
+
+    # 2) try CSE to infer domain from name if allowed
+    if g_api_key and g_cse_id and (org.get("dba") or org.get("callsign")):
+        name = org.get("dba") or org.get("callsign")
+        queries = [
+            f'"{name}" official site',
+            f'{name} website',
+            f'{name} home',
+        ]
+        for q in queries:
+            try:
+                items = google_cse_search(g_api_key, g_cse_id, q, num=5)
+            except Exception:
+                items = []
+            for it in items:
+                cand = normalize_domain(it.get("url"))
+                if not cand:
+                    continue
+                # skip socials/directories
+                if any(cand == b or cand.endswith("." + b) for b in SOCIAL_BLOCKLIST):
+                    continue
+                verified = verify_domain_http(cand)
+                if verified:
+                    return cand, True
+                # keep a non-verified candidate in case nothing verifies
+                if not dom:
+                    dom = cand
+
+    return dom, False
 
 # ---------------------- Utilities ----------------------
+
+
 
 def getenv(n: str, d: str | None = None) -> str | None:
     v = os.getenv(n)
@@ -35,16 +114,8 @@ def ensure_http(url: str | None) -> str | None:
     return u
 
 def compute_domain_root(website: str | None) -> str | None:
-    if not website:
-        return None
-    w = website.strip().lower()
-    w = re.sub(r'^https?://', '', w)
-    w = re.sub(r'^www\.', '', w)
-    host = w.split('/')[0]
-    ext = tldextract.extract(host)
-    if ext.domain and ext.suffix:
-        return f"{ext.domain}.{ext.suffix}"
-    return host or None
+    # Delegate to the canonical normalizer used everywhere else
+    return normalize_domain(website)
 
 def load_latest_weekly_csv(service, user, q, attachment_regex):
     if not q:
