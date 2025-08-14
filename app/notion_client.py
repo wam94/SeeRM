@@ -144,23 +144,24 @@ def set_latest_intel(companies_page_id: str, summary_text: str, date_iso: Option
 
 def append_intel_log(intel_db_id: str, company_page_id: str, callsign: str,
                      date_iso: str, summary_text: str, items: List[Dict[str, Any]]):
-    """
-    Creates an Intel Log row and appends bulleted links under it.
-    Assumes property names in the Intel DB:
-      Company (relation), Callsign (rich_text), Date (date), Summary (rich_text)
-    """
-    res = notion_post("/pages", {
-        "parent": {"database_id": intel_db_id},
-        "properties": {
-            "Company": {"relation": [{"id": company_page_id}]},
-            "Callsign": _rt(callsign),
-            "Date": {"date": {"start": date_iso}},
-            "Summary": _rt(summary_text or ""),
-        }
-    }).json()
+    try:
+        res = notion_post("/pages", {
+            "parent": {"database_id": intel_db_id},
+            "properties": {
+                "Company": {"relation": [{"id": company_page_id}]},
+                "Callsign": _rt(callsign),
+                "Date": {"date": {"start": date_iso}},
+                "Summary": _rt(summary_text or ""),
+            }
+        }).json()
+    except requests.HTTPError as e:
+        try:
+            print("INTEL_LOG create error body:", e.response.text[:800])
+        except Exception:
+            pass
+        raise
     log_page_id = res["id"]
 
-    # Append bulleted links
     bullets = []
     for it in items:
         title = (it.get("title") or "")[:180]
@@ -175,7 +176,14 @@ def append_intel_log(intel_db_id: str, company_page_id: str, callsign: str,
             }
         })
     if bullets:
-        notion_patch(f"/blocks/{log_page_id}/children", {"children": bullets})
+        try:
+            notion_patch(f"/blocks/{log_page_id}/children", {"children": bullets})
+        except requests.HTTPError as e:
+            try:
+                print("INTEL_LOG children error body:", e.response.text[:800])
+            except Exception:
+                pass
+            raise
 
 def set_needs_dossier(companies_page_id: str, needs: bool = True):
     notion_patch(f"/pages/{companies_page_id}", {"properties": {"Needs Dossier": _checkbox(needs)}})
