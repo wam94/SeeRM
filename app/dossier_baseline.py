@@ -392,7 +392,10 @@ def main():
 
     # ---- Apply batching
     targets_keys = slice_batch(base_list, batch_size, batch_index)
-    print(f"Roster total: {len(base_list)} | This batch: {len(targets_keys)} (batch_size={batch_size or '∞'}, batch_index={batch_index if batch_size else '-'})")
+    print(
+        f"Roster total: {len(base_list)} | This batch: {len(targets_keys)} "
+        f"(batch_size={batch_size or '∞'}, batch_index={batch_index if batch_size else '-'})"
+    )
 
     # Hygiene: show the first 5 callsigns in this batch
     if targets_keys:
@@ -401,14 +404,18 @@ def main():
         print("Batch head (first 5 callsigns):", ", ".join(head) + (f" … (+{remainder} more)" if remainder else ""))
     else:
         print("Batch head: (empty)")
-        
-        # Build target org dicts
-        targets: List[Dict[str, Any]] = []
-        for cs in targets_keys:
-            if cs in prof:
-                targets.append(prof[cs])
-            else:
-                targets.append({"callsign": cs, "dba": cs, "owners": []})
+
+    if not targets_keys:
+        print("No callsigns in this batch; nothing to do.")
+        return
+
+    # ---- Build target org dicts (define targets BEFORE any use)
+    targets: List[Dict[str, Any]] = []
+    for cs in targets_keys:
+        if cs in prof:
+            targets.append(prof[cs])
+        else:
+            targets.append({"callsign": cs, "dba": cs, "owners": []})
 
     # ---- Process
     dossiers: List[Dict[str, Any]] = []
