@@ -1,0 +1,187 @@
+name: Baseline Dossiers (All)
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: "ALL or comma-separated callsigns"
+        required: false
+        default: "ALL"
+        type: string
+      batch_size:
+        description: "Companies per batch (e.g., 25)"
+        required: false
+        default: "25"
+        type: string
+      lookback_days:
+        description: "Evidence lookback window (days)"
+        required: false
+        default: "180"
+        type: string
+      disable_cse:
+        description: "Disable Google CSE (true/false)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false","true"]
+      cse_max_queries:
+        description: "Max CSE queries per org"
+        required: false
+        default: "3"
+        type: string
+      llm_model:
+        description: "Model (e.g., gpt-5-nano, gpt-4o-mini)"
+        required: false
+        default: "gpt-5-nano"
+        type: string
+      llm_temperature:
+        description: "Temperature (or 'auto' to omit)"
+        required: false
+        default: "0.25"
+        type: string
+      llm_delay_sec:
+        description: "Delay between LLM calls (sec)"
+        required: false
+        default: "0"
+        type: string
+      notion_throttle_sec:
+        description: "Delay between Notion writes (sec)"
+        required: false
+        default: "0.35"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      batch_list: ${{ steps.out.outputs.batch_list }}
+      count: ${{ steps.out.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: "pip" }
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Compute batches
+        id: out
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          PROFILE_SUBJECT: ${{ vars.BASELINE_PROFILE_SUBJECT || vars.NEWS_PROFILE_SUBJECT }}
+          ATTACHMENT_REGEX: '.*\.csv$'
+          SCOPE: ${{ inputs.scope }}
+          BATCH_SIZE: ${{ inputs.batch_size }}
+        run: |
+          python - <<'PY'
+          import os, io, json, pandas as pd
+          from app.gmail_client import build_service, search_messages, get_message, extract_csv_attachments
+          from app.news_job import fetch_csv_by_subject
+
+          svc = build_service(
+              client_id=os.environ["GMAIL_CLIENT_ID"],
+              client_secret=os.environ["GMAIL_CLIENT_SECRET"],
+              refresh_token=os.environ["GMAIL_REFRESH_TOKEN"],
+          )
+          user = os.environ.get("GMAIL_USER")
+          df = fetch_csv_by_subject(svc, user, os.environ.get("PROFILE_SUBJECT") or "Org Profile — Will Mitchell")
+          calls = []
+          if df is not None and "callsign" in [c.lower() for c in df.columns]:
+              cols = {c.lower(): c for c in df.columns}
+              for _, r in df.iterrows():
+                  cs = str(r[cols["callsign"]]).strip().lower()
+                  if cs:
+                      calls.append(cs)
+          calls = sorted(set(calls))
+          scope = (os.environ.get("SCOPE") or "ALL").strip()
+          if scope and scope.upper() != "ALL":
+              want = [c.strip().lower() for c in scope.split(",") if c.strip()]
+              calls = [c for c in calls if c in want]
+
+          batch_size = int(os.environ.get("BATCH_SIZE","25") or "25")
+          n = len(calls)
+          num_batches = (n + batch_size - 1) // batch_size if batch_size > 0 else 1
+          batch_list = list(range(num_batches))
+          print(f"Found {n} callsigns -> {num_batches} batches of size {batch_size}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"batch_list={json.dumps(batch_list)}\n")
+              f.write(f"count={n}\n")
+          PY
+
+  run:
+    runs-on: ubuntu-latest
+    needs: prepare
+    strategy:
+      # keep parallelism modest to respect Notion rate limits
+      max-parallel: 2
+      matrix:
+        batch: ${{ fromJSON(needs.prepare.outputs.batch_list) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: "pip" }
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Notion preflight (companies only)
+        env:
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY || '' }}
+          NOTION_COMPANIES_DB_ID: ${{ secrets.NOTION_COMPANIES_DB_ID || '' }}
+        run: |
+          if [ -z "${NOTION_API_KEY}" ] || [ -z "${NOTION_COMPANIES_DB_ID}" ]; then
+            echo "Missing Notion secrets"; exit 1
+          fi
+          python - <<'PY'
+          import os, requests
+          H={"Authorization":f"Bearer {os.environ['NOTION_API_KEY']}","Notion-Version":"2022-06-28"}
+          r = requests.get(f"https://api.notion.com/v1/databases/{os.environ['NOTION_COMPANIES_DB_ID']}", headers=H, timeout=30); r.raise_for_status()
+          print("Companies DB:", r.json().get("title",[{"plain_text":"(untitled)"}])[0]["plain_text"])
+          PY
+
+      - name: Run baseline dossiers (batch ${{ matrix.batch }})
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+          # Gmail
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+
+          # OpenAI
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_CHAT_MODEL: ${{ inputs.llm_model }}
+          OPENAI_TEMPERATURE: ${{ inputs.llm_temperature }}
+
+          # Search
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
+
+          # Notion
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_COMPANIES_DB_ID: ${{ secrets.NOTION_COMPANIES_DB_ID }}
+
+          # App knobs
+          BASELINE_CALLSIGNS: ALL
+          BASELINE_LOOKBACK_DAYS: ${{ inputs.lookback_days }}
+          BASELINE_DISABLE_CSE: ${{ inputs.disable_cse }}
+          BASELINE_CSE_MAX_QUERIES: ${{ inputs.cse_max_queries }}
+          LLM_DELAY_SEC: ${{ inputs.llm_delay_sec }}
+          NOTION_THROTTLE_SEC: ${{ inputs.notion_throttle_sec }}
+          PREVIEW_ONLY: "false"
+          SEND_EMAIL: "false"
+
+          # batching
+          BATCH_SIZE: ${{ inputs.batch_size }}
+          BATCH_INDEX: ${{ matrix.batch }}
+        run: |
+          python -m app.dossier_baseline
