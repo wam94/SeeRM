@@ -197,7 +197,7 @@ def _openai_write_narrative(prompt: str) -> Optional[str]:
     try:
         import openai
         client = openai.OpenAI(api_key=api_key)
-        model = (os.getenv("OPENAI_CHAT_MODEL") or "gpt-4o-mini").strip()
+        model = (os.getenv("OPENAI_CHAT_MODEL_DOSSIER") or "gpt-4o-mini").strip()
         temp_env = (os.getenv("OPENAI_TEMPERATURE") or "").strip()
         temperature = None if temp_env in ("", "auto", "none") else float(temp_env)
 
