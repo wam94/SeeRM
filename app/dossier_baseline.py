@@ -6,7 +6,6 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 import pandas as pd
-import tldextract
 
 from trafilatura import fetch_url, extract as trafi_extract
 
@@ -133,37 +132,6 @@ DEBUG = (os.getenv("BASELINE_DEBUG","").lower() in ("1","true","yes"))
 def logd(msg: str):
     if DEBUG:
         print(msg)
-
-def ensure_http(u: str | None) -> str | None:
-    if not u: return None
-    s = u.strip()
-    if not s: return None
-    if not s.startswith(("http://","https://")):
-        s = "https://" + s
-    return s
-
-def compute_domain_root(website: str | None) -> str | None:
-    if not website: return None
-    w = website.strip().lower()
-    w = re.sub(r'^https?://', '', w)
-    w = re.sub(r'^www\.', '', w)
-    host = w.split('/')[0]
-    ext = tldextract.extract(host)
-    if ext.domain and ext.suffix:
-        return f"{ext.domain}.{ext.suffix}"
-    return host or None
-
-def ensure_http(url: str | None) -> str | None:
-    if not url:
-        return None
-    u = url.strip()
-    if not u.startswith(("http://", "https://")):
-        u = "https://" + u
-    return u
-
-def compute_domain_root(website: str | None) -> str | None:
-    # Delegate to the canonical normalizer used everywhere else
-    return normalize_domain(website)
 
 def load_latest_weekly_csv(service, user, q, attachment_regex):
     if not q:
@@ -789,76 +757,98 @@ def main():
     llm_delay = float(getenv("LLM_DELAY_SEC", "0") or "0")
     notion_delay = float(getenv("NOTION_THROTTLE_SEC", "0.35") or "0.35")
 
-    # Process per org
+    # --- Build objects list for this batch ---
+    targets: List[Dict[str, Any]] = []
+    for cs in targets_keys:
+        base = prof.get(cs, {"callsign": cs, "dba": cs, "owners": []})
+        # Repair/compute domain_root from website if missing
+        if not base.get("domain_root"):
+            base["domain_root"] = compute_domain_root(base.get("website"))
+        targets.append(base)
+
+    # --- Process per org ---
     dossiers: List[Dict[str, Any]] = []
     for org in targets:
-    # --- Domain resolution + debug ---
-    dr, url = resolve_domain_for_org(org, g_api_key, g_cse_id)
-    if dr:
-        org["domain"] = dr
-        # if Website column isn’t used in Notion, still keep it internally for validation/linking
-        org["website"] = org.get("website") or url
-    if os.getenv("BASELINE_DEBUG","").lower() in ("1","true","yes"):
-        print(f"[DOMAIN] cs={org.get('callsign')} -> domain_root={dr} url={url}")
+        # Domain resolution & website fill
+        dr, url = resolve_domain_for_org(org, g_api_key, g_cse_id)
+        if dr:
+            org["domain"] = dr
+            org["domain_root"] = dr
+            if not org.get("website"):
+                org["website"] = url
+        logd(f"[DOMAIN] cs={org.get('callsign')} -> domain={org.get('domain')} website={org.get('website')}")
 
-    # Now proceed with intel
-    news_items = collect_recent_news(org, lookback_days, g_api_key, g_cse_id)
-    people_bg  = collect_people_background(org, lookback_days, g_api_key, g_cse_id)
-    narr = generate_narrative(org, news_items, people_bg)
+        # Collect intel
+        news_items = collect_recent_news(org, lookback_days, g_api_key, g_cse_id)
+        people_bg  = collect_people_background(org, lookback_days, g_api_key, g_cse_id)
 
-    # Push to Notion
-    try:
-        logd(f"[NOTION] upsert payload: company={org.get('dba')} domain={org.get('domain')} website={org.get('website')}")
-        push_dossier_to_notion((org.get("callsign") or "").strip(), org, narr)
-    except Exception as e:
-        print("Notion dossier push error:", e)
+        # Fetch a bit of page text for funding heuristics
+        page_texts: List[Dict[str, Any]] = []
+        if org.get("website"):
+            try:
+                html = fetch_url(org["website"])
+                text = trafi_extract(html) if html else None
+                if text:
+                    page_texts.append({"url": org["website"], "text": text})
+            except Exception:
+                pass
+        for it in news_items[:3]:
+            u = it.get("url")
+            if not u:
+                continue
+            try:
+                html = fetch_url(u)
+                text = trafi_extract(html) if html else None
+                if text:
+                    page_texts.append({"url": u, "text": text})
+            except Exception:
+                continue
 
-    # (optional throttles you already have)
-    time.sleep(float(os.getenv("NOTION_THROTTLE_SEC","0") or "0"))
+        # Funding snapshot
+        funding = best_funding(org, page_texts)
 
-    funding = best_funding(org, page_texts)
+        # LLM narrative
+        narr = generate_narrative(org, news_items, people_bg, funding)
+        dossiers.append({"callsign": org.get("callsign"), "body_md": narr})
 
-    # LLM narrative
-    narr = generate_narrative(org, news_items, people_bg, funding)
-    dossiers.append({"callsign": org.get("callsign"), "body_md": narr})
+        # Notion
+        try:
+            logd(f"[NOTION] upsert payload: company={org.get('dba')} domain={org.get('domain')} website={org.get('website')}")
+            push_dossier_to_notion((org.get("callsign") or "").strip(), org, narr, throttle_sec=notion_delay)
+        except Exception as e:
+            print("Notion dossier push error:", repr(e))
 
-    # Notion
-    try:
-        push_dossier_to_notion((org.get("callsign") or "").strip(), org, narr, throttle_sec=notion_delay)
-    except Exception as e:
-        print("Notion dossier push error:", repr(e))
+        if llm_delay:
+            time.sleep(llm_delay)
 
-    if llm_delay:
-        time.sleep(llm_delay)
+    # --- Preview or optional email ---
+    preview = getenv("PREVIEW_ONLY", "false").lower() in ("1","true","yes","y")
+    if preview:
+        for d in dossiers:
+            print(f"\n=== {d.get('callsign')} ===\n")
+            print(d["body_md"][:2500])
+            print("\n----------------------------")
+        return
 
-# Preview or optional email
-preview = getenv("PREVIEW_ONLY", "false").lower() in ("1","true","yes","y")
-if preview:
-    for d in dossiers:
-        print(f"\n=== {d.get('callsign')} ===\n")
-        print(d["body_md"][:2500])
-        print("\n----------------------------")
-    return
-
-if getenv("SEND_EMAIL","false").lower() in ("1","true","yes","y"):
-    body = ["<html><body><h2>Baselines</h2>"]
-    for d in dossiers:
-        body.append(f"<h3>{d.get('callsign')}</h3><pre style='white-space:pre-wrap'>{d['body_md']}</pre><hr/>")
-    body.append("</body></html>")
-    html = "\n".join(body)
-    to = getenv("DIGEST_TO") or getenv("GMAIL_USER") or ""
-    send_html_email(
-        build_service(
-            client_id=os.environ["GMAIL_CLIENT_ID"],
-            client_secret=os.environ["GMAIL_CLIENT_SECRET"],
-            refresh_token=os.environ["GMAIL_REFRESH_TOKEN"],
-        ),
-        getenv("GMAIL_USER") or "",
-        to,
-        f"Baselines — {datetime.utcnow().date()}",
-        html
-    )
-    print("Baselines emailed to", to)
+    if getenv("SEND_EMAIL","false").lower() in ("1","true","yes","y"):
+        body = ["<html><body><h2>Baselines</h2>"]
+        for d in dossiers:
+            body.append(f"<h3>{d.get('callsign')}</h3><pre style='white-space:pre-wrap'>{d['body_md']}</pre><hr/>")
+        body.append("</body></html>")
+        html = "\n".join(body)
+        to = getenv("DIGEST_TO") or getenv("GMAIL_USER") or ""
+        send_html_email(
+            build_service(
+                client_id=os.environ["GMAIL_CLIENT_ID"],
+                client_secret=os.environ["GMAIL_CLIENT_SECRET"],
+                refresh_token=os.environ["GMAIL_REFRESH_TOKEN"],
+            ),
+            getenv("GMAIL_USER") or "",
+            to,
+            f"Baselines — {datetime.utcnow().date()}",
+            html
+        )
+        print("Baselines emailed to", to)
 
 
 if __name__ == "__main__":
