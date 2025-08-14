@@ -31,7 +31,8 @@ jobs:
           GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_CHAT_MODEL: ${{ vars.OPENAI_CHAT_MODEL || 'gpt-4o-mini' }}
+          OPENAI_CHAT_MODEL: ${{ vars.OPENAI_CHAT_MODEL || 'gpt-5-nano' }}
+          OPENAI_TEMPERATURE: ${{ vars.OPENAI_TEMPERATURE || '0.2' }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}  
           NEWS_GMAIL_QUERY: ${{ vars.NEWS_GMAIL_QUERY }}
