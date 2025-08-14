@@ -1,6 +1,7 @@
 # app/dossier_baseline.py
 from __future__ import annotations
 import os, io, re, math, time, json, requests
+import re, time, tldextract, requests
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
@@ -26,7 +27,7 @@ import tldextract
 
 SOCIAL_BLOCKLIST = {
     "linkedin.com","x.com","twitter.com","facebook.com","youtube.com",
-    "github.com","crunchbase.com","angel.co","pitchbook.com",
+    "github.com",
     "medium.com","substack.com","notion.so"
 }
 
@@ -99,11 +100,34 @@ def discover_domain(org: dict, g_api_key: str | None, g_cse_id: str | None) -> t
 
 # ---------------------- Utilities ----------------------
 
-
-
 def getenv(n: str, d: str | None = None) -> str | None:
     v = os.getenv(n)
     return d if v in (None, "") else v
+
+DEBUG = (os.getenv("BASELINE_DEBUG","").lower() in ("1","true","yes"))
+
+def logd(msg: str):
+    if DEBUG:
+        print(msg)
+
+def ensure_http(u: str | None) -> str | None:
+    if not u: return None
+    s = u.strip()
+    if not s: return None
+    if not s.startswith(("http://","https://")):
+        s = "https://" + s
+    return s
+
+def compute_domain_root(website: str | None) -> str | None:
+    if not website: return None
+    w = website.strip().lower()
+    w = re.sub(r'^https?://', '', w)
+    w = re.sub(r'^www\.', '', w)
+    host = w.split('/')[0]
+    ext = tldextract.extract(host)
+    if ext.domain and ext.suffix:
+        return f"{ext.domain}.{ext.suffix}"
+    return host or None
 
 def ensure_http(url: str | None) -> str | None:
     if not url:
@@ -732,31 +756,31 @@ def main():
 
     # Process per org
     dossiers: List[Dict[str, Any]] = []
-    for cs in targets_keys:
-        org = prof.get(cs, {"callsign": cs, "dba": cs, "owners": []})
-        # Ensure domain_root present for search
-        org["domain_root"] = org.get("domain_root") or compute_domain_root(org.get("website"))
-
-        # Items and background
+    for org in targets:
+        # --- Domain resolution + debug ---
+        dr, url = resolve_domain_for_org(org, g_api_key, g_cse_id)
+        if dr: 
+            org["domain"] = dr
+            # prefer to keep website as a URL for later crawls
+            org["website"] = org.get("website") or url
+        logd(f"[DOMAIN] callsign={org.get('callsign')} "
+             f"input_site={org.get('website')} "
+             f"domain_root={dr} url={url}")
+    
+        # Now proceed with intel
         news_items = collect_recent_news(org, lookback_days, g_api_key, g_cse_id)
         people_bg  = collect_people_background(org, lookback_days, g_api_key, g_cse_id)
-
-        # Pull page texts for funding extraction (limit pages)
-        max_pages = int(getenv("FUNDING_EXTRACT_MAX_PAGES", "3") or "3")
-        page_texts: List[Dict[str, Any]] = []
-        for it in news_items[:max_pages]:
-            url = it.get("url")
-            if not url:
-                continue
-            try:
-                raw = fetch_url(url, timeout=20)
-                if not raw:
-                    continue
-                txt = trafi_extract(raw) or ""
-                if txt:
-                    page_texts.append({"url": url, "text": txt})
-            except Exception:
-                continue
+        narr = generate_narrative(org, news_items, people_bg)
+    
+        # Push to Notion
+        try:
+            logd(f"[NOTION] upsert payload: company={org.get('dba')} domain={org.get('domain')} website={org.get('website')}")
+            push_dossier_to_notion((org.get("callsign") or "").strip(), org, narr)
+        except Exception as e:
+            print("Notion dossier push error:", e)
+    
+        # (optional throttles you already have)
+        time.sleep(float(os.getenv("NOTION_THROTTLE_SEC","0") or "0"))
 
         funding = best_funding(org, page_texts)
 
