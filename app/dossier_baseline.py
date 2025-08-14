@@ -51,7 +51,7 @@ def compute_domain_root(website: str | None) -> str | None:
 _BLOCKED_SITES = {
     "linkedin.com","x.com","twitter.com","facebook.com","instagram.com","youtube.com",
     "github.com","medium.com","substack.com","notion.so","notion.site",
-    "docs.google.com","wikipedia.org","angel.co""
+    "docs.google.com","wikipedia.org","angel.co"
 }
 
 def _head_ok(url: str) -> bool:
