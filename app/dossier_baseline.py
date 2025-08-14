@@ -623,31 +623,42 @@ def push_dossier_to_notion(callsign: str, org: dict, markdown_body: str, throttl
     companies_db = os.getenv("NOTION_COMPANIES_DB_ID")
     if not (token and companies_db):
         return
+
+    # Prefer `domain` (new key); fall back to legacy `domain_root`
+    domain_root = (org.get("domain") or org.get("domain_root") or "").strip() or None
+
+    # If Website is empty but we have a domain, build a URL for Notion URL fields
+    website = (org.get("website") or "").strip() or None
+    if not website and domain_root:
+        website = ensure_http(domain_root)  # e.g., "https://example.com"
+
     payload = {
         "callsign": callsign,
-        "company":  org.get("dba") or "",
-        "website":  org.get("website") or "",
-        "domain":   org.get("domain_root") or "",
+        "company":  (org.get("dba") or "").strip(),
+        "website":  website,         # URL (or None)
+        "domain":   domain_root,     # bare root, e.g. "example.com"
         "owners":   org.get("owners") or [],
         "needs_dossier": False,
     }
-    page_id = upsert_company_page(companies_db, payload)
-    try:
-        patch_company_properties(page_id, payload)  # ensure Domain is set
-    except Exception as e:
-        print("[Notion] property patch warning:", repr(e))
 
+    # upsert_company_page now writes Domain correctly for URL or rich_text schemas
+    page_id = upsert_company_page(companies_db, payload)
+
+    # Append the dossier body as blocks
     try:
         append_dossier_blocks(page_id, markdown_body)
     except Exception as e:
         print("[Notion] append blocks warning:", repr(e))
 
+    # Clear the checkbox
     try:
         set_needs_dossier(page_id, False)
     except Exception:
         pass
 
-    time.sleep(throttle_sec)
+    # Gentle throttle to avoid rate limits
+    if throttle_sec and throttle_sec > 0:
+        time.sleep(throttle_sec)
 
 
 # ---------------------- Batching helpers ----------------------
