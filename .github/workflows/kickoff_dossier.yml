@@ -162,6 +162,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_CHAT_MODEL: ${{ inputs.llm_model }}
           OPENAI_TEMPERATURE: ${{ inputs.llm_temperature }}
+          OPENAI_CHAT_MODEL_DOSSIER: ${{ inputs.llm_model }}
 
           # Search
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
