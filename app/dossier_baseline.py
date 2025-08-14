@@ -15,6 +15,13 @@ import os, io, re, math, time, json
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
+from app.notion_client import (
+    upsert_company_page,
+    append_dossier_blocks,
+    set_needs_dossier,
+    patch_company_properties,  # optional safety patch
+)
+
 import pandas as pd
 import requests
 import tldextract
@@ -590,35 +597,47 @@ def push_dossier_to_notion(callsign: str, org: dict, markdown_body: str, throttl
     if not (token and companies_db):
         return
 
-    # Prefer `domain` (new key); fall back to legacy `domain_root`
+    # Prefer the normalized 'domain' key, fallback to legacy 'domain_root'
     domain_root = (org.get("domain") or org.get("domain_root") or "").strip() or None
 
-    # If Website is empty but we have a domain, build a URL for Notion URL fields
+    # If Website is absent but we have a domain, construct a URL for Notion URL fields
     website = (org.get("website") or "").strip() or None
     if not website and domain_root:
-        website = ensure_http(domain_root)  # e.g., "https://example.com"
+        website = ("https://" + domain_root)  # Notion URL props want a scheme
 
     payload = {
-        "callsign": callsign,
+        "callsign": callsign,                    # used as the title field
         "company":  (org.get("dba") or "").strip(),
-        "website":  website,         # URL (or None)
-        "domain":   domain_root,     # bare root, e.g. "example.com"
+        "website":  website,                     # url or None
+        "domain":   domain_root,                 # bare root, e.g., "example.com"
         "owners":   org.get("owners") or [],
         "needs_dossier": False,
     }
 
+    # Upsert page and let the client write Website/Domain in a schema-aware way
     page_id = upsert_company_page(companies_db, payload)
 
+    # Optional: belt-and-suspenders property patch after schema changes
+    # Enable by setting BASELINE_NOTION_FORCE_PATCH=true
+    if (os.getenv("BASELINE_NOTION_FORCE_PATCH", "").lower() in ("1", "true", "yes", "y")):
+        try:
+            patch_company_properties(page_id, companies_db, payload)
+        except Exception as e:
+            print("[Notion] property patch warning:", repr(e))
+
+    # Append dossier content
     try:
         append_dossier_blocks(page_id, markdown_body)
     except Exception as e:
         print("[Notion] append blocks warning:", repr(e))
 
+    # Clear “Needs Dossier”
     try:
         set_needs_dossier(page_id, False)
     except Exception:
         pass
 
+    # Gentle throttle
     if throttle_sec and throttle_sec > 0:
         time.sleep(throttle_sec)
 
