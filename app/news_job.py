@@ -546,7 +546,7 @@ def main():
                     "tags": (org.get("industry_tags") or "").split(",") if org.get("industry_tags") else [],
                     "needs_dossier": new_flags.get(org["callsign"], False),
                 })
-                set_latest_intel(page_id, summary or "", now_utc_date())
+                set_latest_intel(page_id, summary or "", now_utc_date(), companies_db)
                 append_intel_log(intel_db, page_id, org["callsign"], now_utc_date(), summary or "", items)
                 # If we flagged Needs Dossier, ensure checkbox true
                 if new_flags.get(org["callsign"], False):
