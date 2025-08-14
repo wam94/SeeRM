@@ -250,17 +250,19 @@ def enrich_with_fulltext(items, per_org_cap: int, timeout: int, max_bytes: int):
 
 def summarize_items_with_llm(items, org_label: str) -> str:
     """
-    Summarize using fulltext when available; otherwise fall back to title/snippet.
-    Produces 2–4 crisp bullets. Logs whether LLM was used or why we fell back.
+    Uses OpenAI; works with both GPT-5 (Responses API, often no temperature)
+    and 4o/4o-mini (Chat Completions). Retries without temperature if rejected.
     """
     api_key = os.getenv("OPENAI_API_KEY")
-    fallback = "\n".join([f"- {it.get('title','')}{' — ' + (it.get('source','') or '') if it.get('source') else ''}" for it in items[:5]])[:800]
+    fallback = "\n".join(
+        [f"- {it.get('title','')}{' — ' + (it.get('source','') or '') if it.get('source') else ''}" for it in items[:5]]
+    )[:800]
 
     if not api_key:
         print("LLM_SUMMARY: disabled (no OPENAI_API_KEY)")
         return fallback
 
-    # Build compact evidence block
+    # Build compact evidence
     chunks = []
     for it in items[:5]:
         title = it.get("title") or ""
@@ -276,22 +278,51 @@ def summarize_items_with_llm(items, org_label: str) -> str:
         f"Company context: {org_label}\n\n"
         "Below are recent items (titles + article text when available). "
         "Synthesize the most relevant developments into 2–4 crisp, factual bullets. "
-        "Prefer product launches, funding, partnerships, and material changes over generic thought leadership. "
-        "Avoid fluff and duplication. Include company/product names when needed for clarity.\n\n"
+        "Prefer launches, funding, partnerships, and material changes. Avoid duplication.\n\n"
         + "\n".join(chunks)
     )
+
+    model = (os.getenv("OPENAI_CHAT_MODEL") or "gpt-4o-mini").strip()
+    temp_env = os.getenv("OPENAI_TEMPERATURE", "").strip()
+    # None means "don't send the param at all"
+    temperature = None if temp_env in ("", "auto", "none") else float(temp_env)
+
     try:
         import openai
-        model = os.getenv("OPENAI_CHAT_MODEL")
         client = openai.OpenAI(api_key=api_key)
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-        )
-        out = resp.choices[0].message.content.strip()
-        print(f"LLM_SUMMARY: ok (model={model}, chars_in={sum(len(c) for c in chunks)})")
-        return out
+
+        def try_call(send_temperature: bool):
+            # Use Responses API for GPT-5; Chat Completions for others
+            if model.startswith("gpt-5"):
+                kwargs = {"model": model, "input": prompt}
+                if send_temperature and temperature is not None:
+                    kwargs["temperature"] = temperature  # some GPT-5 variants may reject this
+                resp = client.responses.create(**kwargs)
+                return resp.output_text
+            else:
+                kwargs = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                }
+                if send_temperature and temperature is not None:
+                    kwargs["temperature"] = temperature
+                resp = client.chat.completions.create(**kwargs)
+                return resp.choices[0].message.content
+
+        # First attempt (with temperature if provided)
+        try:
+            out = try_call(send_temperature=True)
+            print(f"LLM_SUMMARY: ok (model={model}, with_temp={temperature is not None})")
+            return (out or "").strip()
+        except Exception as e1:
+            msg = repr(e1)
+            # If the error hints that temperature is unsupported, retry without it
+            if "temperature" in msg.lower() or "unrecognized request argument" in msg.lower():
+                out = try_call(send_temperature=False)
+                print(f"LLM_SUMMARY: ok after retry w/o temperature (model={model})")
+                return (out or "").strip()
+            raise
+
     except Exception as e:
         print("LLM_SUMMARY: fallback due to error:", repr(e))
         return fallback
