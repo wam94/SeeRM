@@ -183,7 +183,7 @@ def _openai_write_narrative(prompt: str) -> str | None:
         import openai
         client = openai.OpenAI(api_key=api_key)
         resp = client.chat.completions.create(
-            model=os.getenv("OPENAI_CHAT_MODEL","gpt-4o-mini"),
+            model = os.getenv("OPENAI_CHAT_MODEL"),
             messages=[{"role":"user","content":prompt}],
             temperature=0.25,
         )
