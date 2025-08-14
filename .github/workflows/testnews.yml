@@ -169,6 +169,7 @@ jobs:
           # LLM (optional; falls back gracefully if absent)
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_CHAT_MODEL: ${{ vars.OPENAI_CHAT_MODEL }}
+          OPENAI_TEMPERATURE: ${{ vars.OPENAI_TEMPERATURE || '0.2' }}
 
           # Notion (to write Latest + Intel archive)
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
@@ -228,6 +229,7 @@ jobs:
           # LLM + search (optional)
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_CHAT_MODEL: ${{ vars.OPENAI_CHAT_MODEL || 'gpt-4o-mini' }}
+          OPENAI_TEMPERATURE: ${{ vars.OPENAI_TEMPERATURE || '0.2' }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
 
