@@ -48,7 +48,8 @@ jobs:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}   # optional
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_CHAT_MODEL: ${{ vars.OPENAI_CHAT_MODEL || 'gpt-4o-mini' }}
           # Tune the Gmail search for your weekly CSV if you want to reuse it as the org source:
           NEWS_GMAIL_QUERY: ${{ vars.NEWS_GMAIL_QUERY }}
           ATTACHMENT_REGEX: '.*\.csv$'
@@ -98,5 +99,6 @@ jobs:
           PREVIEW_ONLY: 'false'
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_COMPANIES_DB_ID: ${{ secrets.NOTION_COMPANIES_DB_ID }}
+          OPENAI_CHAT_MODEL: ${{ vars.OPENAI_CHAT_MODEL || 'gpt-4o-mini' }}
         run: |
           python -m app.dossier_baseline
