@@ -395,20 +395,20 @@ def main():
     print(f"Roster total: {len(base_list)} | This batch: {len(targets_keys)} (batch_size={batch_size or '∞'}, batch_index={batch_index if batch_size else '-'})")
 
     # Hygiene: show the first 5 callsigns in this batch
-if targets_keys:
-    head = targets_keys[:5]
-    remainder = max(0, len(targets_keys) - len(head))
-    print("Batch head (first 5 callsigns):", ", ".join(head) + (f" … (+{remainder} more)" if remainder else ""))
-else:
-    print("Batch head: (empty)")
-    
-    # Build target org dicts
-    targets: List[Dict[str, Any]] = []
-    for cs in targets_keys:
-        if cs in prof:
-            targets.append(prof[cs])
-        else:
-            targets.append({"callsign": cs, "dba": cs, "owners": []})
+    if targets_keys:
+        head = targets_keys[:5]
+        remainder = max(0, len(targets_keys) - len(head))
+        print("Batch head (first 5 callsigns):", ", ".join(head) + (f" … (+{remainder} more)" if remainder else ""))
+    else:
+        print("Batch head: (empty)")
+        
+        # Build target org dicts
+        targets: List[Dict[str, Any]] = []
+        for cs in targets_keys:
+            if cs in prof:
+                targets.append(prof[cs])
+            else:
+                targets.append({"callsign": cs, "dba": cs, "owners": []})
 
     # ---- Process
     dossiers: List[Dict[str, Any]] = []
