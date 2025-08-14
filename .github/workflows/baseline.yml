@@ -32,6 +32,7 @@ jobs:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_CHAT_MODEL: ${{ vars.OPENAI_CHAT_MODEL || 'gpt-5-nano' }}
+          OPENAI_CHAT_MODEL_DOSSIER: ${{ vars.OPENAI_CHAT_MODEL_DOSSIER }}
           OPENAI_TEMPERATURE: ${{ vars.OPENAI_TEMPERATURE || '0.2' }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}  
