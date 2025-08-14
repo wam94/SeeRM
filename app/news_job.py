@@ -251,25 +251,22 @@ def enrich_with_fulltext(items, per_org_cap: int, timeout: int, max_bytes: int):
 def summarize_items_with_llm(items, org_label: str) -> str:
     """
     Summarize using fulltext when available; otherwise fall back to title/snippet.
-    Produces 2–4 crisp bullets.
+    Produces 2–4 crisp bullets. Logs whether LLM was used or why we fell back.
     """
     api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        # Fallback summary from titles only
-        lines = []
-        for it in items[:5]:
-            src = it.get("source", "")
-            lines.append(f"- {it.get('title','')}{' — ' + src if src else ''}")
-        return "\n".join(lines)[:800]
+    fallback = "\n".join([f"- {it.get('title','')}{' — ' + (it.get('source','') or '') if it.get('source') else ''}" for it in items[:5]])[:800]
 
-    # Build a compact evidence block
+    if not api_key:
+        print("LLM_SUMMARY: disabled (no OPENAI_API_KEY)")
+        return fallback
+
+    # Build compact evidence block
     chunks = []
     for it in items[:5]:
         title = it.get("title") or ""
         src   = it.get("source") or ""
         url   = it.get("url") or ""
-        body  = it.get("fulltext") or it.get("snippet") or ""
-        body  = body.strip().replace("\r", " ").replace("\n", " ")
+        body  = (it.get("fulltext") or it.get("snippet") or "").strip().replace("\r"," ").replace("\n"," ")
         if len(body) > 2000:
             body = body[:2000] + " …"
         chunks.append(f"TITLE: {title}\nSOURCE: {src}\nURL: {url}\nTEXT: {body}\n---")
@@ -285,20 +282,19 @@ def summarize_items_with_llm(items, org_label: str) -> str:
     )
     try:
         import openai
+        model = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini")
         client = openai.OpenAI(api_key=api_key)
         resp = client.chat.completions.create(
-            model=os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
         )
-        return resp.choices[0].message.content.strip()
-    except Exception:
-        # Fall back to titles if the API fails for any reason
-        lines = []
-        for it in items[:5]:
-            src = it.get("source", "")
-            lines.append(f"- {it.get('title','')}{' — ' + src if src else ''}")
-        return "\n".join(lines)[:800]
+        out = resp.choices[0].message.content.strip()
+        print(f"LLM_SUMMARY: ok (model={model}, chars_in={sum(len(c) for c in chunks)})")
+        return out
+    except Exception as e:
+        print("LLM_SUMMARY: fallback due to error:", repr(e))
+        return fallback
 
 # ------------------------ HTML template ------------------------
 
@@ -364,6 +360,9 @@ def fetch_csv_by_subject(service, user, subject, attachment_regex=r".*\.csv$", m
 # ------------------------ Main ------------------------
 
 def main():
+    
+    print("OPENAI_API_KEY present:", bool(os.getenv("OPENAI_API_KEY")))
+    
     # Config
     lookback_days = int(getenv("INTEL_LOOKBACK_DAYS", "10"))
     max_per_org   = int(getenv("INTEL_MAX_PER_ORG", "5"))
