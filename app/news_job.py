@@ -371,8 +371,8 @@ def main():
     g_cse_id  = getenv("GOOGLE_CSE_ID")
 
     # Use news-specific variables; fall back to generic names or defaults
-    weekly_query = getenv("NEWS_GMAIL_QUERY") or \
-    profile_subject = getenv("NEWS_PROFILE_SUBJECT") or \
+    weekly_query = getenv("NEWS_GMAIL_QUERY") 
+    profile_subject = getenv("NEWS_PROFILE_SUBJECT") 
  
     # Cost-control knobs for CSE
     only_if_rss_below = int(getenv("CSE_ONLY_IF_RSS_BELOW", "999"))
