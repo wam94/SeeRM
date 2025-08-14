@@ -13,6 +13,8 @@ import pandas as pd
 import requests
 import tldextract
 
+from trafilatura import fetch_url as _t_fetch, extract as _t_extract
+
 # -- Gmail / search utilities from your project
 from app.gmail_client import (
     build_service,
@@ -185,17 +187,118 @@ def discover_domain_by_search(name: Optional[str],
         logd(f"[discover_domain_by_search] error: {e}")
     return None
 
+def _safe_text_from_url(url: str, timeout: int = 5) -> str:
+    """
+    Best-effort page text with short timeouts.
+    """
+    try:
+        html = _t_fetch(url, timeout=timeout)
+        if not html:
+            # fallback if fetch_url returns None
+            r = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
+            if r.status_code < 400:
+                html = r.text
+        if not html:
+            return ""
+        txt = _t_extract(html, include_comments=False, include_links=False, favor_recall=True) or ""
+        return txt[:25000]
+    except Exception:
+        return ""
+
+def _score_candidate_domain(domain_root: str, name: str, owners: list[str]) -> int:
+    """
+    Heuristic: score a candidate domain by checking its homepage text for company/owner signals.
+    """
+    score = 0
+    if not domain_root:
+        return -999
+
+    # quick url guess and retrieval
+    url = validate_domain_to_url(domain_root) or f"https://{domain_root}"
+    text = _safe_text_from_url(url) or ""
+    t = text.lower()
+
+    # content signals
+    name_l = (name or "").lower().strip()
+    if name_l and name_l in t:
+        score += 3
+    # owner signals
+    for o in owners or []:
+        oo = (o or "").lower().strip()
+        if oo and oo in t:
+            score += 3
+            break
+    # page structure hints
+    for kw in ("about", "team", "careers", "jobs", "contact"):
+        if kw in t:
+            score += 1
+
+    # tiny bonus if homepage actually responds
+    if _head_ok(url):
+        score += 1
+
+    return score
+
+def discover_domain_smart(name: Optional[str],
+                          owners: Optional[list[str]],
+                          g_api_key: Optional[str],
+                          g_cse_id: Optional[str]) -> Optional[str]:
+    """
+    Broader discovery: try several queries, collect candidate roots, score by on-page content.
+    """
+    if not (name and g_api_key and g_cse_id):
+        return None
+
+    queries = [
+        f'{name} "About Us"',
+        f'{name} website',
+        f'{name} homepage',
+        f'{name} official site',
+    ]
+    # owners combo query can help when the brand name is generic
+    if owners:
+        lead = owners[0]
+        queries.append(f'{name} {lead} website')
+        queries.append(f'{name} {lead} "About"')
+
+    candidates: list[str] = []
+    seen = set()
+
+    try:
+        for q in queries:
+            items = google_cse_search(g_api_key, g_cse_id, q, num=5)
+            for it in items or []:
+                url = (it.get("url") or "").strip()
+                if not url:
+                    continue
+                ext = tldextract.extract(url)
+                root = (ext.registered_domain or "").lower()
+                if not root:
+                    continue
+                if any(root.endswith(b) for b in _BLOCKED_SITES):
+                    continue
+                if root in seen:
+                    continue
+                seen.add(root)
+                candidates.append(root)
+    except Exception as e:
+        logd(f"[discover_domain_smart] CSE error: {e}")
+
+    if not candidates:
+        return None
+
+    # score and pick best
+    owners_list = [o for o in (owners or []) if o]
+    scored = [(root, _score_candidate_domain(root, name or "", owners_list)) for root in candidates]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    best_root, best_score = scored[0]
+
+    # require a minimal score so we don't pick random domains
+    return best_root if best_score >= 3 else None
+
 def resolve_domain_for_org(org: Dict[str, Any],
                            g_api_key: Optional[str],
                            g_cse_id: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Strategy-driven domain resolution:
-      - csv_only:       only use CSV; never discover
-      - prefer_csv:     use CSV if present, else discover (DEFAULT)
-      - prefer_discovery: try discover first; fall back to CSV
-      - discovery_only: only discover; ignore CSV
-    Returns (domain_root, validated_url or None).
-    """
     strategy = (os.getenv("BASELINE_DOMAIN_STRATEGY", "prefer_csv") or "prefer_csv").lower()
 
     csv_domain = (org.get("domain") or org.get("domain_root") or "").strip() or None
@@ -210,13 +313,20 @@ def resolve_domain_for_org(org: Dict[str, Any],
             print(f"[DOMAIN] cs={org.get('callsign')} strategy={strategy} chosen={d} url={url} (csv={csv_domain})")
         return d, url
 
+    # CSV-only path
     if strategy == "csv_only":
         return _finalize(csv_domain)
 
+    # Prefer CSV when present
     if strategy == "prefer_csv" and csv_domain:
         return _finalize(csv_domain)
 
-    discovered = discover_domain_by_search(org.get("dba") or org.get("callsign"), g_api_key, g_cse_id)
+    # Discovery
+    discovered = discover_domain_smart(
+        org.get("dba") or org.get("callsign"),
+        org.get("owners") or [],
+        g_api_key, g_cse_id
+    )
 
     if strategy in ("prefer_discovery", "discovery_only"):
         return _finalize(discovered or (None if strategy == "discovery_only" else csv_domain))
