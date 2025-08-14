@@ -1,10 +1,13 @@
 # app/dossier_baseline.py
 from __future__ import annotations
-import os, io, json, requests
+import os, io, re, math, time, json, requests
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 import pandas as pd
+import tldextract
+
+from trafilatura import fetch_url, extract as trafi_extract
 
 from app.gmail_client import (
     build_service, search_messages, get_message,
@@ -16,19 +19,37 @@ from app.news_job import (
 )
 from app.notion_client import upsert_company_page, set_needs_dossier
 
-# ---------------------- Utils ----------------------
 
-def getenv(n: str, d: Optional[str] = None) -> Optional[str]:
+# ---------------------- Utilities ----------------------
+
+def getenv(n: str, d: str | None = None) -> str | None:
     v = os.getenv(n)
     return d if v in (None, "") else v
 
-def lower_cols(df: pd.DataFrame) -> Dict[str, str]:
-    return {c.lower().strip(): c for c in df.columns}
-
-def load_latest_weekly_csv(service, user: str, query: str | None, attachment_regex: str) -> Optional[pd.DataFrame]:
-    if not query:
+def ensure_http(url: str | None) -> str | None:
+    if not url:
         return None
-    msgs = search_messages(service, user, query, max_results=5)
+    u = url.strip()
+    if not u.startswith(("http://", "https://")):
+        u = "https://" + u
+    return u
+
+def compute_domain_root(website: str | None) -> str | None:
+    if not website:
+        return None
+    w = website.strip().lower()
+    w = re.sub(r'^https?://', '', w)
+    w = re.sub(r'^www\.', '', w)
+    host = w.split('/')[0]
+    ext = tldextract.extract(host)
+    if ext.domain and ext.suffix:
+        return f"{ext.domain}.{ext.suffix}"
+    return host or None
+
+def load_latest_weekly_csv(service, user, q, attachment_regex):
+    if not q:
+        return None
+    msgs = search_messages(service, user, q, max_results=5)
     for m in msgs:
         msg = get_message(service, user, m["id"])
         atts = extract_csv_attachments(service, user, msg, attachment_regex)
@@ -37,65 +58,64 @@ def load_latest_weekly_csv(service, user: str, query: str | None, attachment_reg
             try:
                 return pd.read_csv(io.BytesIO(data))
             except Exception:
-                continue
+                pass
     return None
 
-def slice_batch(items: List[str], batch_size: int | None, batch_index: int | None) -> List[str]:
-    if not items:
-        return []
-    if not batch_size or batch_size <= 0 or batch_index is None:
-        return items
-    start = batch_index * batch_size
-    end = start + batch_size
-    return items[start:end]
+def lower_cols(df: pd.DataFrame) -> Dict[str, str]:
+    return {c.lower().strip(): c for c in df.columns}
+
 
 # ---------------------- Evidence collection ----------------------
 
-def collect_recent_news(org: Dict[str, Any], lookback_days: int, g_api_key: str | None, g_cse_id: str | None,
+def collect_recent_news(org: Dict[str, Any], lookback_days: int,
+                        g_api_key: str | None, g_cse_id: str | None,
                         max_items: int = 6, max_queries: int = 5) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
 
-    # RSS/blog
-    site_for_rss = org.get("blog_url") or org.get("website")
+    # RSS/blog (prefer explicit blog_url; else website)
+    site_for_rss = ensure_http(org.get("blog_url") or org.get("website"))
     if site_for_rss:
-        items += try_rss_feeds(site_for_rss)
+        try:
+            items += try_rss_feeds(site_for_rss)
+        except Exception:
+            pass
 
-    # Google CSE (optional)
-    if g_api_key and g_cse_id:
+    # Google CSE (site + name queries + optional owners)
+    if (g_api_key and g_cse_id) and str(getenv("BASELINE_DISABLE_CSE","false")).lower() not in ("1","true","yes","y"):
         queries = build_queries(
             org.get("dba"), org.get("website"), org.get("owners"),
             domain_root=org.get("domain_root"),
             aka_names=org.get("aka_names"),
             tags=org.get("industry_tags"),
         )
-        for q in queries[:max_queries]:
+        limit = int(getenv("BASELINE_CSE_MAX_QUERIES", str(max_queries)) or max_queries)
+        for q in queries[:limit]:
             try:
                 items += google_cse_search(g_api_key, g_cse_id, q, date_restrict=f"d{lookback_days}", num=5)
             except Exception:
                 continue
 
-    # Clean & window
+    # Clean and limit to window
     items = dedupe(items, key=lambda x: x.get("url"))
     items = [x for x in items if within_days(x.get("published_at", datetime.utcnow()), lookback_days)]
-
     # Normalize minimal fields
-    out: List[Dict[str, Any]] = []
-    for it in items[:max_items]:
-        out.append({
-            "title": it.get("title") or "",
-            "url": it.get("url") or "",
-            "source": it.get("source") or "",
-            "published_at": it["published_at"].strftime("%Y-%m-%d") if isinstance(it.get("published_at"), datetime) else (it.get("published_at") or ""),
-            "snippet": it.get("snippet") or "",
-        })
-    return out
+    for it in items:
+        it["title"] = it.get("title") or ""
+        it["url"] = it.get("url") or ""
+        it["source"] = it.get("source") or (org.get("domain_root") or "")
+        if isinstance(it.get("published_at"), datetime):
+            it["published_at"] = it["published_at"].strftime("%Y-%m-%d")
+    return items[:max_items]
 
-def collect_people_background(org: Dict[str, Any], lookback_days: int, g_api_key: str | None, g_cse_id: str | None,
+def collect_people_background(org: Dict[str, Any], lookback_days: int,
+                              g_api_key: str | None, g_cse_id: str | None,
                               max_people: int = 3) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
-    owners = [o for o in (org.get("owners") or []) if o][:max_people]
+    owners = [o for o in (org.get("owners") or []) if o]
+    owners = owners[:max_people]
     if not (g_api_key and g_cse_id) or not owners:
         return results
+
     for person in owners:
         qs = [
             f'"{person}" "{org.get("dba") or org.get("domain_root") or ""}" (founder OR cofounder OR CFO OR COO OR CTO OR CEO OR head)',
@@ -109,17 +129,167 @@ def collect_people_background(org: Dict[str, Any], lookback_days: int, g_api_key
             except Exception:
                 continue
         items = dedupe(items, key=lambda x: x.get("url"))[:5]
-        results.append({
-            "name": person,
-            "findings": [{
-                "title": it.get("title") or "",
-                "url": it.get("url") or "",
-                "source": it.get("source") or "",
-            } for it in items]
-        })
+        for it in items:
+            it["title"] = it.get("title") or ""
+            it["url"] = it.get("url") or ""
+            it["source"] = it.get("source") or ""
+        results.append({"name": person, "findings": items})
     return results
 
-# ---------------------- Narrative prompt ----------------------
+
+# ---------------------- Funding enrichment ----------------------
+
+AMOUNT_RE = re.compile(r'(?<![\d$])(?:USD\s*)?\$?\s*([0-9][\d,\.]*)\s*(billion|bn|million|mm|m|thousand|k)?', re.I)
+ROUND_RE  = re.compile(r'\b(Pre-Seed|Seed|Angel|Series\s+[A-K]|Series\s+[A-K]\s+extension|Bridge|Convertible\s+Note|SAFE|Debt|Venture\s+Round|Equity\s+Round)\b', re.I)
+DATE_RE   = re.compile(r'\b(20\d{2}|19\d{2})[-/\.](\d{1,2})[-/\.](\d{1,2})\b')
+LED_BY_RE = re.compile(r'\b(led by|co-led by)\s+([^.;,\n]+)', re.I)
+WITH_PARTICIPATION_RE = re.compile(r'\b(with participation from|including)\s+([^.;\n]+)', re.I)
+
+def _to_usd(value_str: str, unit: Optional[str]) -> Optional[float]:
+    try:
+        n = float(value_str.replace(",", ""))
+    except Exception:
+        return None
+    unit = (unit or "").lower()
+    if unit in ("billion", "bn"):
+        n *= 1_000_000_000
+    elif unit in ("million", "mm", "m"):
+        n *= 1_000_000
+    elif unit in ("thousand", "k"):
+        n *= 1_000
+    return n
+
+def _norm_date(text: str) -> Optional[str]:
+    m = DATE_RE.search(text)
+    if not m: return None
+    y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    try:
+        return datetime(y, mo, d).strftime("%Y-%m-%d")
+    except Exception:
+        return None
+
+def extract_funding_from_text(text: str) -> Dict[str, Any]:
+    if not text:
+        return {}
+    res: Dict[str, Any] = {}
+    m = ROUND_RE.search(text)
+    if m:
+        res["last_round_type"] = m.group(1).title()
+    m = AMOUNT_RE.search(text)
+    if m:
+        amt = _to_usd(m.group(1), m.group(2))
+        if amt and math.isfinite(amt):
+            res["last_round_amount_usd"] = int(round(amt))
+    date = _norm_date(text)
+    if date:
+        res["last_round_date"] = date
+    investors: List[str] = []
+    for rx in (LED_BY_RE, WITH_PARTICIPATION_RE):
+        mm = rx.search(text)
+        if mm:
+            investors += [p.strip(" .") for p in re.split(r',| and ', mm.group(2)) if p.strip()]
+    if investors:
+        investors = [re.sub(r'\(.*?\)$', '', i).strip() for i in investors]
+        res["investors"] = sorted(set(investors))
+    return res
+
+def crunchbase_enrich(domain_root: Optional[str], name: Optional[str]) -> Dict[str, Any]:
+    key = os.getenv("CRUNCHBASE_API_KEY")
+    if not key:
+        return {}
+    H = {"X-cb-user-key": key, "Content-Type": "application/json"}
+    BASE = "https://api.crunchbase.com/api/v4"
+
+    # Search by domain, then by name
+    payloads = []
+    if domain_root:
+        payloads.append({
+            "field_ids": ["identifier","name","website","short_description"],
+            "query": [{"type":"predicate","field_id":"website","operator_id":"contains","values":[domain_root]}],
+            "limit": 1
+        })
+    if name:
+        payloads.append({
+            "field_ids": ["identifier","name","website","short_description"],
+            "query": [{"type":"predicate","field_id":"name","operator_id":"contains","values":[name]}],
+            "limit": 1
+        })
+
+    org_id = None
+    for body in payloads:
+        try:
+            r = requests.post(f"{BASE}/searches/organizations", headers=H, json=body, timeout=30)
+            if r.status_code != 200:
+                continue
+            ents = (r.json().get("entities") or [])
+            if ents:
+                org_id = ents[0]["identifier"].get("uuid") or ents[0]["identifier"].get("permalink")
+                break
+        except Exception:
+            continue
+    if not org_id:
+        return {}
+
+    body = {
+        "field_ids": [
+            "name","identifier","website",
+            "last_funding_type","last_funding_at","last_funding_total_usd",
+            "funding_total_usd","investors","investors_names","announced_on"
+        ]
+    }
+    try:
+        r = requests.post(f"{BASE}/entities/organizations/{org_id}", headers=H, json=body, timeout=30)
+        if r.status_code != 200:
+            return {}
+        ent = r.json().get("properties", {})
+        out: Dict[str, Any] = {}
+        def get(*keys):
+            for k in keys:
+                if k in ent:
+                    return ent.get(k)
+            return None
+        out["total_funding_usd"]   = get("funding_total_usd")
+        out["last_round_type"]     = get("last_funding_type")
+        out["last_round_date"]     = get("last_funding_at") or get("announced_on")
+        out["last_round_amount_usd"] = get("last_funding_total_usd")
+        inv = get("investors_names") or get("investors")
+        if isinstance(inv, list):
+            out["investors"] = inv[:10]
+        elif isinstance(inv, str):
+            out["investors"] = [s.strip() for s in inv.split(",") if s.strip()][:10]
+        out["source_cb"] = True
+        return {k:v for k,v in out.items() if v not in (None, "", [], 0)}
+    except Exception:
+        return {}
+
+def merge_funding(primary: Dict[str, Any], secondary: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(primary or {})
+    for k, v in (secondary or {}).items():
+        if k not in out or out[k] in (None, "", [], 0):
+            out[k] = v
+    return out
+
+def best_funding(org: Dict[str, Any], fetched_pages: List[Dict[str, Any]]) -> Dict[str, Any]:
+    heur: Dict[str, Any] = {}
+    sources: List[str] = []
+    for p in fetched_pages:
+        text = p.get("text") or ""
+        if not text:
+            continue
+        cand = extract_funding_from_text(text)
+        if cand:
+            heur = merge_funding(cand, heur)
+            if p.get("url"): sources.append(p["url"])
+    cb = crunchbase_enrich(org.get("domain_root"), org.get("dba"))
+    out = merge_funding(cb, heur) if cb else heur
+    if sources:
+        out["funding_sources"] = list(dict.fromkeys(sources))[:5]
+    if out:
+        out["funding_present"] = True
+    return out
+
+
+# ---------------------- LLM (dossier narrative) ----------------------
 
 DOSSIER_GUIDANCE = """
 You are an account manager at a banking technology company serving startups (often growth-stage, 5–100 employees).
@@ -155,10 +325,10 @@ Use the following sections and headings exactly:
 - 1–3 bullets for uncertainty, gaps, or identity ambiguities that need confirmation.
 """
 
-def _build_evidence_block(org: dict, news_items: list[dict], people_bg: list[dict]) -> str:
+def _build_evidence_block(org: dict, news_items: list[dict], people_bg: list[dict], funding: dict | None) -> str:
     news_lines = []
     for n in news_items[:8]:
-        date = n.get("published_at", "") or n.get("date", "")
+        date = n.get("date") or n.get("published_at", "")
         src  = n.get("source", "")
         title = n.get("title", "")
         url = n.get("url", "")
@@ -181,6 +351,17 @@ def _build_evidence_block(org: dict, news_items: list[dict], people_bg: list[dic
     evidence.append(f"- Contacts: {', '.join(org.get('owners') or [])}")
     evidence.append(f"- Tags: {org.get('industry_tags')}")
     evidence.append("")
+    if funding and funding.get("funding_present"):
+        evidence.append("Funding snapshot (pre-normalized):")
+        if funding.get("total_funding_usd") or funding.get("last_round_amount_usd"):
+            evidence.append(f"- Total funding: {funding.get('total_funding_usd')}")
+            evidence.append(f"- Last round: {funding.get('last_round_type')} on {funding.get('last_round_date')}, amount={funding.get('last_round_amount_usd')}")
+        if funding.get("investors"):
+            evidence.append(f"- Investors: {', '.join(funding['investors'])}")
+        if funding.get("funding_sources"):
+            for s in funding["funding_sources"][:3]:
+                evidence.append(f"- Source: {s}")
+        evidence.append("")
     evidence.append("Recent items (last 6 months):")
     evidence.append("\n".join(news_lines) if news_lines else "(none)")
     evidence.append("")
@@ -188,64 +369,74 @@ def _build_evidence_block(org: dict, news_items: list[dict], people_bg: list[dic
     evidence.append("\n".join(ppl_lines) if ppl_lines else "(none)")
     return "\n".join(evidence)
 
-# ---------------------- OpenAI ----------------------
-
-def _openai_write_narrative(prompt: str) -> Optional[str]:
+def _openai_write_narrative(prompt: str) -> str | None:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return None
     try:
         import openai
         client = openai.OpenAI(api_key=api_key)
-        model = (os.getenv("OPENAI_CHAT_MODEL_DOSSIER") or "gpt-4o-mini").strip()
-        temp_env = (os.getenv("OPENAI_TEMPERATURE") or "").strip()
+        model = (os.getenv("OPENAI_CHAT_MODEL_DOSSIER")
+                 or os.getenv("OPENAI_CHAT_MODEL")
+                 or "gpt-5-mini").strip()
+        temp_env = (os.getenv("OPENAI_TEMPERATURE_DOSSIER")
+                    or os.getenv("OPENAI_TEMPERATURE")
+                    or "").strip()
         temperature = None if temp_env in ("", "auto", "none") else float(temp_env)
 
-        def try_call(send_temperature: bool) -> str:
+        def try_call(send_temperature: bool):
             if model.startswith("gpt-5"):
                 kwargs = {"model": model, "input": prompt}
                 if send_temperature and temperature is not None:
                     kwargs["temperature"] = temperature
                 r = client.responses.create(**kwargs)
-                return r.output_text or ""
+                return r.output_text
             else:
                 kwargs = {"model": model, "messages": [{"role":"user","content":prompt}]}
                 if send_temperature and temperature is not None:
                     kwargs["temperature"] = temperature
                 r = client.chat.completions.create(**kwargs)
-                return r.choices[0].message.content or ""
+                return r.choices[0].message.content
 
         try:
-            return try_call(send_temperature=True).strip()
+            out = try_call(send_temperature=True)
+            return (out or "").strip()
         except Exception as e1:
             if "temperature" in repr(e1).lower() or "unrecognized request argument" in repr(e1).lower():
-                return try_call(send_temperature=False).strip()
+                out = try_call(send_temperature=False)
+                return (out or "").strip()
             raise
     except Exception:
         return None
 
-def generate_narrative(org: dict, news_items: list[dict], people_bg: list[dict]) -> str:
-    evidence = _build_evidence_block(org, news_items, people_bg)
+def generate_narrative(org: dict, news_items: list[dict], people_bg: list[dict], funding: dict | None) -> str:
+    evidence = _build_evidence_block(org, news_items, people_bg, funding)
     prompt = f"{DOSSIER_GUIDANCE}\n\nEVIDENCE START\n{evidence}\nEVIDENCE END\n\nWrite the profile now."
     text = _openai_write_narrative(prompt)
     if text:
         return text
 
-    # Fallback template if LLM unavailable
+    # Fallback if no OpenAI lib/key: compact evidence-based
     lines = []
     lines.append("🔍 Company & Identity")
     lines.append(f"- DBA: {org.get('dba') or org.get('domain_root') or org.get('callsign')}")
     lines.append(f"- Website: {org.get('website') or '—'}\n")
     lines.append("🏢 Company Overview")
-    lines.append("- (LLM unavailable) See items & people below.\n")
+    if funding and funding.get("funding_present"):
+        lines.append(f"- Last round: {funding.get('last_round_type')} on {funding.get('last_round_date')} amount={funding.get('last_round_amount_usd')}")
+        if funding.get("investors"):
+            lines.append(f"- Investors: {', '.join(funding.get('investors') or [])}")
+    else:
+        lines.append("- (LLM not available) See recent items and people notes below.\n")
     lines.append("🚀 Product & Use Cases")
     lines.append("- (summarize after LLM is enabled)\n")
     lines.append("📰 Recent Announcements (last ~6 months)")
-    for n in (news_items or [])[:4]:
-        date = n.get("published_at","")
-        src  = n.get("source","")
-        lines.append(f"- {date} — {n.get('title','')} — {src} {n.get('url','')}")
-    if not news_items:
+    if news_items:
+        for n in news_items[:4]:
+            date = n.get("date") or n.get("published_at","")
+            src  = n.get("source","")
+            lines.append(f"- {date} — {n.get('title','')} — {src} {n.get('url','')}")
+    else:
         lines.append("- None found")
     lines.append("\n👥 Your Contacts & Key Team")
     if people_bg:
@@ -255,62 +446,109 @@ def generate_narrative(org: dict, news_items: list[dict], people_bg: list[dict])
         lines.append("- (no background findings)")
     return "\n".join(lines)
 
-# ---------------------- Notion push ----------------------
 
-def push_dossier_to_notion(callsign: str, org: dict, markdown_body: str):
-    token = os.getenv("NOTION_API_KEY")
-    companies_db = os.getenv("NOTION_COMPANIES_DB_ID")
-    if not (token and companies_db):
+# ---------------------- Notion push (reliable Domain write) ----------------------
+
+def _notion_headers() -> Dict[str, str]:
+    return {
+        "Authorization": f"Bearer {os.environ['NOTION_API_KEY']}",
+        "Notion-Version": os.getenv("NOTION_VERSION","2022-06-28"),
+        "Content-Type": "application/json",
+    }
+
+def patch_company_properties(page_id: str, payload: Dict[str, Any]):
+    """Patch basic properties directly to ensure 'Domain' lands even if helper mapping lags."""
+    props: Dict[str, Any] = {}
+    if payload.get("company"):
+        props["Company"] = {"title": [{"type": "text", "text": {"content": payload["company"][:200]}}]}
+    if payload.get("website"):
+        props["Website"] = {"url": payload["website"]}
+    if payload.get("domain"):
+        props["Domain"] = {"rich_text": [{"type": "text", "text": {"content": payload["domain"][:200]}}]}
+    if payload.get("callsign"):
+        props["Callsign"] = {"rich_text": [{"type": "text", "text": {"content": payload["callsign"][:100]}}]}
+
+    if not props:
         return
-    page_id = upsert_company_page(companies_db, {
-        "callsign": callsign,
-        "company":  org.get("dba") or "",
-        "dba":      org.get("dba") or "",
-        "website":  org.get("website") or "",
-        "domain":   org.get("domain_root") or "",
-        "owners":   org.get("owners") or [],
-        "needs_dossier": False,
-    })
+    r = requests.patch(
+        f"https://api.notion.com/v1/pages/{page_id}",
+        headers=_notion_headers(),
+        json={"properties": props},
+        timeout=30
+    )
+    r.raise_for_status()
+
+def append_dossier_blocks(page_id: str, markdown_body: str):
+    # very simple chunking as plain paragraphs
+    chunks = [markdown_body[i:i+1800] for i in range(0, len(markdown_body), 1800)] or [markdown_body]
     hdr = {
         "object": "block",
         "type": "heading_2",
         "heading_2": {"rich_text": [{"type": "text", "text": {"content": "Dossier"}}]}
     }
-    chunks = [markdown_body[i:i+1800] for i in range(0, len(markdown_body), 1800)] or [markdown_body]
     paras = [{
         "object": "block",
         "type": "paragraph",
         "paragraph": {"rich_text": [{"type": "text", "text": {"content": ch}}]}
     } for ch in chunks]
-    requests.patch(
+    r = requests.patch(
         f"https://api.notion.com/v1/blocks/{page_id}/children",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Notion-Version": os.getenv("NOTION_VERSION","2022-06-28"),
-            "Content-Type": "application/json",
-        },
+        headers=_notion_headers(),
         json={"children": [hdr] + paras},
         timeout=30
-    ).raise_for_status()
+    )
+    r.raise_for_status()
+
+def push_dossier_to_notion(callsign: str, org: dict, markdown_body: str, throttle_sec: float = 0.35):
+    token = os.getenv("NOTION_API_KEY")
+    companies_db = os.getenv("NOTION_COMPANIES_DB_ID")
+    if not (token and companies_db):
+        return
+    payload = {
+        "callsign": callsign,
+        "company":  org.get("dba") or "",
+        "website":  org.get("website") or "",
+        "domain":   org.get("domain_root") or "",
+        "owners":   org.get("owners") or [],
+        "needs_dossier": False,
+    }
+    page_id = upsert_company_page(companies_db, payload)
+    try:
+        patch_company_properties(page_id, payload)  # ensure Domain is set
+    except Exception as e:
+        print("[Notion] property patch warning:", repr(e))
+
+    try:
+        append_dossier_blocks(page_id, markdown_body)
+    except Exception as e:
+        print("[Notion] append blocks warning:", repr(e))
+
     try:
         set_needs_dossier(page_id, False)
     except Exception:
         pass
 
+    time.sleep(throttle_sec)
+
+
+# ---------------------- Batching helpers ----------------------
+
+def slice_batch(keys: List[str], batch_size: Optional[int], batch_index: Optional[int]) -> List[str]:
+    if not keys:
+        return []
+    if not batch_size:
+        return keys
+    n = max(1, int(batch_size))
+    i = max(0, int(batch_index or 0))
+    start = i * n
+    end = start + n
+    return keys[start:end]
+
+
 # ---------------------- Main ----------------------
 
 def main():
-    # Knobs
-    lookback_days = int(getenv("BASELINE_LOOKBACK_DAYS", "180") or "180")
-    disable_cse   = (getenv("BASELINE_DISABLE_CSE","false").lower() in ("1","true","yes"))
-    g_api_key     = None if disable_cse else getenv("GOOGLE_API_KEY")
-    g_cse_id      = None if disable_cse else getenv("GOOGLE_CSE_ID")
-    batch_size    = int(getenv("BATCH_SIZE","0") or "0")
-    batch_index   = int(getenv("BATCH_INDEX","0") or "0") if batch_size > 0 else None
-
-    callsigns_env = (getenv("BASELINE_CALLSIGNS","") or "").strip()
-
-    # Gmail / CSVs (we may need them for ALL mode, but subset runs can work without)
+    # Gmail service (for CSVs and optional email)
     svc = build_service(
         client_id=os.environ["GMAIL_CLIENT_ID"],
         client_secret=os.environ["GMAIL_CLIENT_SECRET"],
@@ -318,86 +556,91 @@ def main():
     )
     user = getenv("GMAIL_USER") or os.environ["GMAIL_USER"]
 
-    profile_subject = getenv("NEWS_PROFILE_SUBJECT") or getenv("BASELINE_PROFILE_SUBJECT") or "Org Profile — Will Mitchell"
-    weekly_query    = getenv("NEWS_GMAIL_QUERY") or getenv("BASELINE_GMAIL_QUERY") or \
-                      'from:metabase subject:"Weekly Diff — Will Mitchell" has:attachment filename:csv newer_than:30d'
-    attachment_rx   = getenv("ATTACHMENT_REGEX", r".*\.csv$") or r".*\.csv$"
+    # Load profile CSV (preferred) and weekly CSV (fallback merge)
+    profile_subject = getenv("PROFILE_SUBJECT") or getenv("NEWS_PROFILE_SUBJECT")
+    weekly_query    = getenv("WEEKLY_GMAIL_QUERY") or getenv("NEWS_GMAIL_QUERY")
+    attach_rx       = getenv("ATTACHMENT_REGEX", r".*\.csv$")
 
-    df_profile = fetch_csv_by_subject(svc, user, profile_subject)
-    weekly     = load_latest_weekly_csv(svc, user, weekly_query, attachment_rx)
+    df_profile = fetch_csv_by_subject(svc, user, profile_subject) if profile_subject else None
+    weekly     = load_latest_weekly_csv(svc, user, weekly_query, attach_rx) if weekly_query else None
 
-    # Build profile lookup (if available)
+    if df_profile is None and weekly is None:
+        raise SystemExit("Need at least one CSV (profile or weekly) to build a baseline.")
+
+    # Build profile roster
     prof: Dict[str, Dict[str, Any]] = {}
     if df_profile is not None:
         pcols = lower_cols(df_profile)
         for _, r in df_profile.iterrows():
-            cs = str(r[pcols.get("callsign")]).strip().lower() if pcols.get("callsign") else ""
-            if not cs: 
+            cs = str(r[pcols.get("callsign")]).strip().lower() if pcols.get("callsign") in r else ""
+            if not cs:
                 continue
-            prof[cs] = {
+            dba = r[pcols.get("dba")] if pcols.get("dba") in r else None
+            website = r[pcols.get("website")] if pcols.get("website") in r else None
+            domain_root = r[pcols.get("domain_root")] if pcols.get("domain_root") in r else None
+            owners_raw = r[pcols.get("beneficial_owners")] if pcols.get("beneficial_owners") in r else ""
+            owners = [s.strip() for s in str(owners_raw or "").split(",") if s.strip()]
+            base = {
                 "callsign": r[pcols.get("callsign")],
-                "dba": r[pcols.get("dba")] if pcols.get("dba") else None,
-                "website": r[pcols.get("website")] if pcols.get("website") else None,
-                "domain_root": r[pcols.get("domain_root")] if pcols.get("domain_root") else None,
-                "aka_names": r[pcols.get("aka_names")] if pcols.get("aka_names") else None,
-                "blog_url": r[pcols.get("blog_url")] if pcols.get("blog_url") else None,
-                "rss_feeds": r[pcols.get("rss_feeds")] if pcols.get("rss_feeds") else None,
-                "linkedin_url": r[pcols.get("linkedin_url")] if pcols.get("linkedin_url") else None,
-                "twitter_handle": r[pcols.get("twitter_handle")] if pcols.get("twitter_handle") else None,
-                "crunchbase_url": r[pcols.get("crunchbase_url")] if pcols.get("crunchbase_url") else None,
-                "industry_tags": r[pcols.get("industry_tags")] if pcols.get("industry_tags") else None,
-                "hq_city": r[pcols.get("hq_city")] if pcols.get("hq_city") else None,
-                "hq_region": r[pcols.get("hq_region")] if pcols.get("hq_region") else None,
-                "hq_country": r[pcols.get("hq_country")] if pcols.get("hq_country") else None,
-                "owners": [s.strip() for s in str(r[pcols.get("beneficial_owners")]) .split(",")] if pcols.get("beneficial_owners") else [],
+                "dba": dba,
+                "website": website,
+                "domain_root": domain_root,
+                "aka_names": r[pcols.get("aka_names")] if pcols.get("aka_names") in r else None,
+                "blog_url": r[pcols.get("blog_url")] if pcols.get("blog_url") in r else None,
+                "rss_feeds": r[pcols.get("rss_feeds")] if pcols.get("rss_feeds") in r else None,
+                "linkedin_url": r[pcols.get("linkedin_url")] if pcols.get("linkedin_url") in r else None,
+                "twitter_handle": r[pcols.get("twitter_handle")] if pcols.get("twitter_handle") in r else None,
+                "crunchbase_url": r[pcols.get("crunchbase_url")] if pcols.get("crunchbase_url") in r else None,
+                "industry_tags": r[pcols.get("industry_tags")] if pcols.get("industry_tags") in r else None,
+                "hq_city": r[pcols.get("hq_city")] if pcols.get("hq_city") in r else None,
+                "hq_region": r[pcols.get("hq_region")] if pcols.get("hq_region") in r else None,
+                "hq_country": r[pcols.get("hq_country")] if pcols.get("hq_country") in r else None,
+                "owners": owners,
             }
+            # Always compute/repair domain_root
+            base["domain_root"] = base.get("domain_root") or compute_domain_root(base.get("website"))
+            prof[cs] = base
 
-    # Merge from weekly for missing basics
+    # Merge fallback data from weekly
     if weekly is not None:
         wcols = lower_cols(weekly)
         for _, r in weekly.iterrows():
-            cs = str(r[wcols.get("callsign")]).strip().lower() if wcols.get("callsign") else ""
+            cs = str(r[wcols.get("callsign")]).strip().lower() if wcols.get("callsign") in r else ""
             if not cs:
                 continue
-            base = prof.get(cs, {"callsign": r[wcols.get("callsign")] if wcols.get("callsign") else cs})
-            if not base.get("dba") and wcols.get("dba"):
+            base = prof.get(cs, {"callsign": r[wcols.get("callsign")], "owners": []})
+            # Fill dba/website if missing
+            if not base.get("dba") and wcols.get("dba") in r:
                 base["dba"] = r[wcols.get("dba")]
-            if not base.get("website") and wcols.get("website"):
+            if not base.get("website") and wcols.get("website") in r:
                 base["website"] = r[wcols.get("website")]
-            if not base.get("owners"):
-                owners = r[wcols.get("beneficial_owners")] if wcols.get("beneficial_owners") else ""
-                base["owners"] = [s.strip() for s in str(owners or "").split(",") if s.strip()]
+            # Merge owners
+            if wcols.get("beneficial_owners") in r:
+                owners_raw = r[wcols.get("beneficial_owners")]
+                owners = [s.strip() for s in str(owners_raw or "").split(",") if s.strip()]
+                if owners:
+                    base["owners"] = sorted(set((base.get("owners") or []) + owners))
+            # Repair domain_root
+            base["domain_root"] = base.get("domain_root") or compute_domain_root(base.get("website"))
             prof[cs] = base
 
-    # ---- Derive target callsigns
-    if callsigns_env and callsigns_env.upper() != "ALL":
-        base_list = [c.strip().lower() for c in callsigns_env.split(",") if c.strip()]
-    else:
-        # ALL mode: derive from profile roster, then fall back to weekly
-        base_list = list(prof.keys())
-        if not base_list and weekly is not None:
-            wcols = lower_cols(weekly)
-            for _, r in weekly.iterrows():
-                cs = str(r[wcols.get("callsign")]).strip().lower() if wcols.get("callsign") else ""
-                if cs:
-                    base_list.append(cs)
-        base_list = sorted(set(base_list))
-        if not base_list:
-            raise SystemExit(
-                "ALL requested but no roster could be derived.\n"
-                f"- Check profile subject: '{profile_subject}'\n"
-                f"- Or weekly query: '{weekly_query}'\n"
-                "Alternatively, pass a subset via BASELINE_CALLSIGNS='foo,bar'."
-            )
+    # Build base list and apply optional manual filter (BASELINE_CALLSIGNS)
+    base_list = sorted(prof.keys())
+    requested = (getenv("BASELINE_CALLSIGNS") or "").strip()
+    if requested and requested.upper() != "ALL":
+        want = [c.strip().lower() for c in requested.split(",") if c.strip()]
+        base_list = [c for c in base_list if c in want]
 
-    # ---- Apply batching
+    # Batching
+    batch_size = int(getenv("BATCH_SIZE", "0") or "0") or None
+    batch_index = int(getenv("BATCH_INDEX", "0") or "0") if batch_size else None
     targets_keys = slice_batch(base_list, batch_size, batch_index)
+
     print(
         f"Roster total: {len(base_list)} | This batch: {len(targets_keys)} "
         f"(batch_size={batch_size or '∞'}, batch_index={batch_index if batch_size else '-'})"
     )
-
-    # Hygiene: show the first 5 callsigns in this batch
+    # Hygiene: show first 5 of this batch
     if targets_keys:
         head = targets_keys[:5]
         remainder = max(0, len(targets_keys) - len(head))
@@ -409,28 +652,57 @@ def main():
         print("No callsigns in this batch; nothing to do.")
         return
 
-    # ---- Build target org dicts (define targets BEFORE any use)
-    targets: List[Dict[str, Any]] = []
-    for cs in targets_keys:
-        if cs in prof:
-            targets.append(prof[cs])
-        else:
-            targets.append({"callsign": cs, "dba": cs, "owners": []})
+    # Knobs
+    lookback_days = int(getenv("BASELINE_LOOKBACK_DAYS", "180") or "180")
+    g_api_key = getenv("GOOGLE_API_KEY")
+    g_cse_id  = getenv("GOOGLE_CSE_ID")
+    llm_delay = float(getenv("LLM_DELAY_SEC", "0") or "0")
+    notion_delay = float(getenv("NOTION_THROTTLE_SEC", "0.35") or "0.35")
 
-    # ---- Process
+    # Process per org
     dossiers: List[Dict[str, Any]] = []
-    for org in targets:
-        cs = (org.get("callsign") or "").strip()
-        try:
-            news_items = collect_recent_news(org, lookback_days, g_api_key, g_cse_id)
-            people_bg  = collect_people_background(org, lookback_days, g_api_key, g_cse_id)
-            narr = generate_narrative(org, news_items, people_bg)
-            dossiers.append({"callsign": cs, "body_md": narr})
-            push_dossier_to_notion(cs, org, narr)
-        except Exception as e:
-            print(f"Error processing {cs}:", repr(e))
+    for cs in targets_keys:
+        org = prof.get(cs, {"callsign": cs, "dba": cs, "owners": []})
+        # Ensure domain_root present for search
+        org["domain_root"] = org.get("domain_root") or compute_domain_root(org.get("website"))
 
-    # ---- Preview or Email (email only if SEND_EMAIL=true)
+        # Items and background
+        news_items = collect_recent_news(org, lookback_days, g_api_key, g_cse_id)
+        people_bg  = collect_people_background(org, lookback_days, g_api_key, g_cse_id)
+
+        # Pull page texts for funding extraction (limit pages)
+        max_pages = int(getenv("FUNDING_EXTRACT_MAX_PAGES", "3") or "3")
+        page_texts: List[Dict[str, Any]] = []
+        for it in news_items[:max_pages]:
+            url = it.get("url")
+            if not url:
+                continue
+            try:
+                raw = fetch_url(url, timeout=20)
+                if not raw:
+                    continue
+                txt = trafi_extract(raw) or ""
+                if txt:
+                    page_texts.append({"url": url, "text": txt})
+            except Exception:
+                continue
+
+        funding = best_funding(org, page_texts)
+
+        # LLM narrative
+        narr = generate_narrative(org, news_items, people_bg, funding)
+        dossiers.append({"callsign": org.get("callsign"), "body_md": narr})
+
+        # Notion
+        try:
+            push_dossier_to_notion((org.get("callsign") or "").strip(), org, narr, throttle_sec=notion_delay)
+        except Exception as e:
+            print("Notion dossier push error:", repr(e))
+
+        if llm_delay:
+            time.sleep(llm_delay)
+
+    # Preview or optional email
     preview = getenv("PREVIEW_ONLY", "false").lower() in ("1","true","yes","y")
     if preview:
         for d in dossiers:
@@ -458,6 +730,7 @@ def main():
             html
         )
         print("Baselines emailed to", to)
+
 
 if __name__ == "__main__":
     main()
