@@ -49,7 +49,7 @@ jobs:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_CHAT_MODEL: ${{ vars.OPENAI_CHAT_MODEL || 'gpt-4o-mini' }}
+          OPENAI_CHAT_MODEL: ${{ vars.OPENAI_CHAT_MODEL || 'gpt-5-nano' }}
           OPENAI_TEMPERATURE: ${{ vars.OPENAI_TEMPERATURE || '0.2' }}
           # Tune the Gmail search for your weekly CSV if you want to reuse it as the org source:
           NEWS_GMAIL_QUERY: ${{ vars.NEWS_GMAIL_QUERY }}
@@ -99,7 +99,7 @@ jobs:
           PREVIEW_ONLY: 'false'
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_COMPANIES_DB_ID: ${{ secrets.NOTION_COMPANIES_DB_ID }}
-          OPENAI_CHAT_MODEL: ${{ vars.OPENAI_CHAT_MODEL || 'gpt-4o-mini' }}
+          OPENAI_CHAT_MODEL: ${{ vars.OPENAI_CHAT_MODEL || 'gpt-5-nano' }}
           OPENAI_TEMPERATURE: ${{ vars.OPENAI_TEMPERATURE || '0.2' }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
