@@ -70,6 +70,10 @@ jobs:
       - name: Compute batches
         id: out
         env:
+          #DEBUG
+          BASELINE_DEBUG: "1"
+          NOTION_DEBUG: "1"
+          #MAIN
           PYTHONPATH: ${{ github.workspace }}
           GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
           GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
