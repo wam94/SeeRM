@@ -781,74 +781,73 @@ def main():
     # Process per org
     dossiers: List[Dict[str, Any]] = []
     for org in targets:
-        # --- Domain resolution + debug ---
-        dr, url = resolve_domain_for_org(org, g_api_key, g_cse_id)
-        if dr: 
-            org["domain"] = dr
-            # prefer to keep website as a URL for later crawls
-            org["website"] = org.get("website") or url
-        logd(f"[DOMAIN] callsign={org.get('callsign')} "
-             f"input_site={org.get('website')} "
-             f"domain_root={dr} url={url}")
-    
-        # Now proceed with intel
-        news_items = collect_recent_news(org, lookback_days, g_api_key, g_cse_id)
-        people_bg  = collect_people_background(org, lookback_days, g_api_key, g_cse_id)
-        narr = generate_narrative(org, news_items, people_bg)
-    
-        # Push to Notion
-        try:
-            logd(f"[NOTION] upsert payload: company={org.get('dba')} domain={org.get('domain')} website={org.get('website')}")
-            push_dossier_to_notion((org.get("callsign") or "").strip(), org, narr)
-        except Exception as e:
-            print("Notion dossier push error:", e)
-    
-        # (optional throttles you already have)
-        time.sleep(float(os.getenv("NOTION_THROTTLE_SEC","0") or "0"))
+    # --- Domain resolution + debug ---
+    dr, url = resolve_domain_for_org(org, g_api_key, g_cse_id)
+    if dr:
+        org["domain"] = dr
+        # if Website column isn’t used in Notion, still keep it internally for validation/linking
+        org["website"] = org.get("website") or url
+    if os.getenv("BASELINE_DEBUG","").lower() in ("1","true","yes"):
+        print(f"[DOMAIN] cs={org.get('callsign')} -> domain_root={dr} url={url}")
 
-        funding = best_funding(org, page_texts)
+    # Now proceed with intel
+    news_items = collect_recent_news(org, lookback_days, g_api_key, g_cse_id)
+    people_bg  = collect_people_background(org, lookback_days, g_api_key, g_cse_id)
+    narr = generate_narrative(org, news_items, people_bg)
 
-        # LLM narrative
-        narr = generate_narrative(org, news_items, people_bg, funding)
-        dossiers.append({"callsign": org.get("callsign"), "body_md": narr})
+    # Push to Notion
+    try:
+        logd(f"[NOTION] upsert payload: company={org.get('dba')} domain={org.get('domain')} website={org.get('website')}")
+        push_dossier_to_notion((org.get("callsign") or "").strip(), org, narr)
+    except Exception as e:
+        print("Notion dossier push error:", e)
 
-        # Notion
-        try:
-            push_dossier_to_notion((org.get("callsign") or "").strip(), org, narr, throttle_sec=notion_delay)
-        except Exception as e:
-            print("Notion dossier push error:", repr(e))
+    # (optional throttles you already have)
+    time.sleep(float(os.getenv("NOTION_THROTTLE_SEC","0") or "0"))
 
-        if llm_delay:
-            time.sleep(llm_delay)
+    funding = best_funding(org, page_texts)
 
-    # Preview or optional email
-    preview = getenv("PREVIEW_ONLY", "false").lower() in ("1","true","yes","y")
-    if preview:
-        for d in dossiers:
-            print(f"\n=== {d.get('callsign')} ===\n")
-            print(d["body_md"][:2500])
-            print("\n----------------------------")
-        return
+    # LLM narrative
+    narr = generate_narrative(org, news_items, people_bg, funding)
+    dossiers.append({"callsign": org.get("callsign"), "body_md": narr})
 
-    if getenv("SEND_EMAIL","false").lower() in ("1","true","yes","y"):
-        body = ["<html><body><h2>Baselines</h2>"]
-        for d in dossiers:
-            body.append(f"<h3>{d.get('callsign')}</h3><pre style='white-space:pre-wrap'>{d['body_md']}</pre><hr/>")
-        body.append("</body></html>")
-        html = "\n".join(body)
-        to = getenv("DIGEST_TO") or getenv("GMAIL_USER") or ""
-        send_html_email(
-            build_service(
-                client_id=os.environ["GMAIL_CLIENT_ID"],
-                client_secret=os.environ["GMAIL_CLIENT_SECRET"],
-                refresh_token=os.environ["GMAIL_REFRESH_TOKEN"],
-            ),
-            getenv("GMAIL_USER") or "",
-            to,
-            f"Baselines — {datetime.utcnow().date()}",
-            html
-        )
-        print("Baselines emailed to", to)
+    # Notion
+    try:
+        push_dossier_to_notion((org.get("callsign") or "").strip(), org, narr, throttle_sec=notion_delay)
+    except Exception as e:
+        print("Notion dossier push error:", repr(e))
+
+    if llm_delay:
+        time.sleep(llm_delay)
+
+# Preview or optional email
+preview = getenv("PREVIEW_ONLY", "false").lower() in ("1","true","yes","y")
+if preview:
+    for d in dossiers:
+        print(f"\n=== {d.get('callsign')} ===\n")
+        print(d["body_md"][:2500])
+        print("\n----------------------------")
+    return
+
+if getenv("SEND_EMAIL","false").lower() in ("1","true","yes","y"):
+    body = ["<html><body><h2>Baselines</h2>"]
+    for d in dossiers:
+        body.append(f"<h3>{d.get('callsign')}</h3><pre style='white-space:pre-wrap'>{d['body_md']}</pre><hr/>")
+    body.append("</body></html>")
+    html = "\n".join(body)
+    to = getenv("DIGEST_TO") or getenv("GMAIL_USER") or ""
+    send_html_email(
+        build_service(
+            client_id=os.environ["GMAIL_CLIENT_ID"],
+            client_secret=os.environ["GMAIL_CLIENT_SECRET"],
+            refresh_token=os.environ["GMAIL_REFRESH_TOKEN"],
+        ),
+        getenv("GMAIL_USER") or "",
+        to,
+        f"Baselines — {datetime.utcnow().date()}",
+        html
+    )
+    print("Baselines emailed to", to)
 
 
 if __name__ == "__main__":
