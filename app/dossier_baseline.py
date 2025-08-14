@@ -182,12 +182,32 @@ def _openai_write_narrative(prompt: str) -> str | None:
     try:
         import openai
         client = openai.OpenAI(api_key=api_key)
-        resp = client.chat.completions.create(
-            model = os.getenv("OPENAI_CHAT_MODEL"),
-            messages=[{"role":"user","content":prompt}],
-            temperature=0.25,
-        )
-        return resp.choices[0].message.content.strip()
+        model = (os.getenv("OPENAI_CHAT_MODEL") or "gpt-4o-mini").strip()
+        temp_env = os.getenv("OPENAI_TEMPERATURE", "").strip()
+        temperature = None if temp_env in ("", "auto", "none") else float(temp_env)
+
+        def try_call(send_temperature: bool):
+            if model.startswith("gpt-5"):
+                kwargs = {"model": model, "input": prompt}
+                if send_temperature and temperature is not None:
+                    kwargs["temperature"] = temperature
+                r = client.responses.create(**kwargs)
+                return r.output_text
+            else:
+                kwargs = {"model": model, "messages": [{"role":"user","content":prompt}]}
+                if send_temperature and temperature is not None:
+                    kwargs["temperature"] = temperature
+                r = client.chat.completions.create(**kwargs)
+                return r.choices[0].message.content
+
+        try:
+            out = try_call(send_temperature=True)
+            return (out or "").strip()
+        except Exception as e1:
+            if "temperature" in repr(e1).lower() or "unrecognized request argument" in repr(e1).lower():
+                out = try_call(send_temperature=False)
+                return (out or "").strip()
+            raise
     except Exception:
         return None
 
