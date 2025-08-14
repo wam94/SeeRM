@@ -20,83 +20,107 @@ from app.news_job import (
 )
 from app.notion_client import upsert_company_page, set_needs_dossier
 
-# ---- Domain helpers (add near imports) ----
-import re
-from urllib.parse import urlparse
-import tldextract
+# ---- Domain utilities (consolidated) ----
 
-SOCIAL_BLOCKLIST = {
-    "linkedin.com","x.com","twitter.com","facebook.com","youtube.com",
-    "github.com",
-    "medium.com","substack.com","notion.so"
+DEBUG = (os.getenv("BASELINE_DEBUG","").lower() in ("1","true","yes"))
+
+def logd(msg: str):
+    if DEBUG:
+        print(msg)
+
+def ensure_http(u: str | None) -> str | None:
+    if not u: return None
+    s = u.strip()
+    if not s: return None
+    if not s.startswith(("http://","https://")):
+        s = "https://" + s
+    return s
+
+def compute_domain_root(website: str | None) -> str | None:
+    if not website: return None
+    w = website.strip().lower()
+    w = re.sub(r'^https?://', '', w)
+    w = re.sub(r'^www\.', '', w)
+    host = w.split('/')[0]
+    ext = tldextract.extract(host)
+    if ext.domain and ext.suffix:
+        return f"{ext.domain}.{ext.suffix}"
+    return host or None
+
+# Superset of social/content hosts we never treat as a company domain
+_BLOCKED_SITES = {
+    "linkedin.com","x.com","twitter.com","facebook.com","instagram.com","youtube.com",
+    "github.com","medium.com","substack.com","notion.so","notion.site",
+    "docs.google.com","wikipedia.org","angel.co","crunchbase.com","pitchbook.com"
 }
 
+def _head_ok(url: str) -> bool:
+    try:
+        r = requests.head(url, timeout=6, allow_redirects=True)
+        return r.status_code < 400
+    except Exception:
+        return False
+
+def validate_domain_to_url(domain_root: str) -> str | None:
+    """Try https://domain, https://www.domain, http://domain; return first that responds (or first candidate as fallback)."""
+    candidates = [
+        f"https://{domain_root}",
+        f"https://www.{domain_root}",
+        f"http://{domain_root}",
+    ]
+    for u in candidates:
+        if _head_ok(u):
+            return u
+    return candidates[0]
+
+def discover_domain_by_search(name: str, g_api_key: str | None, g_cse_id: str | None) -> str | None:
+    """Use Google CSE to find an 'official' site; returns registered_domain."""
+    if not (g_api_key and g_cse_id and name):
+        return None
+    try:
+        from app.news_job import google_cse_search
+        q = f'{name} (official site OR homepage) -site:linkedin.com -site:twitter.com -site:x.com'
+        items = google_cse_search(g_api_key, g_cse_id, q, num=5)
+        for it in items:
+            url = (it.get("url") or "").strip()
+            if not url:
+                continue
+            ext = tldextract.extract(url)
+            host = (ext.registered_domain or "").lower()
+            if not host:
+                continue
+            if any(host.endswith(b) for b in _BLOCKED_SITES):
+                continue
+            return host
+    except Exception as e:
+        logd(f"[discover_domain_by_search] error: {e}")
+    return None
+
+# Compatibility shim: if other code still calls normalize_domain(), keep it mapped here.
 def normalize_domain(url_or_domain: str | None) -> str | None:
-    if not url_or_domain:
-        return None
-    s = str(url_or_domain).strip()
-    if not s or "@" in s:
-        return None
-    if not s.startswith(("http://", "https://")):
-        s_ = "http://" + s
-    else:
-        s_ = s
-    try:
-        u = urlparse(s_)
-        host = u.netloc or u.path
-        ext = tldextract.extract(host)
-        return ext.registered_domain.lower() if ext.registered_domain else None
-    except Exception:
-        return None
+    """Return registered_domain for any url or bare host."""
+    return compute_domain_root(url_or_domain)
 
-def verify_domain_http(domain: str) -> bool:
-    try:
-        for scheme in ("https", "http"):
-            r = requests.head(f"{scheme}://{domain}", timeout=6, allow_redirects=True,
-                              headers={"User-Agent": "SeeRM/1.0 (+github actions)"})
-            # accept any non-5xx as "exists"
-            if r.status_code and r.status_code < 500:
-                return True
-    except Exception:
-        pass
-    return False
+def resolve_domain_for_org(org: dict, g_api_key: str | None, g_cse_id: str | None) -> tuple[str | None, str | None]:
+    """
+    Decide a domain for the org. Returns (domain_root, validated_url or None).
+    Order: explicit org['domain'] -> compute from org['website'] -> search by DBA/callsign.
+    """
+    raw_site = (org.get("website") or "").strip() or None
+    raw_domain = (org.get("domain") or org.get("domain_root") or "").strip() or None
 
-def discover_domain(org: dict, g_api_key: str | None, g_cse_id: str | None) -> tuple[str | None, bool]:
-    """Return (domain_root, verified_by_http)."""
-    # 1) explicit fields
-    dom = normalize_domain(org.get("domain_root") or org.get("website"))
-    if dom:
-        verified = verify_domain_http(dom)
-        return dom, verified
+    if raw_domain is None and raw_site:
+        raw_domain = compute_domain_root(raw_site)
 
-    # 2) try CSE to infer domain from name if allowed
-    if g_api_key and g_cse_id and (org.get("dba") or org.get("callsign")):
-        name = org.get("dba") or org.get("callsign")
-        queries = [
-            f'"{name}" official site',
-            f'{name} website',
-            f'{name} home',
-        ]
-        for q in queries:
-            try:
-                items = google_cse_search(g_api_key, g_cse_id, q, num=5)
-            except Exception:
-                items = []
-            for it in items:
-                cand = normalize_domain(it.get("url"))
-                if not cand:
-                    continue
-                # skip socials/directories
-                if any(cand == b or cand.endswith("." + b) for b in SOCIAL_BLOCKLIST):
-                    continue
-                verified = verify_domain_http(cand)
-                if verified:
-                    return cand, True
-                # keep a non-verified candidate in case nothing verifies
-                if not dom:
-                    dom = cand
+    if raw_domain is None:
+        candidate = discover_domain_by_search(org.get("dba") or org.get("callsign"), g_api_key, g_cse_id)
+        if candidate:
+            raw_domain = candidate
 
-    return dom, False
+    if raw_domain:
+        url = validate_domain_to_url(raw_domain)
+        return raw_domain, url
+    return None, None
 
 # ---------------------- Utilities ----------------------
 
