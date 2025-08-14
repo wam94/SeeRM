@@ -1,14 +1,26 @@
 # app/dossier_baseline.py
 from __future__ import annotations
-import os, io, re, math, time, json, requests
-import re, time, tldextract, requests
+
+"""
+Baseline dossier builder
+- Pulls roster from Profile/Weekly CSVs (via Gmail)
+- Resolves/validates company domains (lightweight, fast timeouts)
+- Gathers recent news + people background (RSS + Google CSE, optional)
+- Heuristically extracts funding from fetched pages, optionally enriches via Crunchbase API
+- Writes a "Dossier" section to the Notion Companies DB and clears "Needs Dossier"
+- Supports batching + rate-limit knobs
+"""
+
+import os, io, re, math, time, json
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 import pandas as pd
-
+import requests
+import tldextract
 from trafilatura import fetch_url, extract as trafi_extract
 
+# --- Local modules
 from app.gmail_client import (
     build_service, search_messages, get_message,
     extract_csv_attachments, send_html_email
@@ -19,25 +31,32 @@ from app.news_job import (
 )
 from app.notion_client import upsert_company_page, set_needs_dossier
 
-# ---- Domain utilities (consolidated) ----
 
-DEBUG = (os.getenv("BASELINE_DEBUG","").lower() in ("1","true","yes"))
+# =========================
+# Env + small utilities
+# =========================
 
-def logd(msg: str):
+def getenv(n: str, d: str | None = None) -> str | None:
+    v = os.getenv(n)
+    return d if v in (None, "") else v
+
+DEBUG = (getenv("BASELINE_DEBUG","").lower() in ("1","true","yes","y"))
+
+def logd(*parts: Any) -> None:
     if DEBUG:
-        print(msg)
+        print(*parts)
 
-def ensure_http(u: str | None) -> str | None:
+def ensure_http(url: str | None) -> Optional[str]:
+    if not url: return None
+    u = url.strip()
     if not u: return None
-    s = u.strip()
-    if not s: return None
-    if not s.startswith(("http://","https://")):
-        s = "https://" + s
-    return s
+    if not u.startswith(("http://","https://")):
+        u = "https://" + u
+    return u
 
-def compute_domain_root(website: str | None) -> str | None:
-    if not website: return None
-    w = website.strip().lower()
+def compute_domain_root(website_or_host: str | None) -> Optional[str]:
+    if not website_or_host: return None
+    w = website_or_host.strip().lower()
     w = re.sub(r'^https?://', '', w)
     w = re.sub(r'^www\.', '', w)
     host = w.split('/')[0]
@@ -46,38 +65,49 @@ def compute_domain_root(website: str | None) -> str | None:
         return f"{ext.domain}.{ext.suffix}"
     return host or None
 
-# Superset of social/content hosts we never treat as a company domain
+
+# =========================
+# Domain resolution
+# =========================
+
 _BLOCKED_SITES = {
     "linkedin.com","x.com","twitter.com","facebook.com","instagram.com","youtube.com",
     "github.com","medium.com","substack.com","notion.so","notion.site",
     "docs.google.com","wikipedia.org","angel.co"
 }
 
-def _head_ok(url: str) -> bool:
+HEAD_TIMEOUT = float(getenv("DOMAIN_HEAD_TIMEOUT_SEC", "2") or "2")
+FETCH_TIMEOUT = float(getenv("FETCH_TIMEOUT_SEC", "5") or "5")
+
+def _url_responds(url: str) -> bool:
+    # Try HEAD quickly; if blocked, try a tiny GET
     try:
-        r = requests.head(url, timeout=6, allow_redirects=True)
+        r = requests.head(url, timeout=HEAD_TIMEOUT, allow_redirects=True)
+        if r.status_code < 400:
+            return True
+    except Exception:
+        pass
+    try:
+        r = requests.get(url, timeout=HEAD_TIMEOUT, allow_redirects=True, stream=True)
         return r.status_code < 400
     except Exception:
         return False
 
-def validate_domain_to_url(domain_root: str) -> str | None:
-    """Try https://domain, https://www.domain, http://domain; return first that responds (or first candidate as fallback)."""
-    candidates = [
-        f"https://{domain_root}",
-        f"https://www.{domain_root}",
-        f"http://{domain_root}",
-    ]
+def validate_domain_to_url(domain_root: str) -> Optional[str]:
+    candidates = [f"https://{domain_root}", f"https://www.{domain_root}", f"http://{domain_root}"]
     for u in candidates:
-        if _head_ok(u):
+        if _url_responds(u):
             return u
-    return candidates[0]
+    # If nothing responds, return the first candidate to keep things moving
+    return candidates[0] if candidates else None
 
-def discover_domain_by_search(name: str, g_api_key: str | None, g_cse_id: str | None) -> str | None:
+def discover_domain_by_search(name: Optional[str],
+                              g_api_key: Optional[str],
+                              g_cse_id: Optional[str]) -> Optional[str]:
     """Use Google CSE to find an 'official' site; returns registered_domain."""
-    if not (g_api_key and g_cse_id and name):
+    if not (name and g_api_key and g_cse_id):
         return None
     try:
-        from app.news_job import google_cse_search
         q = f'{name} (official site OR homepage) -site:linkedin.com -site:twitter.com -site:x.com'
         items = google_cse_search(g_api_key, g_cse_id, q, num=5)
         for it in items:
@@ -92,15 +122,12 @@ def discover_domain_by_search(name: str, g_api_key: str | None, g_cse_id: str | 
                 continue
             return host
     except Exception as e:
-        logd(f"[discover_domain_by_search] error: {e}")
+        logd("[discover_domain_by_search] error:", repr(e))
     return None
 
-# Compatibility shim: if other code still calls normalize_domain(), keep it mapped here.
-def normalize_domain(url_or_domain: str | None) -> str | None:
-    """Return registered_domain for any url or bare host."""
-    return compute_domain_root(url_or_domain)
-
-def resolve_domain_for_org(org: dict, g_api_key: str | None, g_cse_id: str | None) -> tuple[str | None, str | None]:
+def resolve_domain_for_org(org: dict,
+                           g_api_key: Optional[str],
+                           g_cse_id: Optional[str]) -> tuple[Optional[str], Optional[str]]:
     """
     Decide a domain for the org. Returns (domain_root, validated_url or None).
     Order: explicit org['domain'] -> compute from org['website'] -> search by DBA/callsign.
@@ -121,17 +148,10 @@ def resolve_domain_for_org(org: dict, g_api_key: str | None, g_cse_id: str | Non
         return raw_domain, url
     return None, None
 
-# ---------------------- Utilities ----------------------
 
-def getenv(n: str, d: str | None = None) -> str | None:
-    v = os.getenv(n)
-    return d if v in (None, "") else v
-
-DEBUG = (os.getenv("BASELINE_DEBUG","").lower() in ("1","true","yes"))
-
-def logd(msg: str):
-    if DEBUG:
-        print(msg)
+# =========================
+# Evidence collection
+# =========================
 
 def load_latest_weekly_csv(service, user, q, attachment_regex):
     if not q:
@@ -151,16 +171,13 @@ def load_latest_weekly_csv(service, user, q, attachment_regex):
 def lower_cols(df: pd.DataFrame) -> Dict[str, str]:
     return {c.lower().strip(): c for c in df.columns}
 
-
-# ---------------------- Evidence collection ----------------------
-
 def collect_recent_news(org: Dict[str, Any], lookback_days: int,
-                        g_api_key: str | None, g_cse_id: str | None,
+                        g_api_key: Optional[str], g_cse_id: Optional[str],
                         max_items: int = 6, max_queries: int = 5) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
 
     # RSS/blog (prefer explicit blog_url; else website)
-    site_for_rss = ensure_http(org.get("blog_url") or org.get("website"))
+    site_for_rss = ensure_http(org.get("blog_url") or org.get("website") or org.get("domain_root"))
     if site_for_rss:
         try:
             items += try_rss_feeds(site_for_rss)
@@ -195,7 +212,7 @@ def collect_recent_news(org: Dict[str, Any], lookback_days: int,
     return items[:max_items]
 
 def collect_people_background(org: Dict[str, Any], lookback_days: int,
-                              g_api_key: str | None, g_cse_id: str | None,
+                              g_api_key: Optional[str], g_cse_id: Optional[str],
                               max_people: int = 3) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
     owners = [o for o in (org.get("owners") or []) if o]
@@ -224,7 +241,9 @@ def collect_people_background(org: Dict[str, Any], lookback_days: int,
     return results
 
 
-# ---------------------- Funding enrichment ----------------------
+# =========================
+# Funding heuristics + optional Crunchbase API
+# =========================
 
 AMOUNT_RE = re.compile(r'(?<![\d$])(?:USD\s*)?\$?\s*([0-9][\d,\.]*)\s*(billion|bn|million|mm|m|thousand|k)?', re.I)
 ROUND_RE  = re.compile(r'\b(Pre-Seed|Seed|Angel|Series\s+[A-K]|Series\s+[A-K]\s+extension|Bridge|Convertible\s+Note|SAFE|Debt|Venture\s+Round|Equity\s+Round)\b', re.I)
@@ -305,7 +324,7 @@ def crunchbase_enrich(domain_root: Optional[str], name: Optional[str]) -> Dict[s
     org_id = None
     for body in payloads:
         try:
-            r = requests.post(f"{BASE}/searches/organizations", headers=H, json=body, timeout=30)
+            r = requests.post(f"{BASE}/searches/organizations", headers=H, json=body, timeout=10)
             if r.status_code != 200:
                 continue
             ents = (r.json().get("entities") or [])
@@ -325,7 +344,7 @@ def crunchbase_enrich(domain_root: Optional[str], name: Optional[str]) -> Dict[s
         ]
     }
     try:
-        r = requests.post(f"{BASE}/entities/organizations/{org_id}", headers=H, json=body, timeout=30)
+        r = requests.post(f"{BASE}/entities/organizations/{org_id}", headers=H, json=body, timeout=10)
         if r.status_code != 200:
             return {}
         ent = r.json().get("properties", {})
@@ -376,7 +395,9 @@ def best_funding(org: Dict[str, Any], fetched_pages: List[Dict[str, Any]]) -> Di
     return out
 
 
-# ---------------------- LLM (dossier narrative) ----------------------
+# =========================
+# LLM narrative
+# =========================
 
 DOSSIER_GUIDANCE = """
 You are an account manager at a banking technology company serving startups (often growth-stage, 5–100 employees).
@@ -456,7 +477,7 @@ def _build_evidence_block(org: dict, news_items: list[dict], people_bg: list[dic
     evidence.append("\n".join(ppl_lines) if ppl_lines else "(none)")
     return "\n".join(evidence)
 
-def _openai_write_narrative(prompt: str) -> str | None:
+def _openai_write_narrative(prompt: str) -> Optional[str]:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return None
@@ -534,36 +555,9 @@ def generate_narrative(org: dict, news_items: list[dict], people_bg: list[dict],
     return "\n".join(lines)
 
 
-# ---------------------- Notion push (reliable Domain write) ----------------------
-
-def _notion_headers() -> Dict[str, str]:
-    return {
-        "Authorization": f"Bearer {os.environ['NOTION_API_KEY']}",
-        "Notion-Version": os.getenv("NOTION_VERSION","2022-06-28"),
-        "Content-Type": "application/json",
-    }
-
-def patch_company_properties(page_id: str, payload: Dict[str, Any]):
-    """Patch basic properties directly to ensure 'Domain' lands even if helper mapping lags."""
-    props: Dict[str, Any] = {}
-    if payload.get("company"):
-        props["Company"] = {"title": [{"type": "text", "text": {"content": payload["company"][:200]}}]}
-    if payload.get("website"):
-        props["Website"] = {"url": payload["website"]}
-    if payload.get("domain"):
-        props["Domain"] = {"rich_text": [{"type": "text", "text": {"content": payload["domain"][:200]}}]}
-    if payload.get("callsign"):
-        props["Callsign"] = {"rich_text": [{"type": "text", "text": {"content": payload["callsign"][:100]}}]}
-
-    if not props:
-        return
-    r = requests.patch(
-        f"https://api.notion.com/v1/pages/{page_id}",
-        headers=_notion_headers(),
-        json={"properties": props},
-        timeout=30
-    )
-    r.raise_for_status()
+# =========================
+# Notion push
+# =========================
 
 def append_dossier_blocks(page_id: str, markdown_body: str):
     # very simple chunking as plain paragraphs
@@ -580,9 +574,13 @@ def append_dossier_blocks(page_id: str, markdown_body: str):
     } for ch in chunks]
     r = requests.patch(
         f"https://api.notion.com/v1/blocks/{page_id}/children",
-        headers=_notion_headers(),
+        headers={
+            "Authorization": f"Bearer {os.environ['NOTION_API_KEY']}",
+            "Notion-Version": os.getenv("NOTION_VERSION","2022-06-28"),
+            "Content-Type": "application/json",
+        },
         json={"children": [hdr] + paras},
-        timeout=30
+        timeout=10
     )
     r.raise_for_status()
 
@@ -609,27 +607,25 @@ def push_dossier_to_notion(callsign: str, org: dict, markdown_body: str, throttl
         "needs_dossier": False,
     }
 
-    # upsert_company_page now writes Domain correctly for URL or rich_text schemas
     page_id = upsert_company_page(companies_db, payload)
 
-    # Append the dossier body as blocks
     try:
         append_dossier_blocks(page_id, markdown_body)
     except Exception as e:
         print("[Notion] append blocks warning:", repr(e))
 
-    # Clear the checkbox
     try:
         set_needs_dossier(page_id, False)
     except Exception:
         pass
 
-    # Gentle throttle to avoid rate limits
     if throttle_sec and throttle_sec > 0:
         time.sleep(throttle_sec)
 
 
-# ---------------------- Batching helpers ----------------------
+# =========================
+# Batching
+# =========================
 
 def slice_batch(keys: List[str], batch_size: Optional[int], batch_index: Optional[int]) -> List[str]:
     if not keys:
@@ -643,7 +639,9 @@ def slice_batch(keys: List[str], batch_size: Optional[int], batch_index: Optiona
     return keys[start:end]
 
 
-# ---------------------- Main ----------------------
+# =========================
+# Main
+# =========================
 
 def main():
     # Gmail service (for CSVs and optional email)
@@ -757,54 +755,48 @@ def main():
     llm_delay = float(getenv("LLM_DELAY_SEC", "0") or "0")
     notion_delay = float(getenv("NOTION_THROTTLE_SEC", "0.35") or "0.35")
 
-    # --- Build objects list for this batch ---
-    targets: List[Dict[str, Any]] = []
-    for cs in targets_keys:
-        base = prof.get(cs, {"callsign": cs, "dba": cs, "owners": []})
-        # Repair/compute domain_root from website if missing
-        if not base.get("domain_root"):
-            base["domain_root"] = compute_domain_root(base.get("website"))
-        targets.append(base)
-
     # --- Process per org ---
     dossiers: List[Dict[str, Any]] = []
-    for org in targets:
+    for cs in targets_keys:
+        org = prof.get(cs, {"callsign": cs, "dba": cs, "owners": []})
+
         # Domain resolution & website fill
         dr, url = resolve_domain_for_org(org, g_api_key, g_cse_id)
         if dr:
             org["domain"] = dr
             org["domain_root"] = dr
-            if not org.get("website"):
-                org["website"] = url
-        logd(f"[DOMAIN] cs={org.get('callsign')} -> domain={org.get('domain')} website={org.get('website')}")
+            org["website"] = org.get("website") or url
+        if DEBUG:
+            print(f"[DOMAIN] cs={org.get('callsign')} -> domain_root={dr} url={url}")
 
-        # Collect intel
+        # Recent intel
         news_items = collect_recent_news(org, lookback_days, g_api_key, g_cse_id)
         people_bg  = collect_people_background(org, lookback_days, g_api_key, g_cse_id)
 
-        # Fetch a bit of page text for funding heuristics
+        # Fetch a bit of page text for funding heuristics with short timeouts
         page_texts: List[Dict[str, Any]] = []
-        if org.get("website"):
+        def slurp(u: Optional[str]) -> Optional[str]:
+            if not u: return None
             try:
-                html = fetch_url(org["website"])
-                text = trafi_extract(html) if html else None
-                if text:
-                    page_texts.append({"url": org["website"], "text": text})
+                html = fetch_url(u, timeout=FETCH_TIMEOUT, no_ssl=True)
+                if not html: return None
+                txt = trafi_extract(html, output="txt", include_comments=False, favor_precision=True)
+                return txt
             except Exception:
-                pass
+                return None
+
+        if org.get("website"):
+            t = slurp(org["website"])
+            if t:
+                page_texts.append({"url": org["website"], "text": t})
+
         for it in news_items[:3]:
             u = it.get("url")
-            if not u:
-                continue
-            try:
-                html = fetch_url(u)
-                text = trafi_extract(html) if html else None
-                if text:
-                    page_texts.append({"url": u, "text": text})
-            except Exception:
-                continue
+            t = slurp(u)
+            if t:
+                page_texts.append({"url": u, "text": t})
 
-        # Funding snapshot
+        # Funding
         funding = best_funding(org, page_texts)
 
         # LLM narrative
@@ -821,7 +813,7 @@ def main():
         if llm_delay:
             time.sleep(llm_delay)
 
-    # --- Preview or optional email ---
+    # Preview or optional email
     preview = getenv("PREVIEW_ONLY", "false").lower() in ("1","true","yes","y")
     if preview:
         for d in dossiers:
