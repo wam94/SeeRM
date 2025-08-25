@@ -4,6 +4,7 @@ import os
 import datetime
 from typing import Dict, Any, Optional, List
 
+import math
 import requests
 
 NOTION_API = "https://api.notion.com/v1"
@@ -261,18 +262,61 @@ def set_latest_intel(companies_page_id: str, summary_text: str, date_iso: Option
         }
     notion_patch(f"/pages/{companies_page_id}", {"properties": props})
 
-def append_intel_log(intel_db_id: str, company_page_id: str, callsign: str,
-                     date_iso: str, summary_text: str, items: List[Dict[str, Any]]):
-    """Create a new row in an 'Intel Log' DB and append bulleted links for items."""
+def _safe_text(x: Any, max_len: int | None = None) -> str:
+    """Coerce any value (incl. NaN floats) to a trimmed string."""
+    if x is None:
+        s = ""
+    elif isinstance(x, float):
+        s = "" if math.isnan(x) else str(x)
+    else:
+        s = str(x)
+    s = s.strip()
+    return s[:max_len] if max_len else s
+
+def append_intel_log(
+    intel_db_id: str,
+    company_page_id: str,
+    callsign: str,
+    date_iso: str,
+    summary_text: str,
+    items: list[dict],
+    company_name: str | None = None,   # optional; falls back to callsign
+):
+    """
+    Create an Intel Archive row with:
+      - Company (title)
+      - Callsign (relation -> Companies DB page)
+      - Date (date)   [if present]
+      - Summary (rich_text) [if present]
+    Then append the bulleted items as children.
+    """
+    # Read Intel DB schema so we only set properties that actually exist & match types
+    schema = get_db_schema(intel_db_id)
+
+    # Which prop is the Title? (In your DB, it's "Company")
+    # We'll use the actual title prop name from schema to be robust.
+    title_prop = get_title_prop_name(schema)  # expected to be "Company"
+    title_value = _safe_text(company_name or callsign, max_len=2000)
+
+    props: Dict[str, Any] = {title_prop: _title(title_value)}
+
+    # Callsign relation -> Companies page
+    if prop_exists(schema, "Callsign", "relation"):
+        props["Callsign"] = {"relation": [{"id": company_page_id}]}
+
+    # Date
+    if prop_exists(schema, "Date", "date"):
+        props["Date"] = {"date": {"start": _safe_text(date_iso) or datetime.date.today().isoformat()}}
+
+    # Summary
+    if prop_exists(schema, "Summary", "rich_text"):
+        props["Summary"] = _rt(_safe_text(summary_text, max_len=2000))
+
+    # Create the Intel row
     try:
         res = notion_post("/pages", {
             "parent": {"database_id": intel_db_id},
-            "properties": {
-                "Company": {"relation": [{"id": company_page_id}]},
-                "Callsign": _rt(callsign),
-                "Date": {"date": {"start": date_iso}},
-                "Summary": _rt(summary_text or ""),
-            }
+            "properties": props
         }).json()
     except requests.HTTPError as e:
         try:
@@ -283,11 +327,12 @@ def append_intel_log(intel_db_id: str, company_page_id: str, callsign: str,
 
     log_page_id = res["id"]
 
-    bullets: List[Dict[str, Any]] = []
-    for it in items:
-        title = (it.get("title") or "")[:180]
-        url = it.get("url") or ""
-        src = it.get("source") or ""
+    # Append bullets (if any)
+    bullets = []
+    for it in (items or []):
+        title = _safe_text(it.get("title"), max_len=180)
+        url = _safe_text(it.get("url"))
+        src = _safe_text(it.get("source"))
         line = f"{title} — {src}".strip(" —")
         bullets.append({
             "object": "block",
@@ -299,9 +344,10 @@ def append_intel_log(intel_db_id: str, company_page_id: str, callsign: str,
                 }]
             }
         })
+
     if bullets:
         try:
-            append_blocks(log_page_id, bullets)
+            notion_patch(f"/blocks/{log_page_id}/children", {"children": bullets})
         except requests.HTTPError as e:
             try:
                 print("INTEL_LOG children error body:", e.response.text[:800])
