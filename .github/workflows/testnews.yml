@@ -27,8 +27,12 @@ on:
         description: "Override recipient (defaults to GMAIL_USER)"
         required: false
         type: string
+      batch_size:
+        description: "Orgs per batch (keeps jobs under timeout)"
+        required: false
+        default: "40"
+        type: string
   schedule:
-    # Mondays 13:00 UTC (~9am ET during DST). Adjust as you like.
     - cron: "0 13 * * MON"
 
 permissions:
@@ -39,20 +43,91 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  external-intel:
+  # 1) Compute how many batches we need
+  prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    outputs:
+      batch_list: ${{ steps.out.outputs.batch_list }}
+      count: ${{ steps.out.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: "pip" }
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Compute batches
+        id: out
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+          # Gmail (for roster CSV)
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+
+          PROFILE_SUBJECT: ${{ vars.NEWS_PROFILE_SUBJECT }}
+          ATTACHMENT_REGEX: '.*\.csv$'
+
+          INPUT_CALLSIGNS: ${{ inputs.callsigns }}
+          BATCH_SIZE: ${{ inputs.batch_size }}
+        run: |
+          python - <<'PY'
+          import os, io, json, pandas as pd
+          from app.gmail_client import build_service, search_messages, get_message, extract_csv_attachments
+          from app.news_job import fetch_csv_by_subject
+
+          svc = build_service(
+              client_id=os.environ["GMAIL_CLIENT_ID"],
+              client_secret=os.environ["GMAIL_CLIENT_SECRET"],
+              refresh_token=os.environ["GMAIL_REFRESH_TOKEN"],
+          )
+          user = os.environ.get("GMAIL_USER")
+          # load roster csv by subject (same one news_job uses)
+          df = fetch_csv_by_subject(svc, user, os.environ.get("PROFILE_SUBJECT") or "Org Profile — Will Mitchell")
+
+          calls = []
+          if df is not None and "callsign" in [c.lower() for c in df.columns]:
+              cols = {c.lower(): c for c in df.columns}
+              for _, r in df.iterrows():
+                  cs = str(r[cols["callsign"]]).strip().lower()
+                  if cs: calls.append(cs)
+          calls = sorted(set(calls))
+
+          # optional manual filter from workflow input
+          filt = (os.environ.get("INPUT_CALLSIGNS") or "").strip()
+          if filt:
+              want = [c.strip().lower() for c in filt.split(",") if c.strip()]
+              calls = [c for c in calls if c in want]
+
+          n = len(calls)
+          bs = int(os.environ.get("BATCH_SIZE","40") or "40")
+          num_batches = (n + bs - 1) // bs if bs > 0 else 1
+          # we’ll recompute slicing in each run job; here we just emit range indices
+          batch_list = list(range(num_batches))
+          print(f"Roster total: {n} | batch_size={bs} -> {num_batches} batch(es)")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"batch_list={json.dumps(batch_list)}\n")
+              f.write(f"count={n}\n")
+          PY
+
+  # 2) Process each batch in parallel (limited)
+  run:
+    runs-on: ubuntu-latest
+    needs: prepare
+    timeout-minutes: 30              # per-batch timeout (keeps the long run from hitting 40)
+    strategy:
+      max-parallel: 2               # respect Notion rate limits; bump to 3–4 if safe
+      fail-fast: false
+      matrix:
+        batch: ${{ fromJSON(needs.prepare.outputs.batch_list) }}
 
     steps:
-      - name: Check out
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: "pip"
-
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: "pip" }
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
@@ -68,121 +143,98 @@ jobs:
             echo "Skipping Notion preflight (missing NOTION_* secrets)."; exit 0
           fi
           python - <<'PY'
-          import os, re, sys, requests
-      
-          token = os.environ["NOTION_API_KEY"]
-          comp  = os.environ["NOTION_COMPANIES_DB_ID"]
-          intel = os.environ["NOTION_INTEL_DB_ID"]
-          H = {"Authorization": f"Bearer {token}", "Notion-Version": "2022-06-28"}
-      
-          def undash(uuid_str):
-            return uuid_str.replace("-", "")
-      
-          def dash32(hex32):
-            # insert dashes 8-4-4-4-12 if it's exactly 32 hex chars
-            if re.fullmatch(r"[0-9a-fA-F]{32}", hex32):
-              return f"{hex32[0:8]}-{hex32[8:12]}-{hex32[12:16]}-{hex32[16:20]}-{hex32[20:]}"
-            return hex32
-      
-          def fetch_db(dbid):
-            # try as-is
-            r = requests.get(f"https://api.notion.com/v1/databases/{dbid}", headers=H, timeout=30)
-            if r.status_code == 200:
-              return r.json()
-            # try hyphenless
-            dbid2 = undash(dbid)
-            if dbid2 != dbid:
-              r = requests.get(f"https://api.notion.com/v1/databases/{dbid2}", headers=H, timeout=30)
-              if r.status_code == 200:
-                return r.json()
-            # try hyphenated
-            dbid3 = dash32(dbid2)
-            if dbid3 != dbid and dbid3 != dbid2:
-              r = requests.get(f"https://api.notion.com/v1/databases/{dbid3}", headers=H, timeout=30)
-              if r.status_code == 200:
-                return r.json()
-            # return last response for diagnostics
-            return {"error": True, "status": r.status_code, "body": r.text, "tried": [dbid, dbid2, dbid3]}
-      
-          def search_databases(query="SeeRM"):
-            payload = {"query": query, "filter": {"property":"object","value":"database"}}
-            r = requests.post("https://api.notion.com/v1/search", headers=H, json=payload, timeout=30)
-            if r.ok:
-              res = r.json().get("results", [])
-              print(f"Search returned {len(res)} databases visible to this integration:")
-              for i,x in enumerate(res,1):
-                name = x["title"][0]["plain_text"] if x.get("title") else "(no title)"
-                print(f"  {i}. {name} — id: {x['id']}")
-            else:
-              print("Search failed:", r.status_code, r.text)
-      
-          comp_res = fetch_db(comp)
-          intel_res = fetch_db(intel)
-      
-          ok = True
-          if "error" in comp_res:
-            ok = False
-            print("\n❌ Companies DB check failed.")
-            print("Status:", comp_res["status"])
-            print("Tried IDs:", comp_res["tried"])
-            print("Body:", comp_res["body"][:500])
-          else:
-            print("✅ Companies DB OK:", comp_res.get("title",[{"plain_text":"(no title)"}])[0]["plain_text"])
-      
-          if "error" in intel_res:
-            ok = False
-            print("\n❌ Intel DB check failed.")
-            print("Status:", intel_res["status"])
-            print("Tried IDs:", intel_res["tried"])
-            print("Body:", intel_res["body"][:500])
-          else:
-            print("✅ Intel DB OK:", intel_res.get("title",[{"plain_text":"(no title)"}])[0]["plain_text"])
-      
-          if not ok:
-            print("\nHint: Notion returns 404 both for non-existent IDs and when the integration lacks access.")
-            print("1) Open each DB as a page → Share → invite your integration with edit access.")
-            print("2) Ensure you're using the actual database ID (32 hex).")
-            print("   - From the DB page URL, copy the 32-char ID just before ?v= (hyphens OK).")
-            print("3) If inline DB, click 'Open as page' first; copying a view link can give a view or page ID.")
-            print("\nDatabases visible to this integration (via /search):")
-            search_databases("SeeRM")
-            search_databases("Will")
-            sys.exit(1)
-          else:
-            print("Notion preflight OK.")
+          import os, requests
+          H={"Authorization":f"Bearer {os.environ['NOTION_API_KEY']}","Notion-Version":"2022-06-28"}
+          for key in ("NOTION_COMPANIES_DB_ID","NOTION_INTEL_DB_ID"):
+              r = requests.get(f"https://api.notion.com/v1/databases/{os.environ[key]}", headers=H, timeout=30)
+              r.raise_for_status()
+              print(key, "→", r.json().get("title",[{"plain_text":"(untitled)"}])[0]["plain_text"])
           PY
 
-      - name: Run external intel
+      - name: Build callsign slice for this batch
+        id: slice
         env:
           PYTHONPATH: ${{ github.workspace }}
 
-          # Gmail auth (secrets)
+          # Gmail
           GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
           GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
           GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
 
-          # Google CSE for web search (secrets)
+          PROFILE_SUBJECT: ${{ vars.NEWS_PROFILE_SUBJECT }}
+          ATTACHMENT_REGEX: '.*\.csv$'
+
+          INPUT_CALLSIGNS: ${{ inputs.callsigns }}
+          BATCH_SIZE: ${{ inputs.batch_size }}
+          BATCH_INDEX: ${{ matrix.batch }}
+        run: |
+          python - <<'PY'
+          import os, io, json, pandas as pd
+          from app.gmail_client import build_service
+          from app.news_job import fetch_csv_by_subject
+
+          svc = build_service(
+              client_id=os.environ["GMAIL_CLIENT_ID"],
+              client_secret=os.environ["GMAIL_CLIENT_SECRET"],
+              refresh_token=os.environ["GMAIL_REFRESH_TOKEN"],
+          )
+          user = os.environ.get("GMAIL_USER")
+          df = fetch_csv_by_subject(svc, user, os.environ.get("PROFILE_SUBJECT") or "Org Profile — Will Mitchell")
+          calls = []
+          if df is not None and "callsign" in [c.lower() for c in df.columns]:
+              cols = {c.lower(): c for c in df.columns}
+              for _, r in df.iterrows():
+                  cs = str(r[cols["callsign"]]).strip().lower()
+                  if cs: calls.append(cs)
+          calls = sorted(set(calls))
+
+          # optional manual filter
+          filt = (os.environ.get("INPUT_CALLSIGNS") or "").strip()
+          if filt:
+              want = [c.strip().lower() for c in filt.split(",") if c.strip()]
+              calls = [c for c in calls if c in want]
+
+          bs = int(os.environ.get("BATCH_SIZE","40") or "40")
+          bi = int(os.environ.get("BATCH_INDEX","0") or "0")
+          start, end = bi*bs, bi*bs + bs
+          part = calls[start:end]
+          head = ", ".join(part[:5]) + (f" … (+{max(0,len(part)-5)} more)" if len(part)>5 else "")
+          print(f"Batch {bi}: {len(part)} orgs | head: {head}")
+
+          # Output CSV string for env use
+          with open("/tmp/filter_callsigns.txt","w") as f:
+              f.write(",".join(part))
+          PY
+
+      - name: Run external intel for this batch
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+          # Gmail
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+
+          # Google CSE
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
 
-          # LLM (optional; falls back gracefully if absent)
+          # LLM
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_CHAT_MODEL: ${{ vars.OPENAI_CHAT_MODEL }}
           OPENAI_TEMPERATURE: ${{ vars.OPENAI_TEMPERATURE || '0.2' }}
 
-          # Notion (to write Latest + Intel archive)
+          # Notion
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_COMPANIES_DB_ID: ${{ secrets.NOTION_COMPANIES_DB_ID }}
           NOTION_INTEL_DB_ID: ${{ secrets.NOTION_INTEL_DB_ID }}
 
-          # Email filtering (repo vars so you can change names without code)
+          # Email / intel knobs
           NEWS_GMAIL_QUERY: ${{ vars.NEWS_GMAIL_QUERY }}
           NEWS_PROFILE_SUBJECT: ${{ vars.NEWS_PROFILE_SUBJECT }}
           ATTACHMENT_REGEX: '.*\.csv$'
-
-          # Runtime inputs / knobs
-          FILTER_CALLSIGNS: ${{ inputs.callsigns }}
           PREVIEW_ONLY: ${{ inputs.preview_only }}
           INTEL_LOOKBACK_DAYS: ${{ inputs.lookback_days }}
           INTEL_MAX_PER_ORG: ${{ inputs.max_per_org }}
@@ -190,21 +242,23 @@ jobs:
           DIGEST_CC: ${{ secrets.DIGEST_CC }}
           DIGEST_BCC: ${{ secrets.DIGEST_BCC }}
 
-          # Cost & runtime controls (optional repo vars)
-          CSE_ONLY_IF_RSS_BELOW: ${{ vars.CSE_ONLY_IF_RSS_BELOW }}
-          CSE_MAX_QUERIES_PER_ORG: ${{ vars.CSE_MAX_QUERIES_PER_ORG }}
-          CSE_DISABLE_OWNER_QUERIES: ${{ vars.CSE_DISABLE_OWNER_QUERIES }}
-          CSE_DISABLE_TAG_QUERIES: ${{ vars.CSE_DISABLE_TAG_QUERIES }}
-
-          # Full-article fetching (optional repo vars; code has safe defaults)
-          FETCH_ARTICLE_CONTENT: ${{ vars.FETCH_ARTICLE_CONTENT }}
-          FETCH_MAX_PER_ORG: ${{ vars.FETCH_MAX_PER_ORG }}
-          ARTICLE_READ_TIMEOUT: ${{ vars.ARTICLE_READ_TIMEOUT }}
-          ARTICLE_MAX_BYTES: ${{ vars.ARTICLE_MAX_BYTES }}
+          # Runtime/cost controls (tune to avoid timeouts)
+          CSE_ONLY_IF_RSS_BELOW: ${{ vars.CSE_ONLY_IF_RSS_BELOW || '1' }}
+          CSE_MAX_QUERIES_PER_ORG: ${{ vars.CSE_MAX_QUERIES_PER_ORG || '3' }}
+          CSE_DISABLE_OWNER_QUERIES: ${{ vars.CSE_DISABLE_OWNER_QUERIES || 'false' }}
+          CSE_DISABLE_TAG_QUERIES: ${{ vars.CSE_DISABLE_TAG_QUERIES || 'true' }}
+          FETCH_ARTICLE_CONTENT: ${{ vars.FETCH_ARTICLE_CONTENT || 'false' }}
+          FETCH_MAX_PER_ORG: ${{ vars.FETCH_MAX_PER_ORG || '2' }}
+          ARTICLE_READ_TIMEOUT: ${{ vars.ARTICLE_READ_TIMEOUT || '8' }}
+          ARTICLE_MAX_BYTES: ${{ vars.ARTICLE_MAX_BYTES || '250000' }}
         run: |
+          export FILTER_CALLSIGNS="$(cat /tmp/filter_callsigns.txt)"
+          echo "FILTER_CALLSIGNS for this batch: ${FILTER_CALLSIGNS}"
           python -m app.news_job
 
+      # Optional: generate baselines only once (batch 0) for *new* callsigns
       - name: Read new callsigns (if any)
+        if: ${{ matrix.batch == 0 }}
         id: newcs
         run: |
           if [ -f /tmp/new_callsigns.txt ]; then
@@ -216,34 +270,29 @@ jobs:
           fi
 
       - name: Generate baselines for new accounts
-        if: ${{ steps.newcs.outputs.callsigns != '' }}
+        if: ${{ matrix.batch == 0 && steps.newcs.outputs.callsigns != '' }}
         env:
           PYTHONPATH: ${{ github.workspace }}
 
-          # Gmail auth (secrets)
           GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
           GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
           GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
 
-          # LLM + search (optional)
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_CHAT_MODEL: ${{ vars.OPENAI_CHAT_MODEL || 'gpt-4o-mini' }}
+          OPENAI_CHAT_MODEL: ${{ vars.OPENAI_CHAT_MODEL || 'gpt-5-mini' }}
           OPENAI_TEMPERATURE: ${{ vars.OPENAI_TEMPERATURE || '0.2' }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
 
-          # Use same email filters or baseline-specific ones
           NEWS_GMAIL_QUERY: ${{ vars.BASELINE_GMAIL_QUERY || vars.NEWS_GMAIL_QUERY }}
           NEWS_PROFILE_SUBJECT: ${{ vars.BASELINE_PROFILE_SUBJECT || vars.NEWS_PROFILE_SUBJECT }}
           ATTACHMENT_REGEX: '.*\.csv$'
 
-          # Dossier inputs
           BASELINE_CALLSIGNS: ${{ steps.newcs.outputs.callsigns }}
           PREVIEW_ONLY: 'false'
-          BASELINE_LOOKBACK_DAYS: ${{ vars.BASELINE_LOOKBACK_DAYS }}
+          BASELINE_LOOKBACK_DAYS: ${{ vars.BASELINE_LOOKBACK_DAYS || '180' }}
 
-          # Notion (for dossier)
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_COMPANIES_DB_ID: ${{ secrets.NOTION_COMPANIES_DB_ID }}
         run: |
