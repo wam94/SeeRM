@@ -84,6 +84,44 @@ def compute_domain_root(website_or_domain: Optional[str]) -> Optional[str]:
     # Fallback to 'host' if we couldn't parse a registered domain
     return host or None
 
+def _source_from_url(url: str | None) -> str:
+    if not url:
+        return ""
+    ext = tldextract.extract(url)
+    return ext.registered_domain or (ext.domain + "." + ext.suffix if ext.domain and ext.suffix else "") or ""
+
+def _iso_date(dt_or_str) -> str:
+    if not dt_or_str:
+        return ""
+    if isinstance(dt_or_str, datetime):
+        return dt_or_str.strftime("%Y-%m-%d")
+    s = str(dt_or_str).strip()
+    # Keep it simple: accept YYYY-MM-DD or fallback to today if junk
+    try:
+        # attempt loose parse: split on non-digits and pad
+        parts = [int(x) for x in s.replace("/", "-").replace(".", "-").split("-") if x.isdigit()]
+        if len(parts) >= 3:
+            y, m, d = parts[:3]
+            return datetime(y, m, d).strftime("%Y-%m-%d")
+    except Exception:
+        pass
+    return s  # if already ISO or reasonable, leave as-is
+
+def normalize_news_items(items: list[dict]) -> list[dict]:
+    out = []
+    for it in items:
+        url = (it.get("url") or "").strip()
+        title = (it.get("title") or "").strip()
+        src = (it.get("source") or "").strip() or _source_from_url(url)
+        date = it.get("date") or it.get("published_at")
+        out.append({
+            "url": url,
+            "title": title,
+            "source": src,
+            "published_at": _iso_date(date),
+        })
+    return out
+
 # ---------------
 # CSV domain utils
 # ---------------
