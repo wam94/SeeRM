@@ -1,0 +1,109 @@
+name: Probe Funding (On-Demand)
+
+on:
+  workflow_dispatch:
+    inputs:
+      company_name:
+        description: "Company/brand name (e.g., Aalo Atomics)"
+        required: true
+        type: string
+      domain:
+        description: "Root domain (e.g., aalo.com)"
+        required: false
+        type: string
+      owners:
+        description: "Comma-separated key people (e.g., Matt Loszak, Jane Doe)"
+        required: false
+        type: string
+      aka:
+        description: "Comma-separated AKA names / former names"
+        required: false
+        type: string
+      lookback_days:
+        description: "Search window (days)"
+        required: false
+        default: "365"
+        type: string
+      max_results:
+        description: "Max ranked candidates to return"
+        required: false
+        default: "8"
+        type: string
+      fetch_pages:
+        description: "Fetch + parse article pages (slower, better results)"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true","false"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: probe-funding-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run probe_funding
+        env:
+          # Required search keys (store as repo/org secrets)
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
+          # Optional: Crunchbase enrichment (skips cleanly if absent)
+          CRUNCHBASE_API_KEY: ${{ secrets.CRUNCHBASE_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${GOOGLE_API_KEY:-}" || -z "${GOOGLE_CSE_ID:-}" ]]; then
+            echo "GOOGLE_API_KEY and/or GOOGLE_CSE_ID are missing. Add them as secrets."; exit 1
+          fi
+
+          mkdir -p /tmp/probe
+          OUT_JSON="/tmp/probe/funding.json"
+          OUT_CSV="/tmp/probe/funding.csv"
+
+          # Build args conditionally to avoid passing empty strings
+          ARGS=( --name "${{ inputs.company_name }}" )
+          [[ -n "${{ inputs.domain }}" ]] && ARGS+=( --domain "${{ inputs.domain }}" )
+          [[ -n "${{ inputs.owners }}" ]] && ARGS+=( --owners "${{ inputs.owners }}" )
+          [[ -n "${{ inputs.aka }}" ]] && ARGS+=( --aka "${{ inputs.aka }}" )
+          ARGS+=( --lookback-days "${{ inputs.lookback_days }}" )
+          ARGS+=( --max-results "${{ inputs.max_results }}" )
+          ARGS+=( --fetch-pages "${{ inputs.fetch_pages }}" )
+          ARGS+=( --out-json "${OUT_JSON}" )
+          ARGS+=( --out-csv "${OUT_CSV}" )
+
+          echo "Running: probe_funding.py ${ARGS[*]}"
+          python scripts/probe_funding.py "${ARGS[@]}"
+
+          echo "----- Top of JSON -----"
+          head -n 80 "${OUT_JSON}" || true
+          echo "-----------------------"
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: funding-${{ inputs.company_name }}
+          path: |
+            /tmp/probe/funding.json
+            /tmp/probe/funding.csv
+          if-no-files-found: error
