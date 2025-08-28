@@ -10,6 +10,43 @@ def getenv(name: str, default=None):
     val = os.getenv(name)
     return default if val is None or val == "" else val
 
+def extract_new_callsigns(df: pd.DataFrame) -> None:
+    """
+    Extract callsigns of new accounts and write to /tmp/new_callsigns.txt
+    for the news workflow to trigger baseline generation.
+    """
+    # Normalize column names (case/space-insensitive)
+    cols = {c.lower().strip(): c for c in df.columns}
+    
+    if "is_new_account" not in cols or "callsign" not in cols:
+        print("Missing required columns for new account detection (is_new_account, callsign)")
+        return
+    
+    # Filter for new accounts
+    new_accounts = df[df[cols["is_new_account"]].astype(bool)]
+    
+    if len(new_accounts) == 0:
+        print("No new accounts found in this batch")
+        return
+    
+    # Extract callsigns
+    new_callsigns = new_accounts[cols["callsign"]].astype(str).str.strip().str.lower()
+    new_callsigns = new_callsigns[new_callsigns != ""].tolist()
+    
+    if not new_callsigns:
+        print("No valid callsigns found for new accounts")
+        return
+    
+    # Write to trigger file for news workflow
+    trigger_file = "/tmp/new_callsigns.txt"
+    try:
+        with open(trigger_file, "w") as f:
+            f.write(",".join(new_callsigns))
+        print(f"Found {len(new_callsigns)} new accounts: {', '.join(new_callsigns)}")
+        print(f"Wrote new callsigns to {trigger_file}")
+    except Exception as e:
+        print(f"Failed to write new callsigns file: {e}")
+
 def load_config():
     return {
         "gmail": {
@@ -57,6 +94,9 @@ def main():
     context = parse_csv_to_context(df, top_n=cfg["digest"]["top_movers"])
     if cfg["digest"]["subject"]:
         context["subject"] = cfg["digest"]["subject"]
+
+    # Extract new callsigns for baseline generation
+    extract_new_callsigns(df)
 
     html = render_digest(context)
 

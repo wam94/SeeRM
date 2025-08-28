@@ -33,7 +33,10 @@ on:
         default: "40"
         type: string
   schedule:
-    - cron: "0 13 * * MON"
+    - cron: "15 13 * * MON"  # Run 15 minutes after main workflow
+  workflow_run:
+    workflows: ["Weekly Digest"]
+    types: [completed]
 
 permissions:
   contents: read
