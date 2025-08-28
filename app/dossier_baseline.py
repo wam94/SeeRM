@@ -16,6 +16,12 @@ from app.news_job import (
 )
 from app.notion_client import upsert_company_page, set_needs_dossier
 
+# Import probe_funding functionality
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
+from scripts.probe_funding import probe_funding
+
 # ---------- Debug ----------
 
 DEBUG = (os.getenv("BASELINE_DEBUG","").lower() in ("1","true","yes"))
@@ -223,6 +229,82 @@ def collect_people_background(org: Dict[str, Any], lookback_days: int,
         results.append({"name": person, "findings": items})
     return results
 
+# ---------- Funding data collection ----------
+
+def collect_funding_data(org: Dict[str, Any], lookback_days: int = 540) -> Dict[str, Any]:
+    """
+    Collect funding information using the probe_funding functionality.
+    Returns structured funding data or empty dict if collection fails.
+    """
+    try:
+        name = org.get("dba") or org.get("callsign") or ""
+        domain = org.get("domain_root") or org.get("domain")
+        owners = org.get("owners") or []
+        
+        if not name:
+            logd("[FUNDING] No company name available, skipping funding collection")
+            return {}
+        
+        logd(f"[FUNDING] Collecting funding data for {name}, domain={domain}, owners={owners}")
+        
+        # Use probe_funding with reduced result count to keep it fast
+        result = probe_funding(
+            name=name,
+            domain=domain,
+            owners=owners,
+            aka=None,
+            lookback_days=lookback_days,
+            max_results=3,  # Keep it concise
+            fetch_pages=False  # Skip page fetching for speed
+        )
+        
+        best_guess = result.get("best_guess")
+        crunchbase_hint = result.get("crunchbase_hint", {})
+        
+        funding_data = {}
+        
+        # Extract key funding information
+        if best_guess:
+            facts = best_guess.get("facts", {})
+            funding_data.update({
+                "latest_funding_source": best_guess.get("source", ""),
+                "latest_funding_url": best_guess.get("url", ""),
+                "latest_funding_date": best_guess.get("published_at") or facts.get("announced_on", ""),
+                "latest_funding_title": best_guess.get("title", ""),
+                "score": best_guess.get("score", 0.0)
+            })
+            
+            if "amount_usd" in facts:
+                funding_data["latest_amount_usd"] = facts["amount_usd"]
+            if "round_type" in facts:
+                funding_data["latest_round_type"] = facts["round_type"]
+            if "investors" in facts and facts["investors"]:
+                funding_data["latest_investors"] = facts["investors"][:5]  # Limit to top 5
+        
+        # Add Crunchbase data if available
+        if crunchbase_hint:
+            funding_data.update({
+                "total_funding_usd": crunchbase_hint.get("total_funding_usd"),
+                "cb_last_round_type": crunchbase_hint.get("last_round_type"),
+                "cb_last_round_date": crunchbase_hint.get("last_round_date"),
+                "cb_last_round_amount_usd": crunchbase_hint.get("last_round_amount_usd"),
+                "cb_investors": crunchbase_hint.get("investors", [])[:5]  # Limit to top 5
+            })
+        
+        # Clean up empty values
+        funding_data = {k: v for k, v in funding_data.items() if v not in (None, "", [], 0)}
+        
+        if funding_data:
+            logd(f"[FUNDING] Found funding data: {funding_data}")
+        else:
+            logd("[FUNDING] No funding data found")
+            
+        return funding_data
+        
+    except Exception as e:
+        logd(f"[FUNDING] Error collecting funding data: {e}")
+        return {}
+
 # ---------- LLM: dossier narrative ----------
 
 DOSSIER_GUIDANCE = """
@@ -231,20 +313,20 @@ Produce a concise, executive-style client profile based ONLY on the evidence pro
 Do not invent facts; if identity or facts are uncertain, say so briefly.
 
 Process to follow:
-1) Cross-reference the DBA/company name, website, and the named contacts to decide which business we’re examining.
+1) Cross-reference the DBA/company name, website, and the named contacts to decide which business we're examining.
    Some companies change names or websites—do not treat either as gospel; resolve the most likely identity.
 2) Pull key company info: what they do, products/services and use cases, any publicly mentioned key customers.
-3) Find recent announcements (last 6 months): launches, funding, partnerships. Summarize the 1–2 most relevant.
+3) Find recent announcements (last 6 months): launches, partnerships, product releases. Summarize the 1–2 most relevant.
 4) Add short background notes on key people (the provided contacts and any clearly relevant leaders): prior roles/companies/startups.
 
 Output format: Markdown. Keep it tight (~400–600 words), crisp, factual, and skimmable. Avoid hype.
 Use the following sections and headings exactly:
 
 🔍 Company & Identity
-- Who we’re talking about; how you resolved the identity (DBA vs brand vs domain); HQ if available.
+- Who we're talking about; how you resolved the identity (DBA vs brand vs domain); HQ if available.
 
 🏢 Company Overview
-- One short paragraph on stage of funding and most recent fundraise date, who their investors are, number of employees
+- One short paragraph on company stage, business model, and number of employees (avoid speculation about funding/investment details)
 
 🚀 Product & Use Cases
 - 3–6 bullets: product, core capabilities, typical users, high-level use cases.
@@ -259,7 +341,7 @@ Use the following sections and headings exactly:
 - 1–3 bullets for uncertainty, gaps, or identity ambiguities that need confirmation.
 """
 
-def _build_evidence_block(org: dict, news_items: List[dict], people_bg: List[dict]) -> str:
+def _build_evidence_block(org: dict, news_items: List[dict], people_bg: List[dict], funding_data: dict = None) -> str:
     news_lines = []
     for n in news_items[:8]:
         date = n.get("published_at", "")
@@ -290,6 +372,32 @@ def _build_evidence_block(org: dict, news_items: List[dict], people_bg: List[dic
     evidence.append("")
     evidence.append("People background findings:")
     evidence.append("\n".join(ppl_lines) if ppl_lines else "(none)")
+    
+    # Add funding information if available
+    if funding_data:
+        evidence.append("")
+        evidence.append("Funding information:")
+        if funding_data.get("latest_amount_usd"):
+            amount = f"${funding_data['latest_amount_usd']:,}"
+            round_type = funding_data.get("latest_round_type", "")
+            date = funding_data.get("latest_funding_date", "")
+            evidence.append(f"- Latest round: {amount} {round_type} ({date})")
+        
+        if funding_data.get("latest_investors"):
+            investors = ", ".join(funding_data["latest_investors"])
+            evidence.append(f"- Recent investors: {investors}")
+        
+        if funding_data.get("total_funding_usd"):
+            total = f"${funding_data['total_funding_usd']:,}"
+            evidence.append(f"- Total funding (CB): {total}")
+        
+        if funding_data.get("cb_investors"):
+            cb_investors = ", ".join(funding_data["cb_investors"])
+            evidence.append(f"- All investors (CB): {cb_investors}")
+        
+        if funding_data.get("latest_funding_url"):
+            evidence.append(f"- Source: {funding_data.get('latest_funding_title', '')} — {funding_data.get('latest_funding_source', '')} {funding_data['latest_funding_url']}")
+    
     return "\n".join(evidence)
 
 def _openai_write_narrative(prompt: str) -> Optional[str]:
@@ -330,8 +438,8 @@ def _openai_write_narrative(prompt: str) -> Optional[str]:
     except Exception:
         return None
 
-def generate_narrative(org: dict, news_items: List[dict], people_bg: List[dict]) -> str:
-    evidence = _build_evidence_block(org, news_items, people_bg)
+def generate_narrative(org: dict, news_items: List[dict], people_bg: List[dict], funding_data: dict = None) -> str:
+    evidence = _build_evidence_block(org, news_items, people_bg, funding_data)
     prompt = f"{DOSSIER_GUIDANCE}\n\nEVIDENCE START\n{evidence}\nEVIDENCE END\n\nWrite the profile now."
     text = _openai_write_narrative(prompt)
     if text:
@@ -549,7 +657,8 @@ def main():
 
         news_items = collect_recent_news(org, lookback_days, g_api_key, g_cse_id)
         people_bg  = collect_people_background(org, lookback_days, g_api_key, g_cse_id)
-        narr = generate_narrative(org, news_items, people_bg)
+        funding_data = collect_funding_data(org, lookback_days=540)  # 18 months for funding searches
+        narr = generate_narrative(org, news_items, people_bg, funding_data)
         dossiers.append({"callsign": org.get("callsign"), "body_md": narr})
 
         # Notion push
