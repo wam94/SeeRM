@@ -45,7 +45,7 @@ jobs:
           echo "Company: ${{ inputs.name }}"
           if [ -n "${{ inputs.owners }}" ]; then
             echo "Owners:  ${{ inputs.owners }}"
-            python -m scripts.probe_funding "${{ inputs.name }}" "${{ inputs.owners }}"
+            python -m scripts.probe_funding --name "${{ inputs.name }}" --owners "${{ inputs.owners }}"
           else
-            python -m scripts.probe_funding "${{ inputs.name }}"
+            python -m scripts.probe_funding --name "${{ inputs.name }}"
           fi
