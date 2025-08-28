@@ -432,12 +432,7 @@ def collect_recent_news(org: Dict[str, Any],
     items = dedupe(items, key=lambda x: x.get("url"))
     items = [x for x in items if within_days(x.get("published_at", datetime.utcnow()), lookback_days)]
     # Normalize
-    for it in items:
-        it["title"] = it.get("title") or ""
-        it["url"] = it.get("url") or ""
-        it["source"] = it.get("source") or (org.get("domain_root") or "")
-        if isinstance(it.get("published_at"), datetime):
-            it["published_at"] = it["published_at"].strftime("%Y-%m-%d")
+    items = normalize_news_items(items)
     return items[:max_items]
 
 def collect_people_background(org: Dict[str, Any],
