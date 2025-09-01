@@ -105,7 +105,8 @@ def upsert_company_page(companies_db_id: str, payload: Dict[str, Any]) -> str:
         props["Website"] = _url(payload.get("website"))
 
     # Domain can be url or rich_text depending on schema
-    domain_val = (payload.get("domain") or "").strip()
+    domain_raw = payload.get("domain")
+    domain_val = (str(domain_raw) if domain_raw is not None and not (isinstance(domain_raw, float) and str(domain_raw) == 'nan') else "").strip()
     if domain_val:
         if prop_exists(schema, "Domain", "url"):
             props["Domain"] = _url(f"https://{domain_val}" if not domain_val.startswith(("http://","https://")) else domain_val)
@@ -160,7 +161,7 @@ def set_needs_dossier(companies_page_id: str, needs: bool = True):
 # ---------- Intel archive helpers ----------
 
 def append_intel_log(intel_db_id: str, company_page_id: str, callsign: str,
-                     date_iso: str, summary_text: str, items: List[Dict[str, Any]]):
+                     date_iso: str, summary_text: str, items: List[Dict[str, Any]], company_name: str = ""):
     """
     Create one Intel log page and append bulleted items:
     'YYYY-MM-DD — <linked title> — source' (title hyperlinked when URL present).
@@ -169,8 +170,8 @@ def append_intel_log(intel_db_id: str, company_page_id: str, callsign: str,
         res = notion_post("/pages", {
             "parent": {"database_id": intel_db_id},
             "properties": {
-                "Company": {"relation": [{"id": company_page_id}]},
-                "Callsign": _rt(callsign),
+                "Company": {"title": [{"type": "text", "text": {"content": (company_name or callsign)[:200]}}]},
+                "Callsign": {"relation": [{"id": company_page_id}]},
                 "Date": {"date": {"start": date_iso}},
                 "Summary": _rt(summary_text or ""),
             }
@@ -217,7 +218,7 @@ def append_intel_log(intel_db_id: str, company_page_id: str, callsign: str,
             raise
 
 def append_structured_items(intel_db_id: str, company_page_id: str, callsign: str,
-                            items: List[Dict[str, Any]]):
+                            items: List[Dict[str, Any]], company_name: str = ""):
     """
     (Optional) Also create one DB row per item if suitable columns exist:
       - Headline (title), Item Date (date), Item Source (rich_text), Item URL (url)
@@ -229,10 +230,10 @@ def append_structured_items(intel_db_id: str, company_page_id: str, callsign: st
         props: Dict[str, Any] = {}
         if prop_exists(schema, "Headline", "title"):
             props["Headline"] = {"title": [{"type": "text", "text": {"content": title}}]}
-        if prop_exists(schema, "Company", "relation"):
-            props["Company"] = {"relation": [{"id": company_page_id}]}
-        if prop_exists(schema, "Callsign", "rich_text"):
-            props["Callsign"] = _rt(callsign)
+        if prop_exists(schema, "Company", "title"):
+            props["Company"] = {"title": [{"type": "text", "text": {"content": (company_name or callsign)[:200]}}]}
+        if prop_exists(schema, "Callsign", "relation"):
+            props["Callsign"] = {"relation": [{"id": company_page_id}]}
         if prop_exists(schema, "Item Date", "date"):
             props["Item Date"] = {"date": {"start": (it.get("published_at") or datetime.date.today().isoformat())}}
         if prop_exists(schema, "Item Source", "rich_text"):

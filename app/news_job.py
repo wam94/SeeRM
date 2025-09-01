@@ -379,7 +379,7 @@ def main():
             except Exception as e:
                 print("Notion set_latest_intel error:", repr(e))
             try:
-                append_intel_log(intel_db, page_id, str(org["callsign"]), today_iso, summary, intel_by_cs.get(cs, []))
+                append_intel_log(intel_db, page_id, str(org["callsign"]), today_iso, summary, intel_by_cs.get(cs, []), org.get("dba", ""))
             except Exception as e:
                 print("Notion append_intel_log error:", repr(e))
 
