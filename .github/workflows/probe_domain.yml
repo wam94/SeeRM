@@ -41,11 +41,18 @@ jobs:
           BASELINE_DEBUG: 'true'   # show debug lines from the probe if available
         run: |
           set -euo pipefail
-          echo "== Domain Resolver (Smart) =="
+          echo "== Domain Resolver (Waterfall Strategy) =="
           echo "Company: ${{ inputs.name }}"
+          echo "Owners:  ${{ inputs.owners }}"
+          echo ""
+          echo "Running domain resolution..."
+          
+          # Build command with proper arguments
           if [ -n "${{ inputs.owners }}" ]; then
-            echo "Owners:  ${{ inputs.owners }}"
-            python -m scripts.domain_resolver "${{ inputs.name }}" "${{ inputs.owners }}"
+            python -m scripts.domain_resolver "${{ inputs.name }}" "${{ inputs.owners }}" --debug
           else
-            python -m scripts.domain_resolver "${{ inputs.name }}"
+            python -m scripts.domain_resolver "${{ inputs.name }}" "" --debug
           fi
+          
+          echo ""
+          echo "Resolution complete!"
