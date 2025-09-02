@@ -668,7 +668,9 @@ def main():
                 "hq_country": r[pcols.get("hq_country")] if pcols.get("hq_country") in r else None,
                 "owners": owners,
             }
-            base["domain_root"] = base.get("domain_root") or compute_domain_root(base.get("website"))
+            # Preserve CSV domain_root - only compute from website if domain_root is missing
+            if not base.get("domain_root"):
+                base["domain_root"] = compute_domain_root(base.get("website"))
             prof[cs] = base
 
     if weekly is not None:
@@ -687,7 +689,9 @@ def main():
                 owners = [s.strip() for s in str(owners_raw or "").split(",") if s.strip()]
                 if owners:
                     base["owners"] = sorted(set((base.get("owners") or []) + owners))
-            base["domain_root"] = base.get("domain_root") or compute_domain_root(base.get("website"))
+            # Preserve CSV domain_root - only compute from website if domain_root is missing
+            if not base.get("domain_root"):
+                base["domain_root"] = compute_domain_root(base.get("website"))
             prof[cs] = base
 
     base_list = sorted(prof.keys())
