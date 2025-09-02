@@ -12,7 +12,7 @@ from app.gmail_client import (
     extract_csv_attachments, send_html_email
 )
 from app.notion_client import (
-    upsert_company_page, set_latest_intel, append_intel_log
+    upsert_company_page, set_latest_intel, update_intel_archive_for_company
 )
 from app.performance_utils import (
     ParallelProcessor, ConcurrentAPIClient, DEFAULT_RATE_LIMITER, 
@@ -531,15 +531,33 @@ def main():
                 text_blob = "\n".join([f"{it.get('published_at','')} — {it.get('title','')} — {it.get('source','')} {it.get('url','')}" for it in intel_items])
                 summary = _openai_summarize(text_blob) or f"{len(intel_items)} new items."
 
-                # Set Latest Intel + add archive bullets
+                # Set Latest Intel + update Intel archive with new system
                 today_iso = datetime.utcnow().date().isoformat()
                 
-                # Use rate limiting for Notion API calls
-                DEFAULT_RATE_LIMITER.wait_if_needed()
-                set_latest_intel(page_id, summary_text=summary, date_iso=today_iso, companies_db_id=companies_db)
-                
-                DEFAULT_RATE_LIMITER.wait_if_needed()
-                append_intel_log(intel_db, page_id, str(org["callsign"]), today_iso, summary, intel_items, org.get("dba", ""))
+                # Keep slim "Latest Intel" on Companies DB
+                try:
+                    DEFAULT_RATE_LIMITER.wait_if_needed()
+                    set_latest_intel(page_id, summary_text=summary, date_iso=today_iso, companies_db_id=companies_db)
+                except Exception as e:
+                    print(f"WARN set_latest_intel for {cs}: {e}")
+
+                # Update Intel archive: latest summary only + dated timeline bullets
+                try:
+                    DEFAULT_RATE_LIMITER.wait_if_needed()
+                    update_intel_archive_for_company(
+                        intel_db_id=intel_db,
+                        companies_db_id=companies_db,
+                        company_page_id=page_id,
+                        callsign=str(org["callsign"]),
+                        date_iso=today_iso,
+                        summary_text=summary,
+                        items=intel_items,
+                        summary_max_bytes=250_000,   # ~250 KB for property
+                        timeline_max_bytes=800_000,  # ~800 KB for toggle groups
+                        overwrite_summary_only=True,  # important: no summary history
+                    )
+                except Exception as e:
+                    print(f"WARN intel archive for {cs}: {e}")
                 
                 return cs, {"status": "success", "items": len(intel_items)}
                 
