@@ -151,97 +151,68 @@ def discover_domain_by_search(name: str, g_api_key: Optional[str], g_cse_id: Opt
         logd(f"[discover_domain_by_search] error: {e}")
     return None
 
+def _is_blank(x) -> bool:
+    if x is None: return True
+    s = str(x).strip().lower()
+    return s in ("", "none", "nan")
+
+def _normalize_csv_text(x: Any) -> Optional[str]:
+    if _is_blank(x): return None
+    return str(x).strip()
+
 def resolve_domain_for_org(org: dict, g_api_key: Optional[str], g_cse_id: Optional[str]) -> tuple[Optional[str], Optional[str]]:
     """
-    Domain resolution with CSV metabase data as absolute priority:
-    1. Trust CSV domain_root field first (from metabase report)
-    2. Trust CSV website field second  
-    3. Only search for new domains if CSV has nothing
+    Final authority order:
+      1) CSV `domain_root` (trusted). Build URL variants and accept 200–399/403/405.
+      2) CSV `website` (trusted). Derive domain_root from it.
+      3) Search (domain_resolver). Only if BOTH CSV fields are empty.
+    Returns: (domain_root, homepage_url) – either or both may be None.
     """
-    # These come from the metabase CSV - absolute priority - handle None values safely
-    csv_domain_root = org.get("domain_root")
-    csv_website = org.get("website")
-    
-    # Handle pandas NaN, None, empty strings, and string 'None' values
-    if csv_domain_root is None or str(csv_domain_root).strip().lower() in ('', 'none', 'nan'):
-        csv_domain_root = None
-    else:
-        csv_domain_root = str(csv_domain_root).strip()
-        
-    if csv_website is None or str(csv_website).strip().lower() in ('', 'none', 'nan'):
-        csv_website = None  
-    else:
-        csv_website = str(csv_website).strip()
-    
-    # Debug: Always show for 97labs or when DEBUG is on
-    callsign = org.get("callsign", "unknown")
-    if DEBUG or callsign == "97labs":
-        print(f"[RESOLVE DEBUG] {callsign}: org keys = {list(org.keys())}")
-        print(f"[RESOLVE DEBUG] {callsign}: raw domain_root = '{org.get('domain_root')}', raw website = '{org.get('website')}'")
-        print(f"[RESOLVE DEBUG] {callsign}: processed csv_domain_root = '{csv_domain_root}', csv_website = '{csv_website}'")
-    
-    # PRIORITY 1: CSV domain_root field (from metabase) is gospel
+    csv_domain_root = _normalize_csv_text(org.get("domain_root"))
+    csv_website     = _normalize_csv_text(org.get("website"))
+
+    # 1) Trust CSV domain_root
     if csv_domain_root:
-        # Trust the CSV domain_root completely, construct URL from it
-        if _website_is_accessible(f"https://{csv_domain_root}"):
-            logd(f"[DOMAIN] Trusting CSV domain_root: {csv_domain_root} (accessible)")
-            return csv_domain_root, f"https://{csv_domain_root}"
-        elif _website_is_accessible(f"https://www.{csv_domain_root}"):
-            logd(f"[DOMAIN] Trusting CSV domain_root: {csv_domain_root} (www accessible)")
-            return csv_domain_root, f"https://www.{csv_domain_root}"
-        else:
-            # Even if not accessible, trust CSV data (may be temporary issue)
-            logd(f"[DOMAIN] Trusting CSV domain_root: {csv_domain_root} (not accessible but preserving)")
-            return csv_domain_root, f"https://{csv_domain_root}"
-    
-    # PRIORITY 2: CSV website field (from metabase) 
+        for u in (f"https://{csv_domain_root}", f"https://www.{csv_domain_root}", f"http://{csv_domain_root}"):
+            if _website_is_accessible(u):
+                logd(f"[DOMAIN] Trust CSV domain_root -> {csv_domain_root} ({u})")
+                return csv_domain_root, u
+        # Even if we couldn't verify, keep the CSV truth
+        return csv_domain_root, f"https://{csv_domain_root}"
+
+    # 2) Trust CSV website
     if csv_website:
-        if _website_is_accessible(csv_website):
-            domain_root = compute_domain_root(csv_website)
-            logd(f"[DOMAIN] Trusting CSV website: {csv_website} -> domain: {domain_root}")
-            return domain_root, csv_website
-        else:
-            # Even if not accessible, trust CSV data
-            domain_root = compute_domain_root(csv_website)
-            logd(f"[DOMAIN] Trusting CSV website: {csv_website} (not accessible but preserving)")
-            return domain_root, csv_website
-    
-    # PRIORITY 3: Only search for new domains if CSV has NO domain/website data
-    if not (g_api_key and g_cse_id):
-        logd(f"[DOMAIN] No CSV domain/website data and no search credentials")
+        url = ensure_http(csv_website) or csv_website
+        # accept even if HEAD is cranky
+        if _website_is_accessible(url):
+            dom = compute_domain_root(url) or None
+            logd(f"[DOMAIN] Trust CSV website -> {url} (root={dom})")
+            return dom, url
+        dom = compute_domain_root(url) or None
+        return dom, url
+
+    # 3) Search only when CSV has neither
+    company_name = (org.get("dba") or org.get("callsign") or "").strip()
+    if not company_name or not (g_api_key and g_cse_id):
         return None, None
-        
+
     try:
         from scripts.domain_resolver import resolve_domain
-        
-        company_name = org.get("dba") or org.get("callsign") or ""
         owners_csv = ",".join(org.get("owners") or [])
-        
-        if not company_name:
-            logd(f"[DOMAIN] No company name for search")
-            return None, None
-            
-        logd(f"[DOMAIN] No CSV domain/website data - searching for: {company_name}")
-        result = resolve_domain(company_name, owners_csv, g_api_key, g_cse_id, debug=DEBUG)
-        
-        if result and result.get("domain_root") and result.get("homepage_url"):
-            domain_root = result["domain_root"]
-            homepage_url = result["homepage_url"]
-            logd(f"[DOMAIN] Search found new domain: {domain_root} -> {homepage_url} (score: {result.get('score', 0)})")
-            return domain_root, homepage_url
-            
+        result = resolve_domain(company_name, owners_csv, g_api_key, g_cse_id, debug=DEBUG) or {}
+        dr  = (result.get("domain_root") or "").strip() or None
+        url = (result.get("homepage_url") or "").strip() or None
+        if dr and url:
+            logd(f"[DOMAIN] Search accepted -> {dr} ({url}) why={result.get('why')}")
+            return dr, url
     except Exception as e:
         logd(f"[DOMAIN] Search error: {e}")
-        # Fall back to old method if new resolver fails
-        candidate = discover_domain_by_search(company_name, g_api_key, g_cse_id)
-        if candidate:
-            url = validate_domain_to_url(candidate)
-            if url:
-                logd(f"[DOMAIN] Fallback search found: {candidate} -> {url}")
-                return candidate, url
-    
-    # No domain found anywhere
-    logd(f"[DOMAIN] No domain found for {company_name}")
+
+    # Fallback: minimal CSE
+    cand = discover_domain_by_search(company_name, g_api_key, g_cse_id)
+    if cand:
+        return cand, validate_domain_to_url(cand)
+
     return None, None
 
 # ---------- Env helpers ----------
@@ -783,39 +754,22 @@ def main():
             # Always resolve domain - function will prioritize CSV data or search as needed
             dr, url = resolve_domain_for_org(org, g_api_key, g_cse_id)
             
-            # Debug: Always show for 97labs
-            if DEBUG or cs == "97labs":
-                print(f"[DOMAIN RESULT] {cs}: resolve_domain_for_org returned dr='{dr}', url='{url}'")
-                print(f"[DOMAIN RESULT] {cs}: CSV had domain_root='{csv_domain_root}', website='{csv_website}'")
-            
+            csv_domain_root = _normalize_csv_text(org.get("domain_root"))
+            csv_website     = _normalize_csv_text(org.get("website"))
+
             if dr:
-                # CRITICAL: Only update org if we didn't have CSV domain data
-                # If CSV had domain_root, preserve it; only update if we found NEW domain info
                 if not csv_domain_root:
-                    # No CSV domain_root - safe to use resolved domain
-                    org["domain"] = dr
                     org["domain_root"] = dr
-                    logd(f"[DOMAIN] {cs} - No CSV domain_root, using resolved: {dr}")
+                    org["domain"]      = dr
                 else:
-                    # CSV had domain_root - preserve it, just update domain field for compatibility
-                    org["domain"] = csv_domain_root  # Use CSV value
-                    # org["domain_root"] stays as-is from CSV
-                    logd(f"[DOMAIN] {cs} - Preserving CSV domain_root: {csv_domain_root}")
-                
-                # For website: use resolved URL if it came from CSV, otherwise preserve CSV website
-                if not csv_website or url == f"https://{csv_domain_root}" or url == f"https://www.{csv_domain_root}":
-                    # Use resolved URL (likely constructed from CSV domain_root or is new search result)
+                    # preserve CSV truth
+                    org["domain_root"] = csv_domain_root
+                    org["domain"]      = csv_domain_root
+
+            if url:
+                # If CSV website is empty or url matches the CSV domain, use the url we have
+                if (not csv_website) or (csv_domain_root and url.startswith(("https://"+csv_domain_root, "https://www."+csv_domain_root, "http://"+csv_domain_root))):
                     org["website"] = url
-                else:
-                    # Preserve original CSV website
-                    # org["website"] stays as-is from CSV
-                    pass
-                
-                logd(f"[DOMAIN] {cs} - Final domain setup: domain={org.get('domain')}, domain_root={org.get('domain_root')}, website={org.get('website')}")
-                if DEBUG or cs == "97labs":
-                    print(f"[FINAL DOMAIN] {cs}: Final values - domain='{org.get('domain')}', domain_root='{org.get('domain_root')}', website='{org.get('website')}'")
-            else:
-                logd(f"[DOMAIN] {cs} - No domain resolved")
 
             # Collect intelligence data
             news_items = collect_recent_news(org, lookback_days, g_api_key, g_cse_id)

@@ -48,9 +48,20 @@ def sld(domain_root: str) -> str:
     return (ext.domain or "").lower()
 
 def head_ok(url: str, timeout: float = 6.0) -> bool:
+    """Treat 403/405 as acceptable (common for HEAD). Fallback to a tiny GET."""
     try:
         r = requests.head(url, timeout=timeout, allow_redirects=True)
-        return r.status_code < 400
+        if r.status_code < 400 or r.status_code in (403, 405):
+            return True
+    except Exception:
+        pass
+    # Tiny GET fallback (don't download the world)
+    try:
+        r = requests.get(
+            url, timeout=timeout, allow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0", "Range": "bytes=0-4096"},
+        )
+        return (r.status_code < 400) or (r.status_code in (403, 405))
     except Exception:
         return False
 
@@ -77,15 +88,33 @@ REMOVE_WORDS = {
 }
 
 def brand_tokens(company_name: str) -> List[str]:
+    """
+    Generate robust brand tokens. If removing legal/stop words yields nothing,
+    fall back to a compact token (e.g., '97 Labs' -> '97labs').
+    """
     s = re.sub(r"[^a-z0-9\s\-&]+", " ", company_name.lower())
     words = [w for w in re.split(r"[\s\-&]+", s) if w]
-    words = [w for w in words if w not in REMOVE_WORDS and len(w) >= 3]
-    # If we ended with nothing (e.g., "The AI Company, Inc.") keep the biggest word
-    if not words and company_name:
+    words = [w for w in words if w not in REMOVE_WORDS and len(w) >= 2]  # keep 2+ to allow 'ai'
+    tokens = [w for w in words if not re.fullmatch(r"\d+", w)]  # drop all-digit tokens
+
+    # If empty (e.g., "97 Labs Inc"), try a compact alphanum token without spaces
+    if not tokens:
+        compact = re.sub(r"[^a-z0-9]+", "", company_name.lower())
+        if compact and compact not in REMOVE_WORDS:
+            tokens = [compact]
+
+    # still empty? keep the longest alphabetic run
+    if not tokens:
         letters = re.findall(r"[a-zA-Z]+", company_name)
         if letters:
-            words = [max(letters, key=len).lower()]
-    return list(dict.fromkeys(words))[:4]  # preserve order, cap
+            tokens = [max(letters, key=len).lower()]
+
+    # dedupe, keep order
+    out = []
+    for t in tokens:
+        if t not in out:
+            out.append(t)
+    return out[:4]
 
 HOMEPAGE_HINTS = ("official site","homepage","home page","welcome","about us","our mission")
 
