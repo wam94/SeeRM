@@ -162,6 +162,13 @@ def resolve_domain_for_org(org: dict, g_api_key: Optional[str], g_cse_id: Option
     csv_domain_root = str(org.get("domain_root") or "").strip() or None
     csv_website = str(org.get("website") or "").strip() or None
     
+    # Debug: Always show for 97labs or when DEBUG is on
+    callsign = org.get("callsign", "unknown")
+    if DEBUG or callsign == "97labs":
+        print(f"[RESOLVE DEBUG] {callsign}: org keys = {list(org.keys())}")
+        print(f"[RESOLVE DEBUG] {callsign}: raw domain_root = '{org.get('domain_root')}', raw website = '{org.get('website')}'")
+        print(f"[RESOLVE DEBUG] {callsign}: processed csv_domain_root = '{csv_domain_root}', csv_website = '{csv_website}'")
+    
     # PRIORITY 1: CSV domain_root field (from metabase) is gospel
     if csv_domain_root:
         # Trust the CSV domain_root completely, construct URL from it
@@ -651,11 +658,18 @@ def main():
                 continue
             owners_raw = r[pcols.get("beneficial_owners")] if pcols.get("beneficial_owners") in r else ""
             owners = [s.strip() for s in str(owners_raw or "").split(",") if s.strip()]
+            # Debug: Show what we're reading from CSV
+            csv_domain_root_val = r[pcols.get("domain_root")] if pcols.get("domain_root") in r else None
+            csv_website_val = r[pcols.get("website")] if pcols.get("website") in r else None
+            if DEBUG or cs == "97labs":  # Always show for 97labs
+                print(f"[CSV DEBUG] {cs}: domain_root='{csv_domain_root_val}', website='{csv_website_val}'")
+                print(f"[CSV DEBUG] {cs}: available columns: {list(pcols.keys())}")
+                
             base = {
                 "callsign": r[pcols.get("callsign")],
                 "dba": r[pcols.get("dba")] if pcols.get("dba") in r else None,
-                "website": r[pcols.get("website")] if pcols.get("website") in r else None,
-                "domain_root": r[pcols.get("domain_root")] if pcols.get("domain_root") in r else None,
+                "website": csv_website_val,
+                "domain_root": csv_domain_root_val,
                 "aka_names": r[pcols.get("aka_names")] if pcols.get("aka_names") in r else None,
                 "blog_url": r[pcols.get("blog_url")] if pcols.get("blog_url") in r else None,
                 "rss_feeds": r[pcols.get("rss_feeds")] if pcols.get("rss_feeds") in r else None,
@@ -738,12 +752,38 @@ def main():
             
             # Always resolve domain - function will prioritize CSV data or search as needed
             dr, url = resolve_domain_for_org(org, g_api_key, g_cse_id)
+            
+            # Debug: Always show for 97labs
+            if DEBUG or cs == "97labs":
+                print(f"[DOMAIN RESULT] {cs}: resolve_domain_for_org returned dr='{dr}', url='{url}'")
+                print(f"[DOMAIN RESULT] {cs}: CSV had domain_root='{csv_domain_root}', website='{csv_website}'")
+            
             if dr:
-                # Update org with resolved domain info for Notion push
-                org["domain"] = dr
-                org["domain_root"] = dr
-                org["website"] = url  # Use the resolved URL (which may be from CSV or search)
-                logd(f"[DOMAIN] {cs} - Set domain: {dr} -> {url}")
+                # CRITICAL: Only update org if we didn't have CSV domain data
+                # If CSV had domain_root, preserve it; only update if we found NEW domain info
+                if not csv_domain_root:
+                    # No CSV domain_root - safe to use resolved domain
+                    org["domain"] = dr
+                    org["domain_root"] = dr
+                    logd(f"[DOMAIN] {cs} - No CSV domain_root, using resolved: {dr}")
+                else:
+                    # CSV had domain_root - preserve it, just update domain field for compatibility
+                    org["domain"] = csv_domain_root  # Use CSV value
+                    # org["domain_root"] stays as-is from CSV
+                    logd(f"[DOMAIN] {cs} - Preserving CSV domain_root: {csv_domain_root}")
+                
+                # For website: use resolved URL if it came from CSV, otherwise preserve CSV website
+                if not csv_website or url == f"https://{csv_domain_root}" or url == f"https://www.{csv_domain_root}":
+                    # Use resolved URL (likely constructed from CSV domain_root or is new search result)
+                    org["website"] = url
+                else:
+                    # Preserve original CSV website
+                    # org["website"] stays as-is from CSV
+                    pass
+                
+                logd(f"[DOMAIN] {cs} - Final domain setup: domain={org.get('domain')}, domain_root={org.get('domain_root')}, website={org.get('website')}")
+                if DEBUG or cs == "97labs":
+                    print(f"[FINAL DOMAIN] {cs}: Final values - domain='{org.get('domain')}', domain_root='{org.get('domain_root')}', website='{org.get('website')}'")
             else:
                 logd(f"[DOMAIN] {cs} - No domain resolved")
 
