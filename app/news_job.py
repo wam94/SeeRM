@@ -14,6 +14,10 @@ from app.gmail_client import (
 from app.notion_client import (
     upsert_company_page, set_latest_intel, append_intel_log
 )
+from app.performance_utils import (
+    ParallelProcessor, ConcurrentAPIClient, DEFAULT_RATE_LIMITER, 
+    PERFORMANCE_MONITOR, has_valid_domain, should_skip_processing
+)
 
 # ---------------- Notion helpers for new company detection ----------------
 
@@ -300,7 +304,7 @@ def collect_recent_news(org: Dict[str, Any], lookback_days: int,
         except Exception:
             pass
 
-    # Google CSE (site + name queries + optional owners)
+    # Google CSE (site + name queries + optional owners) - CONCURRENT
     disable_cse = str(os.getenv("CSE_DISABLE", "")).lower() in ("1","true","yes")
     if (g_api_key and g_cse_id) and not disable_cse:
         queries = build_queries(
@@ -310,11 +314,23 @@ def collect_recent_news(org: Dict[str, Any], lookback_days: int,
             tags=org.get("industry_tags"),
         )
         limit = int(os.getenv("CSE_MAX_QUERIES_PER_ORG", str(max_queries)) or max_queries)
+        
+        # Create API call functions for concurrent execution
+        api_calls = []
         for q in queries[:limit]:
-            try:
-                items += google_cse_search(g_api_key, g_cse_id, q, date_restrict=f"d{lookback_days}", num=5)
-            except Exception:
-                continue
+            api_calls.append(
+                lambda query=q: google_cse_search(g_api_key, g_cse_id, query, date_restrict=f"d{lookback_days}", num=5)
+            )
+        
+        # Execute queries concurrently with rate limiting
+        if api_calls:
+            api_client = ConcurrentAPIClient(DEFAULT_RATE_LIMITER)
+            concurrent_results = api_client.batch_api_calls(api_calls, max_workers=4, timeout=30)
+            
+            # Flatten results
+            for result in concurrent_results:
+                if result:
+                    items += result
 
     # Clean / dedupe / window
     items = dedupe(items, key=lambda x: x.get("url"))
@@ -453,42 +469,95 @@ def main():
     if new_callsigns:
         print(f"[NEW COMPANIES] Created {len(new_callsigns)} new company pages: {', '.join(new_callsigns[:8])}{' ...' if len(new_callsigns) > 8 else ''}")
 
-    # Collect intel
-    intel_by_cs: Dict[str, List[Dict[str, Any]]] = {}
-    for cs, org in roster.items():
+    # Collect intel - PARALLEL PROCESSING
+    PERFORMANCE_MONITOR.start_timer("intel_collection")
+    
+    def collect_news_for_company(cs_org_pair):
+        cs, org = cs_org_pair
+        # Skip if we have very recent data
+        if should_skip_processing(org, "news_collection"):
+            print(f"[SKIP] Recent news data exists for {cs}")
+            return cs, org.get("cached_news", [])
+        
         items = collect_recent_news(org, lookback_days, g_api_key, g_cse_id, max_items=max_per_org)
-        intel_by_cs[cs] = items
+        return cs, items
+    
+    # Process companies in parallel
+    company_pairs = list(roster.items())
+    print(f"[PARALLEL] Processing {len(company_pairs)} companies for news collection...")
+    
+    results = ParallelProcessor.process_batch(
+        company_pairs, 
+        collect_news_for_company,
+        max_workers=6,  # Conservative for API rate limits
+        timeout=300  # 5 minutes total
+    )
+    
+    intel_by_cs: Dict[str, List[Dict[str, Any]]] = {}
+    for company_pair in company_pairs:
+        cs = company_pair[0]
+        intel_by_cs[cs] = results.get(company_pair, [])
+    
+    collection_time = PERFORMANCE_MONITOR.end_timer("intel_collection")
+    print(f"[PERFORMANCE] Intel collection completed in {collection_time:.2f}s")
 
-    # Notion (optional)
+    # Notion (optional) - PARALLEL PROCESSING
     token = os.getenv("NOTION_API_KEY")
     companies_db = os.getenv("NOTION_COMPANIES_DB_ID")
     intel_db     = os.getenv("NOTION_INTEL_DB_ID")
     if token and companies_db and intel_db:
-        for cs, org in roster.items():
-            # Upsert company page first
-            page_id = upsert_company_page(companies_db, {
-                "callsign": org["callsign"],
-                "company":  org.get("dba") or "",
-                "website":  org.get("website") or "",
-                "domain":   org.get("domain_root") or "",
-                "owners":   org.get("owners") or [],
-                "needs_dossier": False,
-            })
-
-            # LLM summary (optional)
-            text_blob = "\n".join([f"{it.get('published_at','')} — {it.get('title','')} — {it.get('source','')} {it.get('url','')}" for it in intel_by_cs.get(cs, [])])
-            summary = _openai_summarize(text_blob) or f"{len(intel_by_cs.get(cs, []))} new items."
-
-            # Set Latest Intel + add archive bullets
-            today_iso = datetime.utcnow().date().isoformat()
+        PERFORMANCE_MONITOR.start_timer("notion_updates")
+        
+        def process_company_notion(cs_org_pair):
+            cs, org = cs_org_pair
+            
+            # Skip if no new intelligence data
+            intel_items = intel_by_cs.get(cs, [])
+            if not intel_items:
+                return cs, None
+                
             try:
+                # Upsert company page first
+                page_id = upsert_company_page(companies_db, {
+                    "callsign": org["callsign"],
+                    "company":  org.get("dba") or "",
+                    "website":  org.get("website") or "",
+                    "domain":   org.get("domain_root") or "",
+                    "owners":   org.get("owners") or [],
+                    "needs_dossier": False,
+                })
+
+                # LLM summary (optional)
+                text_blob = "\n".join([f"{it.get('published_at','')} — {it.get('title','')} — {it.get('source','')} {it.get('url','')}" for it in intel_items])
+                summary = _openai_summarize(text_blob) or f"{len(intel_items)} new items."
+
+                # Set Latest Intel + add archive bullets
+                today_iso = datetime.utcnow().date().isoformat()
+                
+                # Use rate limiting for Notion API calls
+                DEFAULT_RATE_LIMITER.wait_if_needed()
                 set_latest_intel(page_id, summary_text=summary, date_iso=today_iso, companies_db_id=companies_db)
+                
+                DEFAULT_RATE_LIMITER.wait_if_needed()
+                append_intel_log(intel_db, page_id, str(org["callsign"]), today_iso, summary, intel_items, org.get("dba", ""))
+                
+                return cs, {"status": "success", "items": len(intel_items)}
+                
             except Exception as e:
-                print("Notion set_latest_intel error:", repr(e))
-            try:
-                append_intel_log(intel_db, page_id, str(org["callsign"]), today_iso, summary, intel_by_cs.get(cs, []), org.get("dba", ""))
-            except Exception as e:
-                print("Notion append_intel_log error:", repr(e))
+                print(f"[NOTION ERROR] Failed to process {cs}: {e}")
+                return cs, {"status": "error", "error": str(e)}
+        
+        # Process Notion updates in parallel (with lower concurrency for API limits)
+        notion_results = ParallelProcessor.process_batch(
+            company_pairs,
+            process_company_notion,
+            max_workers=3,  # Conservative for Notion API limits
+            timeout=300
+        )
+        
+        notion_time = PERFORMANCE_MONITOR.end_timer("notion_updates")
+        successful_updates = sum(1 for r in notion_results.values() if r and r.get("status") == "success")
+        print(f"[PERFORMANCE] Notion updates completed in {notion_time:.2f}s ({successful_updates} successful)")
 
     # Send optional email digest
     digest_to = os.getenv("DIGEST_TO") or os.getenv("GMAIL_USER") or ""
@@ -509,6 +578,9 @@ def main():
             print("Digest emailed to", digest_to)
         except Exception as e:
             print("Email digest error:", repr(e))
+    
+    # Print performance statistics
+    PERFORMANCE_MONITOR.print_stats()
 
 if __name__ == "__main__":
     main()

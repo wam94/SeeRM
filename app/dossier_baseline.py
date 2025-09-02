@@ -15,6 +15,10 @@ from app.news_job import (
     google_cse_search, dedupe, within_days
 )
 from app.notion_client import upsert_company_page, set_needs_dossier
+from app.performance_utils import (
+    ParallelProcessor, ConcurrentAPIClient, DEFAULT_RATE_LIMITER,
+    PERFORMANCE_MONITOR, has_valid_domain, should_skip_processing
+)
 
 # Import probe_funding functionality
 import sys
@@ -676,34 +680,82 @@ def main():
     llm_delay = float(getenv("LLM_DELAY_SEC", "0") or "0")
     notion_delay = float(getenv("NOTION_THROTTLE_SEC", "0.35") or "0.35")
 
-    dossiers: List[Dict[str, Any]] = []
-    for cs in targets_keys:
+    # PARALLEL BASELINE PROCESSING
+    PERFORMANCE_MONITOR.start_timer("baseline_processing")
+    
+    def process_single_company(cs):
         org = prof.get(cs, {"callsign": cs, "dba": cs, "owners": []})
-
-        # Resolve domain each time
-        dr, url = resolve_domain_for_org(org, g_api_key, g_cse_id)
-        if dr:
-            org["domain"] = dr
-            org["domain_root"] = dr
-            org["website"] = org.get("website") or url
-        if DEBUG:
-            print(f"[DOMAIN] cs={org.get('callsign')} -> domain_root={dr} url={url}")
-
-        news_items = collect_recent_news(org, lookback_days, g_api_key, g_cse_id)
-        people_bg  = collect_people_background(org, lookback_days, g_api_key, g_cse_id)
-        funding_data = collect_funding_data(org, lookback_days=540)  # 18 months for funding searches
-        narr = generate_narrative(org, news_items, people_bg, funding_data)
-        dossiers.append({"callsign": org.get("callsign"), "body_md": narr})
-
-        # Notion push
+        
         try:
-            logd(f"[NOTION] upsert payload: company={org.get('dba')} domain={org.get('domain')} website={org.get('website')}")
-            push_dossier_to_notion((org.get("callsign") or "").strip(), org, narr, throttle_sec=notion_delay)
-        except Exception as e:
-            print("Notion dossier push error:", e)
+            # Resolve domain with redundancy check
+            if not has_valid_domain(org) or should_skip_processing(org, "domain_resolution"):
+                dr, url = resolve_domain_for_org(org, g_api_key, g_cse_id)
+                if dr:
+                    org["domain"] = dr
+                    org["domain_root"] = dr
+                    org["website"] = org.get("website") or url
+                if DEBUG:
+                    print(f"[DOMAIN] cs={org.get('callsign')} -> domain_root={dr} url={url}")
 
-        if llm_delay:
-            time.sleep(llm_delay)
+            # Collect intelligence data
+            news_items = collect_recent_news(org, lookback_days, g_api_key, g_cse_id)
+            people_bg  = collect_people_background(org, lookback_days, g_api_key, g_cse_id)
+            
+            # Skip funding collection if we have recent data
+            if should_skip_processing(org, "funding_collection"):
+                funding_data = org.get("cached_funding_data", {})
+            else:
+                funding_data = collect_funding_data(org, lookback_days=540)  # 18 months for funding searches
+            
+            # Generate narrative
+            narr = generate_narrative(org, news_items, people_bg, funding_data)
+            
+            # Notion push with rate limiting
+            try:
+                logd(f"[NOTION] upsert payload: company={org.get('dba')} domain={org.get('domain')} website={org.get('website')}")
+                push_dossier_to_notion((org.get("callsign") or "").strip(), org, narr, throttle_sec=0)  # Remove throttle, using smart rate limiting instead
+                DEFAULT_RATE_LIMITER.wait_if_needed()  # Smart rate limiting
+            except Exception as e:
+                print(f"Notion dossier push error for {cs}: {e}")
+
+            return {"callsign": org.get("callsign"), "body_md": narr, "status": "success"}
+            
+        except Exception as e:
+            print(f"Error processing company {cs}: {e}")
+            return {"callsign": cs, "body_md": f"Error processing {cs}: {e}", "status": "error"}
+    
+    # Process companies in parallel
+    print(f"[PARALLEL] Processing {len(targets_keys)} companies for baseline generation...")
+    
+    # Use smaller batches for baseline processing due to complexity
+    batch_size = min(4, len(targets_keys))  # Conservative for complex operations
+    dossiers: List[Dict[str, Any]] = []
+    
+    # Process in batches to avoid overwhelming APIs
+    for i in range(0, len(targets_keys), batch_size):
+        batch = targets_keys[i:i+batch_size]
+        print(f"[BATCH] Processing batch {i//batch_size + 1} ({len(batch)} companies)")
+        
+        batch_results = ParallelProcessor.process_batch(
+            batch,
+            process_single_company,
+            max_workers=batch_size,
+            timeout=600  # 10 minutes per batch
+        )
+        
+        # Collect results
+        for cs in batch:
+            result = batch_results.get(cs)
+            if result:
+                dossiers.append(result)
+        
+        # Brief pause between batches to be respectful to APIs
+        if i + batch_size < len(targets_keys):
+            time.sleep(2)
+    
+    processing_time = PERFORMANCE_MONITOR.end_timer("baseline_processing")
+    successful_count = sum(1 for d in dossiers if d.get("status") == "success")
+    print(f"[PERFORMANCE] Baseline processing completed in {processing_time:.2f}s ({successful_count}/{len(targets_keys)} successful)")
 
     # Preview or email
     preview = getenv("PREVIEW_ONLY","false").lower() in ("1","true","yes","y")
@@ -733,6 +785,9 @@ def main():
             html
         )
         print("Baselines emailed to", to)
+    
+    # Print performance statistics
+    PERFORMANCE_MONITOR.print_stats()
 
 if __name__ == "__main__":
     main()

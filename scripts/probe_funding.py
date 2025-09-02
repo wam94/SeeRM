@@ -411,37 +411,95 @@ def probe_funding(name: str,
     queries = build_queries(name, domain, owners, aka)
     date_restrict = f"d{max(1, lookback_days)}"
 
-    # Gather CSE hits
-    hits: List[Dict[str, Any]] = []
-    for q in queries:
-        try:
-            items = google_cse_search(q, api_key, cse_id, num=5, date_restrict=date_restrict)
-            hits.extend(items)
-            time.sleep(0.3)  # polite
-        except Exception as e:
-            print("[CSE] query error:", q, repr(e))
+    # Gather CSE hits - CONCURRENT
+    try:
+        from app.performance_utils import ConcurrentAPIClient, SmartRateLimiter
+        
+        # Create API call functions for concurrent execution
+        api_calls = []
+        for q in queries:
+            api_calls.append(
+                lambda query=q: google_cse_search(query, api_key, cse_id, num=5, date_restrict=date_restrict)
+            )
+        
+        # Execute queries concurrently with rate limiting
+        rate_limiter = SmartRateLimiter(calls_per_second=2.5, burst_size=5)
+        api_client = ConcurrentAPIClient(rate_limiter)
+        concurrent_results = api_client.batch_api_calls(api_calls, max_workers=4, timeout=60)
+        
+        # Flatten results
+        hits: List[Dict[str, Any]] = []
+        for result in concurrent_results:
+            if result:
+                hits.extend(result)
+                
+    except ImportError:
+        # Fallback to sequential processing if performance_utils not available
+        hits: List[Dict[str, Any]] = []
+        for q in queries:
+            try:
+                items = google_cse_search(q, api_key, cse_id, num=5, date_restrict=date_restrict)
+                hits.extend(items)
+                time.sleep(0.3)  # polite
+            except Exception as e:
+                print("[CSE] query error:", q, repr(e))
 
     # Deduplicate by url
     hits = dedupe_urls(hits)
 
-    # Fetch pages (optional) and extract facts
-    for it in hits[: 30]:  # limit fetch fanout
-        text = ""
-        if fetch_pages:
-            text = fetch_text(it["url"])
-            # very short pages aren’t helpful
-            if len(text) < 400:
-                text = f"{it.get('title','')}\n{it.get('snippet','')}"
-        else:
+    # Fetch pages (optional) and extract facts - PARALLEL
+    if fetch_pages:
+        try:
+            from app.performance_utils import ParallelProcessor
+            
+            def fetch_and_process_page(item):
+                text = fetch_text(item["url"])
+                # very short pages aren't helpful
+                if len(text) < 400:
+                    text = f"{item.get('title','')}\n{item.get('snippet','')}"
+                
+                item["text"] = text or ""
+                item["facts"] = extract_funding_facts(" ".join([
+                    item.get("title",""), item.get("snippet",""), item.get("text","")
+                ]))
+                item["published_at"] = parse_date_from_text(" ".join([item["url"], item["text"]])) or None
+                return item
+            
+            # Process pages in parallel
+            limited_hits = hits[:20]  # Reduce fanout for performance
+            processed_results = ParallelProcessor.process_batch(
+                limited_hits,
+                fetch_and_process_page,
+                max_workers=8,
+                timeout=120
+            )
+            
+            # Update hits with processed results
+            for i, item in enumerate(limited_hits):
+                if item in processed_results and processed_results[item]:
+                    limited_hits[i] = processed_results[item]
+            
+            hits = limited_hits
+            
+        except ImportError:
+            # Fallback to sequential processing
+            for it in hits[:30]:  # limit fetch fanout
+                text = fetch_text(it["url"])
+                if len(text) < 400:
+                    text = f"{it.get('title','')}\n{it.get('snippet','')}"
+                
+                it["text"] = text or ""
+                it["facts"] = extract_funding_facts(" ".join([
+                    it.get("title",""), it.get("snippet",""), it.get("text","")
+                ]))
+                it["published_at"] = parse_date_from_text(" ".join([it["url"], it["text"]])) or None
+    else:
+        # No page fetching - just process titles and snippets
+        for it in hits[:30]:
             text = f"{it.get('title','')}\n{it.get('snippet','')}"
-
-        it["text"] = text or ""
-        it["facts"] = extract_funding_facts(" ".join([
-            it.get("title",""), it.get("snippet",""), it.get("text","")
-        ]))
-
-        # crude date guess (prefer text; fallback url path)
-        it["published_at"] = parse_date_from_text(" ".join([it["url"], it["text"]])) or None
+            it["text"] = text
+            it["facts"] = extract_funding_facts(text)
+            it["published_at"] = parse_date_from_text(" ".join([it["url"], text])) or None
 
         # Score
         comp_dom = registered_domain(domain) if domain else None
