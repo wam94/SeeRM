@@ -135,17 +135,51 @@ def discover_domain_by_search(name: str, g_api_key: Optional[str], g_cse_id: Opt
     return None
 
 def resolve_domain_for_org(org: dict, g_api_key: Optional[str], g_cse_id: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Enhanced domain resolution using the new domain resolver."""
+    # First check if we already have a valid domain
     raw_site = (org.get("website") or "").strip() or None
     raw_domain = (org.get("domain") or org.get("domain_root") or "").strip() or None
+    
     if raw_domain is None and raw_site:
         raw_domain = compute_domain_root(raw_site)
-    if raw_domain is None:
-        candidate = discover_domain_by_search(org.get("dba") or org.get("callsign"), g_api_key, g_cse_id)
-        if candidate:
-            raw_domain = candidate
+    
+    # If we have a domain, validate it and return
     if raw_domain:
         url = validate_domain_to_url(raw_domain)
-        return raw_domain, url
+        if url:  # Only return if validation passes
+            return raw_domain, url
+    
+    # Use new enhanced domain resolver for discovery
+    if not (g_api_key and g_cse_id):
+        return None, None
+        
+    try:
+        from scripts.domain_resolver import resolve_domain
+        
+        company_name = org.get("dba") or org.get("callsign") or ""
+        owners_csv = ",".join(org.get("owners") or [])
+        
+        if not company_name:
+            return None, None
+            
+        logd(f"[DOMAIN] Using enhanced resolver for: {company_name}")
+        result = resolve_domain(company_name, owners_csv, g_api_key, g_cse_id, debug=DEBUG)
+        
+        if result and result.get("domain_root") and result.get("homepage_url"):
+            domain_root = result["domain_root"]
+            homepage_url = result["homepage_url"]
+            logd(f"[DOMAIN] Enhanced resolver found: {domain_root} -> {homepage_url} (score: {result.get('score', 0)})")
+            return domain_root, homepage_url
+            
+    except Exception as e:
+        logd(f"[DOMAIN] Enhanced resolver error: {e}")
+        # Fall back to old method if new resolver fails
+        candidate = discover_domain_by_search(company_name, g_api_key, g_cse_id)
+        if candidate:
+            url = validate_domain_to_url(candidate)
+            if url:
+                return candidate, url
+    
     return None, None
 
 # ---------- Env helpers ----------
