@@ -21,7 +21,7 @@ BLOCK_HOSTS = {
     "linkedin.com","x.com","twitter.com","facebook.com","instagram.com","youtube.com",
     "github.com","medium.com","substack.com","notion.so","notion.site","angel.co",
     "wikipedia.org","crunchbase.com","pitchbook.com","tracxn.com","cbinsights.com",
-    "producthunt.com","read.cv","about.me","glassdoor.com","indeed.com",
+    "producthunt.com","read.cv","about.me","glassdoor.com","indeed.com","stackexchange.com",
     # Big media / local media
     "bloomberg.com","wsj.com","ft.com","reuters.com","apnews.com","yahoo.com",
     "techcrunch.com","theverge.com","forbes.com","fortune.com","businessinsider.com",
