@@ -159,8 +159,19 @@ def resolve_domain_for_org(org: dict, g_api_key: Optional[str], g_cse_id: Option
     3. Only search for new domains if CSV has nothing
     """
     # These come from the metabase CSV - absolute priority - handle None values safely
-    csv_domain_root = str(org.get("domain_root") or "").strip() or None
-    csv_website = str(org.get("website") or "").strip() or None
+    csv_domain_root = org.get("domain_root")
+    csv_website = org.get("website")
+    
+    # Handle pandas NaN, None, empty strings, and string 'None' values
+    if csv_domain_root is None or str(csv_domain_root).strip().lower() in ('', 'none', 'nan'):
+        csv_domain_root = None
+    else:
+        csv_domain_root = str(csv_domain_root).strip()
+        
+    if csv_website is None or str(csv_website).strip().lower() in ('', 'none', 'nan'):
+        csv_website = None  
+    else:
+        csv_website = str(csv_website).strip()
     
     # Debug: Always show for 97labs or when DEBUG is on
     callsign = org.get("callsign", "unknown")
@@ -658,9 +669,28 @@ def main():
                 continue
             owners_raw = r[pcols.get("beneficial_owners")] if pcols.get("beneficial_owners") in r else ""
             owners = [s.strip() for s in str(owners_raw or "").split(",") if s.strip()]
-            # Debug: Show what we're reading from CSV
+            # Debug: Show what we're reading from CSV - handle pandas NaN values properly
+            import pandas as pd
             csv_domain_root_val = r[pcols.get("domain_root")] if pcols.get("domain_root") in r else None
             csv_website_val = r[pcols.get("website")] if pcols.get("website") in r else None
+            
+            # Convert pandas NaN to None
+            if pd.isna(csv_domain_root_val):
+                csv_domain_root_val = None
+            if pd.isna(csv_website_val):
+                csv_website_val = None
+                
+            # Convert to strings only if not None, and strip whitespace
+            if csv_domain_root_val is not None:
+                csv_domain_root_val = str(csv_domain_root_val).strip()
+                if not csv_domain_root_val:  # Empty string becomes None
+                    csv_domain_root_val = None
+                    
+            if csv_website_val is not None:
+                csv_website_val = str(csv_website_val).strip()
+                if not csv_website_val:  # Empty string becomes None
+                    csv_website_val = None
+                    
             if DEBUG or cs == "97labs":  # Always show for 97labs
                 print(f"[CSV DEBUG] {cs}: domain_root='{csv_domain_root_val}', website='{csv_website_val}'")
                 print(f"[CSV DEBUG] {cs}: available columns: {list(pcols.keys())}")
