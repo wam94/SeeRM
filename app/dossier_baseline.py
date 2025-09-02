@@ -153,39 +153,44 @@ def discover_domain_by_search(name: str, g_api_key: Optional[str], g_cse_id: Opt
 
 def resolve_domain_for_org(org: dict, g_api_key: Optional[str], g_cse_id: Optional[str]) -> tuple[Optional[str], Optional[str]]:
     """
-    Domain resolution with CSV-first priority:
-    1. Trust CSV website data (if accessible)
-    2. Trust existing domain/website data (if accessible)  
-    3. Only search for new domains if nothing exists
+    Domain resolution with CSV metabase data as absolute priority:
+    1. Trust CSV domain_root field first (from metabase report)
+    2. Trust CSV website field second  
+    3. Only search for new domains if CSV has nothing
     """
-    raw_site = (org.get("website") or "").strip() or None
-    raw_domain = (org.get("domain") or org.get("domain_root") or "").strip() or None
+    # These come from the metabase CSV - absolute priority - handle None values safely
+    csv_domain_root = str(org.get("domain_root") or "").strip() or None
+    csv_website = str(org.get("website") or "").strip() or None
     
-    # PRIORITY 1: If we have a website from CSV data, trust it (unless clearly broken)
-    if raw_site:
-        if _website_is_accessible(raw_site):
-            domain_root = compute_domain_root(raw_site)
-            logd(f"[DOMAIN] Trusting CSV website: {raw_site} -> domain: {domain_root}")
-            return domain_root, raw_site
+    # PRIORITY 1: CSV domain_root field (from metabase) is gospel
+    if csv_domain_root:
+        # Trust the CSV domain_root completely, construct URL from it
+        if _website_is_accessible(f"https://{csv_domain_root}"):
+            logd(f"[DOMAIN] Trusting CSV domain_root: {csv_domain_root} (accessible)")
+            return csv_domain_root, f"https://{csv_domain_root}"
+        elif _website_is_accessible(f"https://www.{csv_domain_root}"):
+            logd(f"[DOMAIN] Trusting CSV domain_root: {csv_domain_root} (www accessible)")
+            return csv_domain_root, f"https://www.{csv_domain_root}"
         else:
-            logd(f"[DOMAIN] CSV website not accessible (404 etc): {raw_site}")
-            # Continue to check other sources
+            # Even if not accessible, trust CSV data (may be temporary issue)
+            logd(f"[DOMAIN] Trusting CSV domain_root: {csv_domain_root} (not accessible but preserving)")
+            return csv_domain_root, f"https://{csv_domain_root}"
     
-    # PRIORITY 2: If we have an existing domain field, trust it (unless clearly broken)
-    if raw_domain:
-        url = validate_domain_to_url(raw_domain)
-        if url:  
-            logd(f"[DOMAIN] Existing domain validated: {raw_domain} -> {url}")
-            return raw_domain, url
+    # PRIORITY 2: CSV website field (from metabase) 
+    if csv_website:
+        if _website_is_accessible(csv_website):
+            domain_root = compute_domain_root(csv_website)
+            logd(f"[DOMAIN] Trusting CSV website: {csv_website} -> domain: {domain_root}")
+            return domain_root, csv_website
         else:
-            # Domain field exists but not accessible - still preserve it
-            logd(f"[DOMAIN] Existing domain validation failed, preserving: {raw_domain}")
-            fallback_url = f"https://{raw_domain}"
-            return raw_domain, fallback_url
+            # Even if not accessible, trust CSV data
+            domain_root = compute_domain_root(csv_website)
+            logd(f"[DOMAIN] Trusting CSV website: {csv_website} (not accessible but preserving)")
+            return domain_root, csv_website
     
-    # PRIORITY 3: Only search for new domains if we have NOTHING
+    # PRIORITY 3: Only search for new domains if CSV has NO domain/website data
     if not (g_api_key and g_cse_id):
-        logd(f"[DOMAIN] No search credentials available")
+        logd(f"[DOMAIN] No CSV domain/website data and no search credentials")
         return None, None
         
     try:
@@ -198,7 +203,7 @@ def resolve_domain_for_org(org: dict, g_api_key: Optional[str], g_cse_id: Option
             logd(f"[DOMAIN] No company name for search")
             return None, None
             
-        logd(f"[DOMAIN] No website/domain found - searching for: {company_name}")
+        logd(f"[DOMAIN] No CSV domain/website data - searching for: {company_name}")
         result = resolve_domain(company_name, owners_csv, g_api_key, g_cse_id, debug=DEBUG)
         
         if result and result.get("domain_root") and result.get("homepage_url"):
@@ -214,8 +219,11 @@ def resolve_domain_for_org(org: dict, g_api_key: Optional[str], g_cse_id: Option
         if candidate:
             url = validate_domain_to_url(candidate)
             if url:
+                logd(f"[DOMAIN] Fallback search found: {candidate} -> {url}")
                 return candidate, url
     
+    # No domain found anywhere
+    logd(f"[DOMAIN] No domain found for {company_name}")
     return None, None
 
 # ---------- Env helpers ----------
@@ -719,24 +727,21 @@ def main():
         org = prof.get(cs, {"callsign": cs, "dba": cs, "owners": []})
         
         try:
-            # Show what data we have before processing
-            existing_website = org.get("website", "").strip()
-            existing_domain = org.get("domain", "").strip() or org.get("domain_root", "").strip()
-            logd(f"[DOMAIN] {cs} - CSV website: '{existing_website}' | Existing domain: '{existing_domain}'")
+            # Show what CSV metabase data we have before processing
+            csv_website = str(org.get("website") or "").strip()
+            csv_domain_root = str(org.get("domain_root") or "").strip()
+            logd(f"[DOMAIN] {cs} - CSV metabase website: '{csv_website}' | CSV domain_root: '{csv_domain_root}'")
             
-            # Resolve domain only if we don't have valid website/domain data
-            if not has_valid_domain(org):
-                logd(f"[DOMAIN] {cs} - No valid website/domain found, searching...")
-                dr, url = resolve_domain_for_org(org, g_api_key, g_cse_id)
-                if dr:
-                    org["domain"] = dr
-                    org["domain_root"] = dr
-                    org["website"] = org.get("website") or url
-                    logd(f"[DOMAIN] {cs} - Found and set new domain: {dr} -> {url}")
-                else:
-                    logd(f"[DOMAIN] {cs} - No domain found via search")
+            # Always resolve domain - function will prioritize CSV data or search as needed
+            dr, url = resolve_domain_for_org(org, g_api_key, g_cse_id)
+            if dr:
+                # Update org with resolved domain info for Notion push
+                org["domain"] = dr
+                org["domain_root"] = dr
+                org["website"] = url  # Use the resolved URL (which may be from CSV or search)
+                logd(f"[DOMAIN] {cs} - Set domain: {dr} -> {url}")
             else:
-                logd(f"[DOMAIN] {cs} - Preserving existing data (CSV website or domain field present)")
+                logd(f"[DOMAIN] {cs} - No domain resolved")
 
             # Collect intelligence data
             news_items = collect_recent_news(org, lookback_days, g_api_key, g_cse_id)

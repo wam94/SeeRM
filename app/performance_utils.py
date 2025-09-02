@@ -137,18 +137,15 @@ def cached_text_hash_extract(text_hash: int, extraction_func_name: str) -> str:
 
 def has_valid_domain(org: Dict[str, Any]) -> bool:
     """
-    Check if organization already has domain/website data that should be preserved.
-    Prioritizes CSV website data over existing domain fields.
+    Check if organization has CSV metabase domain/website data that should be preserved.
+    CSV domain_root and website fields are absolute priority over any existing Notion data.
     """
-    website = (org.get("website") or "").strip()
-    domain = (org.get("domain") or org.get("domain_root") or "").strip()
+    # CSV metabase fields are priority - if these exist, don't search - handle None values safely
+    csv_domain_root = str(org.get("domain_root") or "").strip()
+    csv_website = str(org.get("website") or "").strip()
     
-    # If we have website from CSV, always trust it
-    if website:
-        return True
-        
-    # If we have domain field, preserve it too
-    if domain:
+    # If we have either CSV field, always preserve (don't search)
+    if csv_domain_root or csv_website:
         return True
         
     return False
