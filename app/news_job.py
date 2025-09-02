@@ -15,6 +15,84 @@ from app.notion_client import (
     upsert_company_page, set_latest_intel, append_intel_log
 )
 
+# ---------------- Notion helpers for new company detection ----------------
+
+NOTION_API = "https://api.notion.com/v1"
+NOTION_HEADERS = lambda: {
+    "Authorization": f"Bearer {os.environ['NOTION_API_KEY']}",
+    "Notion-Version": os.getenv("NOTION_VERSION","2022-06-28"),
+    "Content-Type": "application/json",
+}
+
+def _dash32(x: str) -> str:
+    return re.sub(r'^(.{8})(.{4})(.{4})(.{4})(.{12})$', r'\1-\2-\3-\4-\5', re.sub(r'-','',x))
+
+def _companies_title_prop(companies_db_id: str) -> str:
+    r = requests.get(f"{NOTION_API}/databases/{_dash32(companies_db_id)}", headers=NOTION_HEADERS(), timeout=30)
+    r.raise_for_status()
+    props = r.json().get("properties", {})
+    for k,v in props.items():
+        if v.get("type") == "title":
+            return k
+    return "Name"
+
+def _find_company_page(companies_db_id: str, title_prop: str, callsign: str) -> Optional[str]:
+    q = {
+        "filter": {"property": title_prop, "title": {"equals": callsign}}
+    }
+    r = requests.post(f"{NOTION_API}/databases/{_dash32(companies_db_id)}/query",
+                      headers=NOTION_HEADERS(), json=q, timeout=30)
+    r.raise_for_status()
+    res = r.json().get("results", [])
+    return res[0]["id"] if res else None
+
+def _set_needs_dossier(page_id: str, needs: bool = True):
+    """Set the 'Needs Dossier' checkbox property for a company page."""
+    props = {"Needs Dossier": {"checkbox": needs}}
+    r = requests.patch(f"{NOTION_API}/pages/{page_id}", 
+                       headers=NOTION_HEADERS(), 
+                       json={"properties": props}, 
+                       timeout=30)
+    r.raise_for_status()
+
+def ensure_company_page(companies_db_id: str, callsign: str,
+                        website: Optional[str]=None,
+                        domain: Optional[str]=None,
+                        company: Optional[str]=None) -> tuple[str,bool]:
+    """
+    Returns (page_id, created_flag).
+    Creates a Companies page if missing; sets Website/Domain when present in schema.
+    """
+    title_prop = _companies_title_prop(companies_db_id)
+    pid = _find_company_page(companies_db_id, title_prop, callsign)
+    created = False
+
+    props = { title_prop: {"title":[{"type":"text","text":{"content": callsign[:200]}}]} }
+    # We write extra props only if they exist in schema (URL or rich_text)
+    schema = requests.get(f"{NOTION_API}/databases/{_dash32(companies_db_id)}", headers=NOTION_HEADERS(), timeout=30).json().get("properties",{})
+
+    if company and schema.get("Company",{}).get("type") == "rich_text":
+        props["Company"] = {"rich_text":[{"type":"text","text":{"content": company[:1000]}}]}
+    if website and schema.get("Website",{}).get("type") == "url":
+        props["Website"] = {"url": website}
+    if domain:
+        if schema.get("Domain",{}).get("type") == "url":
+            props["Domain"] = {"url": f"https://{domain}"}
+        elif schema.get("Domain",{}).get("type") == "rich_text":
+            props["Domain"] = {"rich_text":[{"type":"text","text":{"content": domain}}]}
+
+    if pid:
+        requests.patch(f"{NOTION_API}/pages/{pid}", headers=NOTION_HEADERS(), json={"properties": props}, timeout=30).raise_for_status()
+    else:
+        r = requests.post(f"{NOTION_API}/pages", headers=NOTION_HEADERS(),
+                          json={"parent":{"database_id": _dash32(companies_db_id)},
+                                "properties": props}, timeout=30)
+        r.raise_for_status()
+        pid = r.json()["id"]
+        created = True
+
+    return pid, created
+
 # ---------------- Gmail CSV fetch ----------------
 
 def fetch_csv_by_subject(service, user: str, subject: str) -> Optional[pd.DataFrame]:
@@ -345,6 +423,35 @@ def main():
             "industry_tags": r[cols.get("industry_tags")] if cols.get("industry_tags") in r else None,
             "blog_url": r[cols.get("blog_url")] if cols.get("blog_url") in r else None,
         }
+
+    # Detect new companies and flag for baseline generation
+    new_callsigns: List[str] = []
+    companies_db = os.getenv("NOTION_COMPANIES_DB_ID")
+    
+    if companies_db:
+        for cs, org in roster.items():
+            callsign = str(org.get("callsign") or "").strip()
+            dba = str(org.get("dba") or "").strip() or None
+            website = str(org.get("website") or "").strip() or None
+            domain = str(org.get("domain_root") or "").strip() or None
+            
+            if callsign:
+                try:
+                    page_id, created = ensure_company_page(companies_db, callsign, 
+                                                         website=website, domain=domain, company=dba)
+                    if created:
+                        new_callsigns.append(callsign)
+                        # Set needs_dossier flag for new companies
+                        try:
+                            _set_needs_dossier(page_id, True)
+                            print(f"[NEW COMPANY] Created and flagged for baseline: {callsign}")
+                        except Exception as e:
+                            print(f"[ERROR] Failed to set needs_dossier for {callsign}: {e}")
+                except Exception as e:
+                    print(f"[ERROR] Failed to ensure company page for {callsign}: {e}")
+    
+    if new_callsigns:
+        print(f"[NEW COMPANIES] Created {len(new_callsigns)} new company pages: {', '.join(new_callsigns[:8])}{' ...' if len(new_callsigns) > 8 else ''}")
 
     # Collect intel
     intel_by_cs: Dict[str, List[Dict[str, Any]]] = {}

@@ -33,7 +33,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run probe_domain
+      - name: Run domain resolver
         env:
           PYTHONPATH: ${{ github.workspace }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
@@ -41,11 +41,11 @@ jobs:
           BASELINE_DEBUG: 'true'   # show debug lines from the probe if available
         run: |
           set -euo pipefail
-          echo "== Probe Domain =="
+          echo "== Domain Resolver (Smart) =="
           echo "Company: ${{ inputs.name }}"
           if [ -n "${{ inputs.owners }}" ]; then
             echo "Owners:  ${{ inputs.owners }}"
-            python -m scripts.probe_domain "${{ inputs.name }}" "${{ inputs.owners }}"
+            python -m scripts.domain_resolver "${{ inputs.name }}" "${{ inputs.owners }}"
           else
-            python -m scripts.probe_domain "${{ inputs.name }}"
+            python -m scripts.domain_resolver "${{ inputs.name }}"
           fi
