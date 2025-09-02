@@ -214,7 +214,7 @@ jobs:
           NOTION_COMPANIES_DB_ID: ${{ secrets.NOTION_COMPANIES_DB_ID }}
 
           # App knobs
-          BASELINE_CALLSIGNS: ALL
+          BASELINE_CALLSIGNS: ${{ inputs.scope }}
           BASELINE_LOOKBACK_DAYS: ${{ inputs.lookback_days }}
           BASELINE_DISABLE_CSE: ${{ env.BASELINE_DISABLE_CSE }}
           BASELINE_CSE_MAX_QUERIES: ${{ env.BASELINE_CSE_MAX_QUERIES }}
