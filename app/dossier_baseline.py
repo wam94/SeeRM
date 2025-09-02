@@ -106,6 +106,19 @@ def _head_ok(url: str) -> bool:
     except Exception:
         return False
 
+def _website_is_accessible(url: str) -> bool:
+    """More permissive check - only fail on clear errors like 404."""
+    try:
+        r = requests.head(url, timeout=6, allow_redirects=True)
+        # Allow anything except clear client errors (4xx except 403 which can be anti-bot)
+        return r.status_code < 400 or r.status_code == 403
+    except requests.RequestException:
+        # Network errors, timeouts etc. - assume the website is valid
+        return True
+    except Exception:
+        # Any other error - assume the website is valid
+        return True
+
 def validate_domain_to_url(domain_root: str) -> str | None:
     candidates = [
         f"https://{domain_root}",
@@ -139,22 +152,40 @@ def discover_domain_by_search(name: str, g_api_key: Optional[str], g_cse_id: Opt
     return None
 
 def resolve_domain_for_org(org: dict, g_api_key: Optional[str], g_cse_id: Optional[str]) -> tuple[Optional[str], Optional[str]]:
-    """Enhanced domain resolution using the new domain resolver."""
-    # First check if we already have a valid domain
+    """
+    Domain resolution with CSV-first priority:
+    1. Trust CSV website data (if accessible)
+    2. Trust existing domain/website data (if accessible)  
+    3. Only search for new domains if nothing exists
+    """
     raw_site = (org.get("website") or "").strip() or None
     raw_domain = (org.get("domain") or org.get("domain_root") or "").strip() or None
     
-    if raw_domain is None and raw_site:
-        raw_domain = compute_domain_root(raw_site)
+    # PRIORITY 1: If we have a website from CSV data, trust it (unless clearly broken)
+    if raw_site:
+        if _website_is_accessible(raw_site):
+            domain_root = compute_domain_root(raw_site)
+            logd(f"[DOMAIN] Trusting CSV website: {raw_site} -> domain: {domain_root}")
+            return domain_root, raw_site
+        else:
+            logd(f"[DOMAIN] CSV website not accessible (404 etc): {raw_site}")
+            # Continue to check other sources
     
-    # If we have a domain, validate it and return
+    # PRIORITY 2: If we have an existing domain field, trust it (unless clearly broken)
     if raw_domain:
         url = validate_domain_to_url(raw_domain)
-        if url:  # Only return if validation passes
+        if url:  
+            logd(f"[DOMAIN] Existing domain validated: {raw_domain} -> {url}")
             return raw_domain, url
+        else:
+            # Domain field exists but not accessible - still preserve it
+            logd(f"[DOMAIN] Existing domain validation failed, preserving: {raw_domain}")
+            fallback_url = f"https://{raw_domain}"
+            return raw_domain, fallback_url
     
-    # Use new enhanced domain resolver for discovery
+    # PRIORITY 3: Only search for new domains if we have NOTHING
     if not (g_api_key and g_cse_id):
+        logd(f"[DOMAIN] No search credentials available")
         return None, None
         
     try:
@@ -164,19 +195,20 @@ def resolve_domain_for_org(org: dict, g_api_key: Optional[str], g_cse_id: Option
         owners_csv = ",".join(org.get("owners") or [])
         
         if not company_name:
+            logd(f"[DOMAIN] No company name for search")
             return None, None
             
-        logd(f"[DOMAIN] Using enhanced resolver for: {company_name}")
+        logd(f"[DOMAIN] No website/domain found - searching for: {company_name}")
         result = resolve_domain(company_name, owners_csv, g_api_key, g_cse_id, debug=DEBUG)
         
         if result and result.get("domain_root") and result.get("homepage_url"):
             domain_root = result["domain_root"]
             homepage_url = result["homepage_url"]
-            logd(f"[DOMAIN] Enhanced resolver found: {domain_root} -> {homepage_url} (score: {result.get('score', 0)})")
+            logd(f"[DOMAIN] Search found new domain: {domain_root} -> {homepage_url} (score: {result.get('score', 0)})")
             return domain_root, homepage_url
             
     except Exception as e:
-        logd(f"[DOMAIN] Enhanced resolver error: {e}")
+        logd(f"[DOMAIN] Search error: {e}")
         # Fall back to old method if new resolver fails
         candidate = discover_domain_by_search(company_name, g_api_key, g_cse_id)
         if candidate:
@@ -687,15 +719,24 @@ def main():
         org = prof.get(cs, {"callsign": cs, "dba": cs, "owners": []})
         
         try:
-            # Resolve domain with redundancy check
-            if not has_valid_domain(org) or should_skip_processing(org, "domain_resolution"):
+            # Show what data we have before processing
+            existing_website = org.get("website", "").strip()
+            existing_domain = org.get("domain", "").strip() or org.get("domain_root", "").strip()
+            logd(f"[DOMAIN] {cs} - CSV website: '{existing_website}' | Existing domain: '{existing_domain}'")
+            
+            # Resolve domain only if we don't have valid website/domain data
+            if not has_valid_domain(org):
+                logd(f"[DOMAIN] {cs} - No valid website/domain found, searching...")
                 dr, url = resolve_domain_for_org(org, g_api_key, g_cse_id)
                 if dr:
                     org["domain"] = dr
                     org["domain_root"] = dr
                     org["website"] = org.get("website") or url
-                if DEBUG:
-                    print(f"[DOMAIN] cs={org.get('callsign')} -> domain_root={dr} url={url}")
+                    logd(f"[DOMAIN] {cs} - Found and set new domain: {dr} -> {url}")
+                else:
+                    logd(f"[DOMAIN] {cs} - No domain found via search")
+            else:
+                logd(f"[DOMAIN] {cs} - Preserving existing data (CSV website or domain field present)")
 
             # Collect intelligence data
             news_items = collect_recent_news(org, lookback_days, g_api_key, g_cse_id)

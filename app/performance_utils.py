@@ -136,18 +136,19 @@ def cached_text_hash_extract(text_hash: int, extraction_func_name: str) -> str:
     return ""
 
 def has_valid_domain(org: Dict[str, Any]) -> bool:
-    """Check if organization already has a valid domain."""
-    domain = (org.get("domain") or org.get("domain_root") or "").strip()
+    """
+    Check if organization already has domain/website data that should be preserved.
+    Prioritizes CSV website data over existing domain fields.
+    """
     website = (org.get("website") or "").strip()
+    domain = (org.get("domain") or org.get("domain_root") or "").strip()
     
-    if not domain and not website:
-        return False
-    
-    # Use cached validation to avoid redundant checks
-    if domain and cached_domain_validation(domain):
+    # If we have website from CSV, always trust it
+    if website:
         return True
         
-    if website and cached_domain_validation(website):
+    # If we have domain field, preserve it too
+    if domain:
         return True
         
     return False
