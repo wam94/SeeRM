@@ -134,3 +134,34 @@ def resolve_domain(company_name: str,
         return None
     scored.sort(key=lambda x: x[0], reverse=True)
     return scored[0][1]
+
+def probe(name: str, owners_csv: str = ""):
+    """CLI interface for domain resolution testing."""
+    owners = [s.strip() for s in owners_csv.split(",") if s.strip()] if owners_csv else []
+    g_key = os.getenv("GOOGLE_API_KEY")
+    g_cse = os.getenv("GOOGLE_CSE_ID")
+    
+    # Use existing hints structure (empty for testing)
+    hints = {"owners": owners} if owners else {}
+    
+    result = resolve_domain(name, g_key, g_cse, hints)
+    
+    print(f"Name: {name}")
+    print(f"Owners: {owners}")
+    if result:
+        print(f"Chosen domain: {result['domain_root']}")
+        print(f"Validated URL: {result['homepage_url']}")
+        print(f"Score: {result['score']}")
+        print(f"Why: {result['why']}")
+    else:
+        print("Chosen domain: None")
+        print("Validated URL: None")
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) < 2:
+        print("Usage: python -m scripts.domain_resolver \"Company Name\" [\"Owner One,Owner Two\"]")
+        raise SystemExit(2)
+    name = sys.argv[1]
+    owners = sys.argv[2] if len(sys.argv) > 2 else ""
+    probe(name, owners)
