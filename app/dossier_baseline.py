@@ -160,6 +160,10 @@ def _normalize_csv_text(x: Any) -> Optional[str]:
     if _is_blank(x): return None
     return str(x).strip()
 
+def _norm(x: Any) -> Optional[str]:
+    """Normalize CSV cell to a clean string or None."""
+    return None if _is_blank(x) else str(x).strip()
+
 def resolve_domain_for_org(org: dict, g_api_key: Optional[str], g_cse_id: Optional[str]) -> tuple[Optional[str], Optional[str]]:
     """
     Final authority order:
@@ -168,37 +172,25 @@ def resolve_domain_for_org(org: dict, g_api_key: Optional[str], g_cse_id: Option
       3) Search (domain_resolver). Only if BOTH CSV fields are empty.
     Returns: (domain_root, homepage_url) – either or both may be None.
     """
-    callsign = org.get("callsign", "unknown")
-    print(f"[RESOLVE DEBUG] {callsign}: Starting domain resolution")
-    print(f"[RESOLVE DEBUG] {callsign}: org keys = {list(org.keys())}")
-    print(f"[RESOLVE DEBUG] {callsign}: raw domain_root = '{org.get('domain_root')}', raw website = '{org.get('website')}'")
-    
-    csv_domain_root = _normalize_csv_text(org.get("domain_root"))
-    csv_website     = _normalize_csv_text(org.get("website"))
-    
-    print(f"[RESOLVE DEBUG] {callsign}: normalized csv_domain_root = '{csv_domain_root}', csv_website = '{csv_website}'")
+    csv_domain_root = _norm(org.get("domain_root"))
+    csv_website     = _norm(org.get("website"))
 
-    # 1) Trust CSV domain_root
+    # 1) CSV domain_root is gospel
     if csv_domain_root:
         for u in (f"https://{csv_domain_root}", f"https://www.{csv_domain_root}", f"http://{csv_domain_root}"):
             if _website_is_accessible(u):
                 logd(f"[DOMAIN] Trust CSV domain_root -> {csv_domain_root} ({u})")
                 return csv_domain_root, u
-        # Even if we couldn't verify, keep the CSV truth
         return csv_domain_root, f"https://{csv_domain_root}"
 
-    # 2) Trust CSV website
+    # 2) CSV website is trusted
     if csv_website:
         url = ensure_http(csv_website) or csv_website
-        # accept even if HEAD is cranky
-        if _website_is_accessible(url):
-            dom = compute_domain_root(url) or None
-            logd(f"[DOMAIN] Trust CSV website -> {url} (root={dom})")
-            return dom, url
         dom = compute_domain_root(url) or None
+        logd(f"[DOMAIN] Trust CSV website -> {url} (root={dom})")
         return dom, url
 
-    # 3) Search only when CSV has neither
+    # 3) Only then search
     company_name = (org.get("dba") or org.get("callsign") or "").strip()
     if not company_name or not (g_api_key and g_cse_id):
         return None, None
@@ -650,33 +642,27 @@ def main():
                 continue
             owners_raw = r[pcols.get("beneficial_owners")] if pcols.get("beneficial_owners") in r else ""
             owners = [s.strip() for s in str(owners_raw or "").split(",") if s.strip()]
-            # Debug: Show what we're reading from CSV - handle pandas NaN values properly
-            import pandas as pd
-            csv_domain_root_val = r[pcols.get("domain_root")] if pcols.get("domain_root") in r else None
-            csv_website_val = r[pcols.get("website")] if pcols.get("website") in r else None
             
-            # Convert pandas NaN to None
-            if pd.isna(csv_domain_root_val):
-                csv_domain_root_val = None
-            if pd.isna(csv_website_val):
-                csv_website_val = None
-                
-            # Convert to strings only if not None, and strip whitespace
-            if csv_domain_root_val is not None:
-                csv_domain_root_val = str(csv_domain_root_val).strip()
-                if not csv_domain_root_val:  # Empty string becomes None
-                    csv_domain_root_val = None
-                    
-            if csv_website_val is not None:
-                csv_website_val = str(csv_website_val).strip()
-                if not csv_website_val:  # Empty string becomes None
-                    csv_website_val = None
+            # BEFORE building base
+            dom_val = None
+            web_val = None
+
+            # accept domain_root OR domain
+            p_dom_col = pcols.get("domain_root") or pcols.get("domain")
+            if p_dom_col in r:
+                dom_val = _norm(r[p_dom_col])
+
+            # accept website/homepage/site/url
+            for cand in ("website", "homepage", "site", "url"):
+                c = pcols.get(cand)
+                if c in r and _norm(r[c]):
+                    web_val = _norm(r[c])
+                    break
                     
             # ALWAYS show debug for 97labs (remove DEBUG dependency)
             print(f"[CSV DEBUG] Processing callsign: '{cs}'")
             if cs == "97labs":
-                print(f"[CSV DEBUG] {cs}: domain_root='{csv_domain_root_val}', website='{csv_website_val}'")
-                print(f"[CSV DEBUG] {cs}: raw domain_root from CSV: '{r[pcols.get('domain_root')] if pcols.get('domain_root') in r else 'MISSING'}'")
+                print(f"[CSV DEBUG] {cs}: domain_root='{dom_val}', website='{web_val}'")
                 print(f"[CSV DEBUG] {cs}: available columns: {list(pcols.keys())}")
                 print(f"[CSV DEBUG] {cs}: Full row data:")
                 for col_key, col_name in pcols.items():
@@ -685,22 +671,23 @@ def main():
                 
             base = {
                 "callsign": r[pcols.get("callsign")],
-                "dba": r[pcols.get("dba")] if pcols.get("dba") in r else None,
-                "website": csv_website_val,
-                "domain_root": csv_domain_root_val,
-                "aka_names": r[pcols.get("aka_names")] if pcols.get("aka_names") in r else None,
-                "blog_url": r[pcols.get("blog_url")] if pcols.get("blog_url") in r else None,
-                "rss_feeds": r[pcols.get("rss_feeds")] if pcols.get("rss_feeds") in r else None,
-                "linkedin_url": r[pcols.get("linkedin_url")] if pcols.get("linkedin_url") in r else None,
-                "twitter_handle": r[pcols.get("twitter_handle")] if pcols.get("twitter_handle") in r else None,
-                "crunchbase_url": r[pcols.get("crunchbase_url")] if pcols.get("crunchbase_url") in r else None,
-                "industry_tags": r[pcols.get("industry_tags")] if pcols.get("industry_tags") in r else None,
-                "hq_city": r[pcols.get("hq_city")] if pcols.get("hq_city") in r else None,
-                "hq_region": r[pcols.get("hq_region")] if pcols.get("hq_region") in r else None,
-                "hq_country": r[pcols.get("hq_country")] if pcols.get("hq_country") in r else None,
+                "dba": _norm(r[pcols.get("dba")]) if pcols.get("dba") in r else None,
+                "website": web_val,
+                "domain_root": dom_val,
+                "aka_names": _norm(r[pcols.get("aka_names")]) if pcols.get("aka_names") in r else None,
+                "blog_url": _norm(r[pcols.get("blog_url")]) if pcols.get("blog_url") in r else None,
+                "rss_feeds": _norm(r[pcols.get("rss_feeds")]) if pcols.get("rss_feeds") in r else None,
+                "linkedin_url": _norm(r[pcols.get("linkedin_url")]) if pcols.get("linkedin_url") in r else None,
+                "twitter_handle": _norm(r[pcols.get("twitter_handle")]) if pcols.get("twitter_handle") in r else None,
+                "crunchbase_url": _norm(r[pcols.get("crunchbase_url")]) if pcols.get("crunchbase_url") in r else None,
+                "industry_tags": _norm(r[pcols.get("industry_tags")]) if pcols.get("industry_tags") in r else None,
+                "hq_city": _norm(r[pcols.get("hq_city")]) if pcols.get("hq_city") in r else None,
+                "hq_region": _norm(r[pcols.get("hq_region")]) if pcols.get("hq_region") in r else None,
+                "hq_country": _norm(r[pcols.get("hq_country")]) if pcols.get("hq_country") in r else None,
                 "owners": owners,
             }
-            # Preserve CSV domain_root - only compute from website if domain_root is missing
+            
+            # If no CSV domain_root but we do have website, derive it
             if not base.get("domain_root"):
                 base["domain_root"] = compute_domain_root(base.get("website"))
             prof[cs] = base
@@ -709,21 +696,40 @@ def main():
         wcols = lower_cols(weekly)
         for _, r in weekly.iterrows():
             cs = str(r[wcols.get("callsign")]).strip().lower() if wcols.get("callsign") in r else ""
-            if not cs:
+            if not cs: 
                 continue
+
             base = prof.get(cs, {"callsign": r[wcols.get("callsign")], "owners": []})
-            if not base.get("dba") and wcols.get("dba") in r:
-                base["dba"] = r[wcols.get("dba")]
-            if not base.get("website") and wcols.get("website") in r:
-                base["website"] = r[wcols.get("website")]
+
+            # dba
+            if (not base.get("dba")) and wcols.get("dba") in r:
+                base["dba"] = _norm(r[wcols.get("dba")])
+
+            # website (first non-blank among common headings)
+            if not base.get("website"):
+                for cand in ("website","homepage","site","url"):
+                    c = wcols.get(cand)
+                    if c in r and _norm(r[c]):
+                        base["website"] = _norm(r[c])
+                        break
+
+            # beneficial owners
             if wcols.get("beneficial_owners") in r:
                 owners_raw = r[wcols.get("beneficial_owners")]
                 owners = [s.strip() for s in str(owners_raw or "").split(",") if s.strip()]
                 if owners:
                     base["owners"] = sorted(set((base.get("owners") or []) + owners))
-            # Preserve CSV domain_root - only compute from website if domain_root is missing
+
+            # domain_root / domain — TRUST CSV, but fill from weekly if missing
+            if not base.get("domain_root"):
+                w_dom_col = wcols.get("domain_root") or wcols.get("domain")
+                if w_dom_col in r and _norm(r[w_dom_col]):
+                    base["domain_root"] = _norm(r[w_dom_col])
+
+            # If still missing, derive from website
             if not base.get("domain_root"):
                 base["domain_root"] = compute_domain_root(base.get("website"))
+
             prof[cs] = base
 
     base_list = sorted(prof.keys())
@@ -749,6 +755,11 @@ def main():
     if not targets_keys:
         print("No callsigns in this batch; nothing to do.")
         return
+
+    if os.getenv("BASELINE_DEBUG","").lower() in ("1","true","yes"):
+        for cs in sorted(targets_keys):
+            o = prof.get(cs,{})
+            print(f"[CSV AUDIT] {cs}: domain_root={o.get('domain_root')} website={o.get('website')} dba={o.get('dba')}")
 
     lookback_days = int(getenv("BASELINE_LOOKBACK_DAYS", "180") or "180")
     g_api_key = getenv("GOOGLE_API_KEY")
