@@ -1,0 +1,363 @@
+"""
+Digest service for weekly client digest generation.
+
+Handles the business logic for generating and sending weekly client digests.
+"""
+
+from datetime import datetime
+from typing import List, Dict, Any, Optional
+import structlog
+
+from app.core.config import Settings, DigestConfig
+from app.core.exceptions import WorkflowError, GmailError, ValidationError
+from app.core.models import Company, DigestData, ProcessingResult, WorkflowType, ProcessingStatus
+from app.data.gmail_client import EnhancedGmailClient
+from app.data.csv_parser import CSVProcessor
+from app.services.render_service import DigestRenderer
+
+logger = structlog.get_logger(__name__)
+
+
+class DigestService:
+    """
+    Service for generating and sending weekly client digests.
+    """
+    
+    def __init__(
+        self,
+        gmail_client: EnhancedGmailClient,
+        renderer: DigestRenderer,
+        config: DigestConfig
+    ):
+        self.gmail_client = gmail_client
+        self.renderer = renderer
+        self.config = config
+        self.csv_processor = CSVProcessor(strict_validation=False)
+        
+    def fetch_latest_csv_data(
+        self,
+        query: Optional[str] = None,
+        max_messages: int = 5
+    ) -> List[Company]:
+        """
+        Fetch and parse the latest CSV data from Gmail.
+        
+        Args:
+            query: Gmail search query (uses config default if None)
+            max_messages: Maximum messages to search
+            
+        Returns:
+            List of Company objects
+            
+        Raises:
+            WorkflowError: On processing errors
+        """
+        try:
+            logger.info("Fetching latest CSV data from Gmail")
+            
+            # Get latest CSV from Gmail
+            df = self.gmail_client.get_latest_csv_from_query(query, max_messages)
+            
+            if df is None:
+                raise WorkflowError("No CSV attachments found in Gmail messages")
+            
+            # Parse into Company objects
+            companies = self.csv_processor.parse_companies_csv(df)
+            
+            logger.info(
+                "CSV data processed successfully",
+                companies_count=len(companies),
+                columns=list(df.columns)
+            )
+            
+            return companies
+            
+        except Exception as e:
+            if isinstance(e, WorkflowError):
+                raise
+            
+            error_msg = f"Failed to fetch CSV data: {e}"
+            logger.error("CSV data fetch failed", error=str(e))
+            raise WorkflowError(error_msg)
+    
+    def generate_digest_data(self, companies: List[Company], top_n: Optional[int] = None) -> DigestData:
+        """
+        Generate digest data from company list.
+        
+        Args:
+            companies: List of Company objects
+            top_n: Number of top movers (uses config default if None)
+            
+        Returns:
+            DigestData object
+            
+        Raises:
+            WorkflowError: On processing errors
+        """
+        try:
+            top_movers = top_n or self.config.top_movers
+            
+            logger.info(
+                "Generating digest data",
+                companies_count=len(companies),
+                top_movers=top_movers
+            )
+            
+            # Calculate digest statistics and movements
+            digest_dict = self.csv_processor.calculate_digest_data(companies, top_movers)
+            
+            # Create DigestData object
+            digest_data = DigestData(
+                subject=self.config.subject or f"Client Weekly Digest — {datetime.now().date()}",
+                **digest_dict
+            )
+            
+            logger.info(
+                "Digest data generated",
+                total_accounts=digest_data.stats.total_accounts,
+                changed_accounts=digest_data.stats.changed_accounts,
+                top_gainers=len(digest_data.top_pct_gainers),
+                top_losers=len(digest_data.top_pct_losers)
+            )
+            
+            return digest_data
+            
+        except Exception as e:
+            error_msg = f"Failed to generate digest data: {e}"
+            logger.error("Digest generation failed", error=str(e))
+            raise WorkflowError(error_msg)
+    
+    def extract_new_account_callsigns(self, companies: List[Company]) -> List[str]:
+        """
+        Extract callsigns of new accounts for downstream processing.
+        
+        Args:
+            companies: List of Company objects
+            
+        Returns:
+            List of new account callsigns
+        """
+        new_callsigns = self.csv_processor.extract_new_callsigns(companies)
+        
+        if new_callsigns:
+            logger.info(
+                "New accounts detected",
+                count=len(new_callsigns),
+                callsigns=new_callsigns[:5]  # Log first 5
+            )
+        
+        return new_callsigns
+    
+    def write_new_callsigns_trigger(self, callsigns: List[str], trigger_file: str = "/tmp/new_callsigns.txt") -> None:
+        """
+        Write new callsigns to trigger file for downstream workflows.
+        
+        Args:
+            callsigns: List of callsigns to write
+            trigger_file: Path to trigger file
+        """
+        if not callsigns:
+            logger.debug("No new callsigns to write")
+            return
+        
+        try:
+            with open(trigger_file, "w") as f:
+                f.write(",".join(callsigns))
+            
+            logger.info(
+                "New callsigns trigger written",
+                file=trigger_file,
+                count=len(callsigns),
+                callsigns=callsigns[:5]
+            )
+            
+        except Exception as e:
+            error_msg = f"Failed to write new callsigns trigger: {e}"
+            logger.error("Trigger file write failed", error=str(e), file=trigger_file)
+            # Don't raise exception - this is not critical
+    
+    def send_digest_email(self, digest_data: DigestData, html_content: str) -> Dict[str, Any]:
+        """
+        Send digest email via Gmail.
+        
+        Args:
+            digest_data: Digest data for email metadata
+            html_content: Rendered HTML content
+            
+        Returns:
+            Gmail API response
+            
+        Raises:
+            WorkflowError: On sending errors
+        """
+        try:
+            # Determine recipients
+            to = self.config.to or self.gmail_client.config.user
+            cc = self.config.cc
+            bcc = self.config.bcc
+            
+            logger.info(
+                "Sending digest email",
+                to=to,
+                cc=cc,
+                bcc=bcc,
+                subject=digest_data.subject
+            )
+            
+            # Send email
+            response = self.gmail_client.send_html_email(
+                to=to,
+                subject=digest_data.subject,
+                html=html_content,
+                cc=cc,
+                bcc=bcc
+            )
+            
+            logger.info(
+                "Digest email sent successfully",
+                message_id=response.get("id"),
+                to=to
+            )
+            
+            return response
+            
+        except GmailError as e:
+            # Re-raise Gmail errors as workflow errors
+            raise WorkflowError(f"Failed to send digest email: {e}")
+        except Exception as e:
+            error_msg = f"Unexpected error sending digest email: {e}"
+            logger.error("Digest email send failed", error=str(e))
+            raise WorkflowError(error_msg)
+    
+    def run_digest_workflow(
+        self,
+        gmail_query: Optional[str] = None,
+        max_messages: int = 5
+    ) -> ProcessingResult:
+        """
+        Run the complete digest workflow.
+        
+        Args:
+            gmail_query: Gmail search query (optional)
+            max_messages: Max messages to search
+            
+        Returns:
+            ProcessingResult with workflow outcome
+        """
+        result = ProcessingResult(
+            workflow_type=WorkflowType.DIGEST,
+            started_at=datetime.now()
+        )
+        
+        try:
+            logger.info("Starting digest workflow")
+            
+            # Step 1: Fetch CSV data from Gmail
+            companies = self.fetch_latest_csv_data(gmail_query, max_messages)
+            result.items_processed = len(companies)
+            
+            # Step 2: Generate digest data
+            digest_data = self.generate_digest_data(companies)
+            
+            # Step 3: Render HTML
+            html_content = self.renderer.render_digest(digest_data)
+            
+            # Step 4: Extract new callsigns for downstream processing
+            new_callsigns = self.extract_new_account_callsigns(companies)
+            if new_callsigns:
+                self.write_new_callsigns_trigger(new_callsigns)
+            
+            # Step 5: Send digest email
+            email_response = self.send_digest_email(digest_data, html_content)
+            
+            # Update result
+            result.status = ProcessingStatus.COMPLETED
+            result.completed_at = datetime.now()
+            result.items_successful = len(companies)
+            result.data = {
+                "digest_stats": digest_data.stats.model_dump(),
+                "new_callsigns": new_callsigns,
+                "email_message_id": email_response.get("id"),
+                "html_length": len(html_content)
+            }
+            
+            if result.started_at:
+                duration = (result.completed_at - result.started_at).total_seconds()
+                result.duration_seconds = duration
+            
+            logger.info(
+                "Digest workflow completed successfully",
+                companies_processed=result.items_processed,
+                new_accounts=len(new_callsigns),
+                duration_seconds=result.duration_seconds
+            )
+            
+            return result
+            
+        except Exception as e:
+            # Update result with error
+            result.status = ProcessingStatus.FAILED
+            result.completed_at = datetime.now()
+            result.error_message = str(e)
+            result.error_details = {"error_type": type(e).__name__}
+            
+            if result.started_at:
+                duration = (result.completed_at - result.started_at).total_seconds()
+                result.duration_seconds = duration
+            
+            logger.error(
+                "Digest workflow failed",
+                error=str(e),
+                error_type=type(e).__name__,
+                duration_seconds=result.duration_seconds
+            )
+            
+            return result
+    
+    def health_check(self) -> Dict[str, Any]:
+        """
+        Perform health check for digest service.
+        
+        Returns:
+            Health status information
+        """
+        try:
+            # Check Gmail connectivity
+            gmail_health = self.gmail_client.health_check()
+            
+            return {
+                "status": "healthy" if gmail_health.get("status") == "healthy" else "unhealthy",
+                "gmail": gmail_health,
+                "config": {
+                    "gmail_user": self.gmail_client.config.user,
+                    "digest_to": self.config.to,
+                    "top_movers": self.config.top_movers
+                }
+            }
+            
+        except Exception as e:
+            return {
+                "status": "unhealthy",
+                "error": str(e),
+                "error_type": type(e).__name__
+            }
+
+
+def create_digest_service(
+    gmail_client: EnhancedGmailClient,
+    settings: Settings
+) -> DigestService:
+    """
+    Factory function to create digest service.
+    
+    Args:
+        gmail_client: Gmail client instance
+        settings: Application settings
+        
+    Returns:
+        Configured DigestService
+    """
+    from app.services.render_service import create_digest_renderer
+    
+    renderer = create_digest_renderer()
+    return DigestService(gmail_client, renderer, settings.digest)
