@@ -8,10 +8,11 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 import structlog
 
-from app.core.config import Settings, DigestConfig
+from app.core.config import Settings, DigestConfig, NotionConfig
 from app.core.exceptions import WorkflowError, GmailError, ValidationError
 from app.core.models import Company, DigestData, ProcessingResult, WorkflowType, ProcessingStatus
 from app.data.gmail_client import EnhancedGmailClient
+from app.data.notion_client import EnhancedNotionClient
 from app.data.csv_parser import CSVProcessor
 from app.services.render_service import DigestRenderer
 
@@ -27,11 +28,15 @@ class DigestService:
         self,
         gmail_client: EnhancedGmailClient,
         renderer: DigestRenderer,
-        config: DigestConfig
+        config: DigestConfig,
+        notion_client: Optional[EnhancedNotionClient] = None,
+        companies_db_id: Optional[str] = None
     ):
         self.gmail_client = gmail_client
         self.renderer = renderer
         self.config = config
+        self.notion_client = notion_client
+        self._companies_db_id = companies_db_id
         self.csv_processor = CSVProcessor(strict_validation=False)
         
     def fetch_latest_csv_data(
@@ -147,6 +152,76 @@ class DigestService:
             )
         
         return new_callsigns
+    
+    def sync_new_companies_to_notion(self, companies: List[Company], companies_db_id: str) -> None:
+        """
+        Sync new companies to Notion database.
+        
+        Args:
+            companies: List of all companies
+            companies_db_id: Notion database ID for companies
+        """
+        if not self.notion_client or not companies_db_id:
+            logger.debug("Notion sync skipped - no client or DB ID configured")
+            return
+        
+        try:
+            # Find companies that are marked as new
+            new_companies = [c for c in companies if getattr(c, 'is_new_account', False)]
+            
+            if not new_companies:
+                logger.debug("No new companies to sync to Notion")
+                return
+            
+            logger.info(
+                "Syncing new companies to Notion",
+                count=len(new_companies),
+                companies=[c.callsign for c in new_companies[:5]]
+            )
+            
+            synced_count = 0
+            for company in new_companies:
+                try:
+                    # Prepare company data for Notion
+                    payload = {
+                        "callsign": company.callsign,
+                        "company": company.company_name,
+                        "website": company.website,
+                        "needs_dossier": True  # Mark new companies for dossier generation
+                    }
+                    
+                    # Upsert company page
+                    page_id = self.notion_client.upsert_company_page(companies_db_id, payload)
+                    
+                    logger.debug(
+                        "Company synced to Notion",
+                        callsign=company.callsign,
+                        page_id=page_id
+                    )
+                    synced_count += 1
+                    
+                except Exception as e:
+                    logger.warning(
+                        "Failed to sync company to Notion",
+                        callsign=company.callsign,
+                        error=str(e)
+                    )
+                    # Continue with other companies
+                    continue
+            
+            logger.info(
+                "Notion sync completed",
+                synced_count=synced_count,
+                total_new=len(new_companies)
+            )
+            
+        except Exception as e:
+            logger.error(
+                "Notion sync failed",
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            # Don't raise - this is not critical for the main workflow
     
     def write_new_callsigns_trigger(self, callsigns: List[str], trigger_file: str = "/tmp/new_callsigns.txt") -> None:
         """
@@ -267,6 +342,13 @@ class DigestService:
             if new_callsigns:
                 self.write_new_callsigns_trigger(new_callsigns)
             
+            # Step 4a: Sync new companies to Notion (if configured)
+            if self.notion_client:
+                # Access companies_db_id through the settings passed to the factory
+                companies_db_id = getattr(self, '_companies_db_id', None)
+                if companies_db_id:
+                    self.sync_new_companies_to_notion(companies, companies_db_id)
+            
             # Step 5: Send digest email
             email_response = self.send_digest_email(digest_data, html_content)
             
@@ -325,13 +407,24 @@ class DigestService:
             # Check Gmail connectivity
             gmail_health = self.gmail_client.health_check()
             
+            # Check Notion client if available
+            notion_health = {"status": "not_configured"}
+            if self.notion_client:
+                notion_health = self.notion_client.health_check()
+            
+            services_healthy = gmail_health.get("status") == "healthy" and (
+                notion_health.get("status") in ["healthy", "not_configured"]
+            )
+            
             return {
-                "status": "healthy" if gmail_health.get("status") == "healthy" else "unhealthy",
+                "status": "healthy" if services_healthy else "unhealthy",
                 "gmail": gmail_health,
+                "notion": notion_health,
                 "config": {
                     "gmail_user": self.gmail_client.config.user,
                     "digest_to": self.config.to,
-                    "top_movers": self.config.top_movers
+                    "top_movers": self.config.top_movers,
+                    "notion_companies_db_id": self._companies_db_id or "not_configured"
                 }
             }
             
@@ -358,6 +451,19 @@ def create_digest_service(
         Configured DigestService
     """
     from app.services.render_service import create_digest_renderer
+    from app.data.notion_client import create_notion_client
     
     renderer = create_digest_renderer()
-    return DigestService(gmail_client, renderer, settings.digest)
+    
+    # Create Notion client if configured
+    notion_client = None
+    companies_db_id = None
+    if hasattr(settings, 'notion') and settings.notion.api_key:
+        try:
+            notion_client = create_notion_client(settings.notion, dry_run=settings.dry_run)
+            companies_db_id = settings.notion.companies_db_id
+            logger.info("Notion client initialized for digest service")
+        except Exception as e:
+            logger.warning("Failed to initialize Notion client", error=str(e))
+    
+    return DigestService(gmail_client, renderer, settings.digest, notion_client, companies_db_id)

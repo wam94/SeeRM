@@ -77,6 +77,13 @@ class WeeklyDigestWorkflow:
             if not self.settings.gmail.user:
                 raise ConfigurationError("GMAIL_USER is required")
             
+            # Check Notion settings if configured
+            if hasattr(self.settings, 'notion') and self.settings.notion.api_key:
+                if self.settings.notion.companies_db_id:
+                    logger.info("Notion integration configured with companies database")
+                else:
+                    logger.warning("Notion API key provided but companies_db_id not set - Notion sync will be skipped")
+            
             logger.info("Configuration validation passed")
             
         except Exception as e:
