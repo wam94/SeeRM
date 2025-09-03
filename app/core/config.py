@@ -28,7 +28,7 @@ class GmailConfig(BaseSettings):
     )
     attachment_regex: str = Field(default=r".*\.csv$", alias="ATTACHMENT_REGEX")
     
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(env_prefix="", extra="ignore")
 
 
 class DigestConfig(BaseSettings):
@@ -40,7 +40,7 @@ class DigestConfig(BaseSettings):
     subject: Optional[str] = Field(default=None, alias="DIGEST_SUBJECT")
     top_movers: int = Field(default=15, alias="TOP_MOVERS")
     
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(env_prefix="", extra="ignore")
 
 
 class NotionConfig(BaseSettings):
@@ -51,7 +51,7 @@ class NotionConfig(BaseSettings):
     companies_db_id: Optional[str] = Field(default=None, alias="NOTION_COMPANIES_DB_ID")
     intel_db_id: Optional[str] = Field(default=None, alias="NOTION_INTEL_DB_ID")
     
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(env_prefix="", extra="ignore")
 
 
 class IntelligenceConfig(BaseSettings):
@@ -101,7 +101,7 @@ class IntelligenceConfig(BaseSettings):
             return v.lower() in ("1", "true", "yes")
         return bool(v)
     
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(env_prefix="", extra="ignore")
 
 
 class BaselineConfig(BaseSettings):
@@ -124,7 +124,7 @@ class BaselineConfig(BaseSettings):
             return v.lower() in ("1", "true", "yes")
         return bool(v)
     
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(env_prefix="", extra="ignore")
 
 
 class Settings(BaseSettings):

@@ -109,31 +109,39 @@ newco,New Company,newco.com,"[""Bob Wilson""]",50000,0,0.0,True,True"""
         """Test workflow health check functionality."""
         workflow = WeeklyDigestWorkflow(self.settings)
         
-        with patch.object(workflow, 'gmail_client') as mock_gmail:
-            mock_gmail.health_check.return_value = {"status": "healthy", "user": "test@example.com"}
-            
-            with patch.object(workflow, 'digest_service') as mock_digest:
-                mock_digest.health_check.return_value = {"status": "healthy", "config": {}}
-                
-                health = workflow.perform_health_checks()
-                
-                assert health["overall_status"] == "healthy"
-                assert health["gmail"]["status"] == "healthy"
-                assert health["digest_service"]["status"] == "healthy"
+        # Create mock objects
+        mock_gmail = Mock()
+        mock_gmail.health_check.return_value = {"status": "healthy", "user": "test@example.com"}
+        
+        mock_digest = Mock()
+        mock_digest.health_check.return_value = {"status": "healthy", "config": {}}
+        
+        # Set the private attributes directly
+        workflow._gmail_client = mock_gmail
+        workflow._digest_service = mock_digest
+        
+        health = workflow.perform_health_checks()
+        
+        assert health["overall_status"] == "healthy"
+        assert health["gmail"]["status"] == "healthy"
+        assert health["digest_service"]["status"] == "healthy"
     
     def test_workflow_error_handling(self):
         """Test workflow handles errors gracefully."""
         workflow = WeeklyDigestWorkflow(self.settings)
         
-        with patch.object(workflow, 'digest_service') as mock_service:
-            # Simulate service failure
-            mock_service.run_digest_workflow.side_effect = Exception("Service unavailable")
-            
-            result = workflow.run()
-            
-            assert result.status == ProcessingStatus.FAILED
-            assert "Service unavailable" in result.error_message
-            assert result.duration_seconds is not None
+        # Create mock service that raises an exception
+        mock_service = Mock()
+        mock_service.run_digest_workflow.side_effect = Exception("Service unavailable")
+        
+        # Set the private attribute directly
+        workflow._digest_service = mock_service
+        
+        result = workflow.run()
+        
+        assert result.status == ProcessingStatus.FAILED
+        assert "Service unavailable" in result.error_message
+        assert result.duration_seconds is not None
 
 
 class TestOriginalSystemComparison:

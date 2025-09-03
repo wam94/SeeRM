@@ -126,7 +126,6 @@ def test_real_csv_processing(real_csv_file):
             assert isinstance(company.beneficial_owners, list)
         
         print(f"✅ Successfully processed {len(companies)} companies from real CSV")
-        return True
         
     except FileNotFoundError:
         pytest.skip("Real CSV file not found - skipping integration test")
@@ -156,7 +155,6 @@ class TestCSVComparison:
                 assert isinstance(stats[stat], int), f"Stat {stat} should be integer"
             
             print(f"✅ Output format validation passed")
-            return True
             
         except FileNotFoundError:
             pytest.skip("Real CSV file not found")

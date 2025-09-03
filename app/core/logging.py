@@ -6,6 +6,7 @@ Provides consistent, structured logging with correlation IDs and rich formatting
 
 import sys
 import uuid
+import logging
 import structlog
 from typing import Optional
 from rich.console import Console
@@ -83,10 +84,8 @@ def setup_logging(debug: bool = False, rich_output: bool = True) -> None:
     
     structlog.configure(
         processors=processors,
-        wrapper_class=structlog.make_filtering_bound_logger(
-            logging.DEBUG if debug else logging.INFO
-        ),
-        logger_factory=structlog.WriteLoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )
 

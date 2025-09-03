@@ -190,7 +190,6 @@ class TestPerformanceBenchmarks:
             assert len(companies) > 0, "No companies parsed"
             
             print(f"✅ CSV parsing performance: {parse_time:.2f}ms for {len(companies)} companies")
-            return True
             
         except FileNotFoundError:
             pytest.skip("CSV file not found for performance test")

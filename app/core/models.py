@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, date
 from typing import List, Dict, Any, Optional, Union
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from enum import Enum
 
 
@@ -51,9 +51,10 @@ class BaseEntity(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     
-    class Config:
-        use_enum_values = True
-        validate_assignment = True
+    model_config = ConfigDict(
+        use_enum_values=True,
+        validate_assignment=True
+    )
 
 
 # Company and Account Models
@@ -122,14 +123,15 @@ class AccountMovement(BaseEntity):
     percentage_change: float
     balance_delta: Optional[float] = None
     
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "callsign": "97labs",
                 "percentage_change": 15.5,
                 "balance_delta": 50000.0
             }
         }
+    )
 
 
 # News and Intelligence Models

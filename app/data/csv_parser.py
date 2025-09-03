@@ -164,7 +164,11 @@ class CSVProcessor:
         try:
             # Validate basic structure
             if df.empty:
-                raise ValidationError("CSV data is empty")
+                if self.strict_validation:
+                    raise ValidationError("CSV data is empty")
+                else:
+                    logger.warning("Empty CSV data - returning empty list")
+                    return []
             
             # Normalize column names
             cols = self.normalize_column_names(df)

@@ -6,6 +6,7 @@ Provides circuit breakers, retry logic, rate limiting, and other resilience patt
 
 import time
 import asyncio
+import logging
 from typing import Any, Callable, Optional, Dict, Type, Union
 from functools import wraps
 from enum import Enum
@@ -270,7 +271,7 @@ def with_retry(
             stop=stop_after_attempt(max_attempts),
             wait=wait_exponential(multiplier=1, min=0.5, max=backoff_max),
             retry=retry_if_exception_type(retry_exceptions),
-            before_sleep=before_sleep_log(logger, "warning")
+            before_sleep=before_sleep_log(logger, logging.WARNING)
         )
         @wraps(func)
         def wrapper(*args, **kwargs):
