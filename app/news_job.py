@@ -472,8 +472,7 @@ def main():
     # Collect intel - PARALLEL PROCESSING
     PERFORMANCE_MONITOR.start_timer("intel_collection")
     
-    def collect_news_for_company(cs_org_pair):
-        cs, org = cs_org_pair
+    def collect_news_for_company(cs, org):
         # Skip if we have very recent data
         if should_skip_processing(org, "news_collection"):
             print(f"[SKIP] Recent news data exists for {cs}")
@@ -483,20 +482,18 @@ def main():
         return cs, items
     
     # Process companies in parallel
-    company_pairs = list(roster.items())
-    print(f"[PARALLEL] Processing {len(company_pairs)} companies for news collection...")
+    print(f"[PARALLEL] Processing {len(roster)} companies for news collection...")
     
-    results = ParallelProcessor.process_batch(
-        company_pairs, 
+    results = ParallelProcessor.process_dict_batch(
+        roster, 
         collect_news_for_company,
         max_workers=6,  # Conservative for API rate limits
         timeout=300  # 5 minutes total
     )
     
     intel_by_cs: Dict[str, List[Dict[str, Any]]] = {}
-    for company_pair in company_pairs:
-        cs = company_pair[0]
-        intel_by_cs[cs] = results.get(company_pair, [])
+    for cs in roster.keys():
+        intel_by_cs[cs] = results.get(cs, [])
     
     collection_time = PERFORMANCE_MONITOR.end_timer("intel_collection")
     print(f"[PERFORMANCE] Intel collection completed in {collection_time:.2f}s")
@@ -508,8 +505,7 @@ def main():
     if token and companies_db and intel_db:
         PERFORMANCE_MONITOR.start_timer("notion_updates")
         
-        def process_company_notion(cs_org_pair):
-            cs, org = cs_org_pair
+        def process_company_notion(cs, org):
             
             # Skip if no new intelligence data
             intel_items = intel_by_cs.get(cs, [])
@@ -566,8 +562,8 @@ def main():
                 return cs, {"status": "error", "error": str(e)}
         
         # Process Notion updates in parallel (with lower concurrency for API limits)
-        notion_results = ParallelProcessor.process_batch(
-            company_pairs,
+        notion_results = ParallelProcessor.process_dict_batch(
+            roster,
             process_company_notion,
             max_workers=3,  # Conservative for Notion API limits
             timeout=300
