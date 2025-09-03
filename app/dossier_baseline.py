@@ -168,8 +168,15 @@ def resolve_domain_for_org(org: dict, g_api_key: Optional[str], g_cse_id: Option
       3) Search (domain_resolver). Only if BOTH CSV fields are empty.
     Returns: (domain_root, homepage_url) – either or both may be None.
     """
+    callsign = org.get("callsign", "unknown")
+    print(f"[RESOLVE DEBUG] {callsign}: Starting domain resolution")
+    print(f"[RESOLVE DEBUG] {callsign}: org keys = {list(org.keys())}")
+    print(f"[RESOLVE DEBUG] {callsign}: raw domain_root = '{org.get('domain_root')}', raw website = '{org.get('website')}'")
+    
     csv_domain_root = _normalize_csv_text(org.get("domain_root"))
     csv_website     = _normalize_csv_text(org.get("website"))
+    
+    print(f"[RESOLVE DEBUG] {callsign}: normalized csv_domain_root = '{csv_domain_root}', csv_website = '{csv_website}'")
 
     # 1) Trust CSV domain_root
     if csv_domain_root:
@@ -665,17 +672,16 @@ def main():
                 if not csv_website_val:  # Empty string becomes None
                     csv_website_val = None
                     
-            if DEBUG or cs == "97labs":  # Always show for 97labs
+            # ALWAYS show debug for 97labs (remove DEBUG dependency)
+            print(f"[CSV DEBUG] Processing callsign: '{cs}'")
+            if cs == "97labs":
                 print(f"[CSV DEBUG] {cs}: domain_root='{csv_domain_root_val}', website='{csv_website_val}'")
                 print(f"[CSV DEBUG] {cs}: raw domain_root from CSV: '{r[pcols.get('domain_root')] if pcols.get('domain_root') in r else 'MISSING'}'")
                 print(f"[CSV DEBUG] {cs}: available columns: {list(pcols.keys())}")
-                
-                # Show the actual row data for 97labs
-                if cs == "97labs":
-                    print(f"[CSV DEBUG] {cs}: Full row data:")
-                    for col_key, col_name in pcols.items():
-                        val = r.get(col_name, 'NOT_FOUND')
-                        print(f"[CSV DEBUG] {cs}:   {col_key} ({col_name}): '{val}'")
+                print(f"[CSV DEBUG] {cs}: Full row data:")
+                for col_key, col_name in pcols.items():
+                    val = r.get(col_name, 'NOT_FOUND')
+                    print(f"[CSV DEBUG] {cs}:   {col_key} ({col_name}): '{val}'")
                 
             base = {
                 "callsign": r[pcols.get("callsign")],
