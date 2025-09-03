@@ -33,5 +33,8 @@ jobs:
           DIGEST_BCC: ${{ secrets.DIGEST_BCC }}
           GMAIL_QUERY: ${{ vars.GMAIL_QUERY }}
           ATTACHMENT_REGEX: '.*\.csv$'
+          ENVIRONMENT: 'production'
+          DEBUG: 'false'
+          DRY_RUN: 'false'
         run: |
-          python -m app.main
+          python -m app.main digest --max-messages 10
