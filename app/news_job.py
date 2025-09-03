@@ -12,7 +12,7 @@ from app.gmail_client import (
     extract_csv_attachments, send_html_email
 )
 from app.notion_client import (
-    upsert_company_page, set_latest_intel, update_intel_archive_for_company
+    upsert_company_page, set_latest_intel, update_intel_archive_for_company, get_all_companies_domain_data
 )
 from app.performance_utils import (
     ParallelProcessor, ConcurrentAPIClient, DEFAULT_RATE_LIMITER, 
@@ -483,6 +483,24 @@ def main():
         except Exception as e:
             print(f"[ERROR] Failed to write new callsigns trigger file: {e}")
 
+    # Fetch canonical domain data from Notion for all companies (batched for efficiency)
+    PERFORMANCE_MONITOR.start_timer("notion_domain_fetch")
+    notion_domain_data = {}
+    if companies_db:
+        print(f"[NOTION] Fetching canonical domain data for {len(roster)} companies...")
+        try:
+            callsigns = list(roster.keys())
+            notion_domain_data = get_all_companies_domain_data(companies_db, callsigns)
+            found_domains = sum(1 for data in notion_domain_data.values() if data.get("domain") or data.get("website"))
+            print(f"[NOTION] Found domain data for {found_domains}/{len(callsigns)} companies")
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch domain data from Notion: {e}")
+            # Fallback to empty dict
+            notion_domain_data = {cs: {"domain": None, "website": None} for cs in roster.keys()}
+    
+    domain_fetch_time = PERFORMANCE_MONITOR.end_timer("notion_domain_fetch")
+    print(f"[PERFORMANCE] Domain data fetch completed in {domain_fetch_time:.2f}s")
+
     # Collect intel - PARALLEL PROCESSING
     PERFORMANCE_MONITOR.start_timer("intel_collection")
     
@@ -492,7 +510,25 @@ def main():
             print(f"[SKIP] Recent news data exists for {cs}")
             return cs, org.get("cached_news", [])
         
-        items = collect_recent_news(org, lookback_days, g_api_key, g_cse_id, max_items=max_per_org)
+        # Enhance org data with canonical domain data from Notion
+        enhanced_org = dict(org)  # Copy original org data
+        notion_domains = notion_domain_data.get(cs, {})
+        domain_sources = []
+        
+        if notion_domains.get("domain"):
+            if enhanced_org.get("domain_root") != notion_domains["domain"]:
+                domain_sources.append(f"domain: CSV '{enhanced_org.get('domain_root')}' → Notion '{notion_domains['domain']}'")
+            enhanced_org["domain_root"] = notion_domains["domain"]
+        
+        if notion_domains.get("website"):
+            if enhanced_org.get("website") != notion_domains["website"]:
+                domain_sources.append(f"website: CSV '{enhanced_org.get('website')}' → Notion '{notion_domains['website']}'")
+            enhanced_org["website"] = notion_domains["website"]
+        
+        if domain_sources and os.getenv("DEBUG"):
+            print(f"[DOMAIN] {cs}: {'; '.join(domain_sources)}")
+        
+        items = collect_recent_news(enhanced_org, lookback_days, g_api_key, g_cse_id, max_items=max_per_org)
         return cs, items
     
     # Process companies in parallel

@@ -161,6 +161,113 @@ def set_latest_intel(companies_page_id: str, summary_text: str, date_iso: Option
 def set_needs_dossier(companies_page_id: str, needs: bool = True):
     notion_patch(f"/pages/{companies_page_id}", {"properties": {"Needs Dossier": {"checkbox": bool(needs)}}})
 
+def get_company_domain_data(companies_db_id: str, callsign: str) -> Dict[str, Optional[str]]:
+    """Fetch domain/website data from Notion for a company by callsign."""
+    schema = get_db_schema(companies_db_id)
+    title_prop = get_title_prop_name(schema)
+    
+    data = notion_query_db(companies_db_id, {
+        "filter": {"property": title_prop, "title": {"equals": callsign}}
+    })
+    
+    results = data.get("results", [])
+    if not results:
+        return {"domain": None, "website": None}
+    
+    page = results[0]
+    properties = page.get("properties", {})
+    
+    # Extract domain
+    domain = None
+    domain_prop = properties.get("Domain")
+    if domain_prop:
+        if domain_prop.get("type") == "url":
+            url = domain_prop.get("url")
+            if url:
+                # Clean domain from URL format
+                domain = url.replace("https://", "").replace("http://", "").split("/")[0]
+        elif domain_prop.get("type") == "rich_text":
+            rich_text = domain_prop.get("rich_text", [])
+            if rich_text and rich_text[0].get("text"):
+                domain = rich_text[0]["text"].get("content", "").strip()
+    
+    # Extract website
+    website = None
+    website_prop = properties.get("Website")
+    if website_prop and website_prop.get("type") == "url":
+        website = website_prop.get("url")
+    
+    return {"domain": domain, "website": website}
+
+def get_all_companies_domain_data(companies_db_id: str, callsigns: List[str]) -> Dict[str, Dict[str, Optional[str]]]:
+    """Efficiently fetch domain/website data for multiple companies from Notion."""
+    schema = get_db_schema(companies_db_id)
+    title_prop = get_title_prop_name(schema)
+    
+    # Fetch all company pages (paginated)
+    all_results = []
+    has_more = True
+    start_cursor = None
+    
+    while has_more:
+        query_params = {
+            "page_size": 100  # Max page size
+        }
+        if start_cursor:
+            query_params["start_cursor"] = start_cursor
+            
+        data = notion_query_db(companies_db_id, query_params)
+        results = data.get("results", [])
+        all_results.extend(results)
+        
+        has_more = data.get("has_more", False)
+        start_cursor = data.get("next_cursor")
+    
+    # Extract domain data for requested callsigns
+    domain_data = {}
+    callsigns_set = set(cs.lower() for cs in callsigns)
+    
+    for page in all_results:
+        properties = page.get("properties", {})
+        
+        # Get callsign from title
+        title_prop_data = properties.get(title_prop, {})
+        title_array = title_prop_data.get("title", [])
+        if not title_array:
+            continue
+            
+        callsign = title_array[0].get("text", {}).get("content", "").strip().lower()
+        if callsign not in callsigns_set:
+            continue
+        
+        # Extract domain
+        domain = None
+        domain_prop = properties.get("Domain")
+        if domain_prop:
+            if domain_prop.get("type") == "url":
+                url = domain_prop.get("url")
+                if url:
+                    domain = url.replace("https://", "").replace("http://", "").split("/")[0]
+            elif domain_prop.get("type") == "rich_text":
+                rich_text = domain_prop.get("rich_text", [])
+                if rich_text and rich_text[0].get("text"):
+                    domain = rich_text[0]["text"].get("content", "").strip()
+        
+        # Extract website
+        website = None
+        website_prop = properties.get("Website")
+        if website_prop and website_prop.get("type") == "url":
+            website = website_prop.get("url")
+        
+        domain_data[callsign] = {"domain": domain, "website": website}
+    
+    # Fill in missing callsigns with None values
+    for cs in callsigns:
+        if cs.lower() not in domain_data:
+            domain_data[cs.lower()] = {"domain": None, "website": None}
+    
+    return domain_data
+
 
 # -------------------- Intel Archive (timeline-only) --------------------
 
