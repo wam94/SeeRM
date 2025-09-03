@@ -16,6 +16,7 @@ from app.core.logging import setup_logging, set_correlation_id
 from app.core.exceptions import SeeRMError, ConfigurationError
 from app.workflows.weekly_digest import run_weekly_digest_workflow, dry_run_weekly_digest_workflow
 from app.utils.reliability import get_circuit_breaker_status, reset_circuit_breaker
+from app.cli_commands.reports import reports
 
 console = Console()
 
@@ -46,6 +47,10 @@ def main(ctx, debug: bool, dry_run: bool, correlation_id: Optional[str]):
     ctx.obj["debug"] = debug
     ctx.obj["dry_run"] = dry_run
     ctx.obj["correlation_id"] = correlation_id
+
+
+# Add subcommand groups
+main.add_command(reports)
 
 
 @main.command()

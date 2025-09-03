@@ -721,6 +721,167 @@ class EnhancedNotionClient:
                 "error": str(e),
                 "error_type": type(e).__name__
             }
+    
+    def create_report_page(
+        self,
+        database_id: str,
+        title: str,
+        report_type: str,
+        content_markdown: Optional[str] = None,
+        content_html: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> Optional[str]:
+        """
+        Create a new report page in Notion.
+        
+        Args:
+            database_id: Reports database ID
+            title: Report title
+            report_type: Type of report (e.g., "company_deepdive", "weekly_news", "new_clients")
+            content_markdown: Markdown content
+            content_html: HTML content
+            metadata: Additional metadata dictionary
+            
+        Returns:
+            Page ID if successful, None otherwise
+        """
+        if self.dry_run:
+            logger.info(
+                "DRY RUN: Would create report page",
+                title=title,
+                report_type=report_type,
+                database_id=database_id
+            )
+            return f"dry_run_report_{report_type}_{int(datetime.now().timestamp())}"
+        
+        try:
+            schema = self.get_database_schema(database_id)
+            title_prop = self.get_title_property_name(schema)
+            
+            # Build basic properties
+            properties = {
+                title_prop: self._create_title_segments(title)
+            }
+            
+            # Add report type
+            if self.property_exists(schema, "Report Type", "select"):
+                properties["Report Type"] = {"select": {"name": report_type}}
+            elif self.property_exists(schema, "Type", "select"):
+                properties["Type"] = {"select": {"name": report_type}}
+            elif self.property_exists(schema, "Report Type", "rich_text"):
+                properties["Report Type"] = self._create_rich_text_segments(report_type)
+            elif self.property_exists(schema, "Type", "rich_text"):
+                properties["Type"] = self._create_rich_text_segments(report_type)
+            
+            # Add generated date
+            if self.property_exists(schema, "Generated", "date"):
+                properties["Generated"] = self._create_date_property(datetime.now().isoformat())
+            elif self.property_exists(schema, "Created", "date"):
+                properties["Created"] = self._create_date_property(datetime.now().isoformat())
+            
+            # Add status
+            if self.property_exists(schema, "Status", "select"):
+                properties["Status"] = {"select": {"name": "Generated"}}
+            
+            # Add metadata as properties if they exist in schema
+            if metadata:
+                for key, value in metadata.items():
+                    if isinstance(value, str):
+                        if self.property_exists(schema, key, "rich_text"):
+                            properties[key] = self._create_rich_text_segments(value)
+                        elif self.property_exists(schema, key, "title"):
+                            properties[key] = self._create_title_segments(value)
+                    elif isinstance(value, (int, float)):
+                        if self.property_exists(schema, key, "number"):
+                            properties[key] = {"number": value}
+                    elif isinstance(value, bool):
+                        if self.property_exists(schema, key, "checkbox"):
+                            properties[key] = {"checkbox": value}
+                    elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+                        if self.property_exists(schema, key, "multi_select"):
+                            properties[key] = {"multi_select": [{"name": item} for item in value]}
+            
+            # Create page
+            page_data = {
+                "parent": {"database_id": database_id},
+                "properties": properties
+            }
+            
+            # Add content as children if provided
+            children = []
+            if content_markdown:
+                # Convert markdown to Notion blocks (simplified)
+                lines = content_markdown.split('\n')
+                for line in lines:
+                    if line.strip():
+                        if line.startswith('# '):
+                            children.append({
+                                "object": "block",
+                                "type": "heading_1",
+                                "heading_1": {
+                                    "rich_text": [{"type": "text", "text": {"content": line[2:].strip()}}]
+                                }
+                            })
+                        elif line.startswith('## '):
+                            children.append({
+                                "object": "block",
+                                "type": "heading_2",
+                                "heading_2": {
+                                    "rich_text": [{"type": "text", "text": {"content": line[3:].strip()}}]
+                                }
+                            })
+                        elif line.startswith('### '):
+                            children.append({
+                                "object": "block",
+                                "type": "heading_3",
+                                "heading_3": {
+                                    "rich_text": [{"type": "text", "text": {"content": line[4:].strip()}}]
+                                }
+                            })
+                        elif line.startswith('- ') or line.startswith('* '):
+                            children.append({
+                                "object": "block",
+                                "type": "bulleted_list_item",
+                                "bulleted_list_item": {
+                                    "rich_text": [{"type": "text", "text": {"content": line[2:].strip()}}]
+                                }
+                            })
+                        else:
+                            # Regular paragraph
+                            children.append({
+                                "object": "block",
+                                "type": "paragraph",
+                                "paragraph": {
+                                    "rich_text": [{"type": "text", "text": {"content": line}}]
+                                }
+                            })
+            
+            if children:
+                page_data["children"] = children[:100]  # Notion has a limit
+            
+            response = self._make_request("POST", "/pages", json_data=page_data)
+            
+            page_id = response.get("id")
+            
+            logger.info(
+                "Report page created in Notion",
+                page_id=page_id,
+                title=title,
+                report_type=report_type,
+                database_id=database_id
+            )
+            
+            return page_id
+            
+        except Exception as e:
+            logger.error(
+                "Failed to create report page",
+                title=title,
+                report_type=report_type,
+                database_id=database_id,
+                error=str(e)
+            )
+            return None
 
 
 def create_notion_client(
