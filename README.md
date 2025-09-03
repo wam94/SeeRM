@@ -22,6 +22,36 @@ SeeRM pulls your **Metabase weekly diff email** from Gmail, processes client dat
 - 🚀 **Performance Optimized**: Handles 500+ companies efficiently
 - 🔄 **Dry-Run Mode**: Safe testing without side effects
 
+## 📊 Intelligence Reports
+
+**NEW: Automated Intelligence Report Generation**
+
+Generate comprehensive business intelligence reports combining CSV movement data, Notion company profiles, and news analysis:
+
+### Report Types
+- **🏢 Company Deep Dives** - Comprehensive analysis for individual companies with risk assessment, news timeline, and recommendations
+- **🆕 New Client Summaries** - Weekly onboarding intelligence with similarity analysis and checklists  
+- **📰 Weekly News Digest** - Categorized portfolio news with key themes and priority items
+
+### Quick Start
+```bash
+# Check system health
+python -m app.main reports health-check
+
+# Generate company deep dive
+python -m app.main reports company-deepdive ACME
+
+# Weekly new client summary  
+python -m app.main reports new-clients
+
+# Weekly news digest
+python -m app.main reports weekly-news
+```
+
+**Minimal Configuration**: Works with just CSV data - Gmail and Notion are optional enhancements.
+
+📖 **[Full Intelligence Reports Documentation →](INTELLIGENCE_REPORTS.md)**
+
 ## 🚀 Quick Start
 
 ### 1. Install Dependencies
@@ -86,6 +116,24 @@ python -m app.main health
 
 # View configuration
 python -m app.main config
+```
+
+### Intelligence Reports
+```bash
+# Check intelligence reports health
+python -m app.main reports health-check
+
+# Company deep dive analysis
+python -m app.main reports company-deepdive ACME
+python -m app.main reports company-deepdive ACME --no-email
+
+# New client summaries  
+python -m app.main reports new-clients
+python -m app.main reports new-clients --callsigns "ACME,BETA,GAMMA"
+
+# Weekly news digest
+python -m app.main reports weekly-news
+python -m app.main reports weekly-news --days 14
 ```
 
 ### Advanced Options

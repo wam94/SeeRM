@@ -67,15 +67,19 @@ class WeeklyDigestWorkflow:
             ConfigurationError: If configuration is invalid
         """
         try:
-            # Check required Gmail settings
-            if not self.settings.gmail.client_id:
-                raise ConfigurationError("GMAIL_CLIENT_ID is required")
-            if not self.settings.gmail.client_secret:
-                raise ConfigurationError("GMAIL_CLIENT_SECRET is required")
-            if not self.settings.gmail.refresh_token:
-                raise ConfigurationError("GMAIL_REFRESH_TOKEN is required")
-            if not self.settings.gmail.user:
-                raise ConfigurationError("GMAIL_USER is required")
+            # In dry-run mode, skip strict Gmail credential validation
+            if not self.settings.dry_run:
+                # Check required Gmail settings
+                if not self.settings.gmail.client_id:
+                    raise ConfigurationError("GMAIL_CLIENT_ID is required")
+                if not self.settings.gmail.client_secret:
+                    raise ConfigurationError("GMAIL_CLIENT_SECRET is required")
+                if not self.settings.gmail.refresh_token:
+                    raise ConfigurationError("GMAIL_REFRESH_TOKEN is required")
+                if not self.settings.gmail.user:
+                    raise ConfigurationError("GMAIL_USER is required")
+            else:
+                logger.info("DRY RUN: Skipping Gmail credential validation")
             
             # Check Notion settings if configured
             if hasattr(self.settings, 'notion') and self.settings.notion.api_key:
@@ -259,7 +263,7 @@ class WeeklyDigestWorkflow:
             )
             
             dry_run_results = {
-                "status": result.status.value if result.status else "unknown",
+                "status": result.status.value if hasattr(result.status, 'value') else str(result.status) if result.status else "unknown",
                 "would_process_companies": result.items_processed,
                 "would_send_email_to": self.settings.digest.to or self.settings.gmail.user,
                 "duration_seconds": result.duration_seconds,

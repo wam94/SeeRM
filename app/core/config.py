@@ -16,10 +16,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class GmailConfig(BaseSettings):
     """Gmail API configuration."""
     
-    client_id: str = Field(alias="GMAIL_CLIENT_ID")
-    client_secret: str = Field(alias="GMAIL_CLIENT_SECRET")
-    refresh_token: str = Field(alias="GMAIL_REFRESH_TOKEN")
-    user: str = Field(alias="GMAIL_USER")
+    client_id: Optional[str] = Field(default=None, alias="GMAIL_CLIENT_ID")
+    client_secret: Optional[str] = Field(default=None, alias="GMAIL_CLIENT_SECRET")
+    refresh_token: Optional[str] = Field(default=None, alias="GMAIL_REFRESH_TOKEN")
+    user: Optional[str] = Field(default=None, alias="GMAIL_USER")
     
     # Query settings
     query: str = Field(
@@ -46,10 +46,11 @@ class DigestConfig(BaseSettings):
 class NotionConfig(BaseSettings):
     """Notion API configuration."""
     
-    api_key: str = Field(alias="NOTION_API_KEY")
+    api_key: Optional[str] = Field(default=None, alias="NOTION_API_KEY")
     version: str = Field(default="2022-06-28", alias="NOTION_VERSION")
     companies_db_id: Optional[str] = Field(default=None, alias="NOTION_COMPANIES_DB_ID")
     intel_db_id: Optional[str] = Field(default=None, alias="NOTION_INTEL_DB_ID")
+    reports_db_id: Optional[str] = Field(default=None, alias="NOTION_REPORTS_DB_ID")
     
     model_config = SettingsConfigDict(env_prefix="", extra="ignore")
 
@@ -79,6 +80,12 @@ class IntelligenceConfig(BaseSettings):
     openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4o-mini", alias="OPENAI_CHAT_MODEL")
     openai_temperature: Optional[float] = Field(default=0.2, alias="OPENAI_TEMPERATURE")
+    
+    # Intelligence Reports configuration
+    reports_enabled: bool = Field(default=True, alias="INTELLIGENCE_REPORTS_ENABLED")
+    default_report_days: int = Field(default=7, alias="INTELLIGENCE_DEFAULT_REPORT_DAYS")
+    max_news_items_per_company: int = Field(default=10, alias="INTELLIGENCE_MAX_NEWS_PER_COMPANY")
+    risk_assessment_enabled: bool = Field(default=True, alias="INTELLIGENCE_RISK_ASSESSMENT_ENABLED")
     
     @field_validator("filter_callsigns", mode="before")
     @classmethod
@@ -190,33 +197,103 @@ def get_settings() -> Settings:
     return settings
 
 
-def validate_required_settings() -> List[str]:
+def validate_required_settings(for_workflow: str = "digest") -> List[str]:
     """
-    Validate that all required settings are present.
-    Returns a list of missing required settings.
+    Validate that required settings are present for specific workflows.
+    
+    Args:
+        for_workflow: Workflow name ("digest", "intelligence", or "minimal")
+        
+    Returns:
+        List of missing required settings
     """
     missing = []
     try:
         config = get_settings()
         
-        # Check Gmail required fields
-        if not config.gmail.client_id:
-            missing.append("GMAIL_CLIENT_ID")
-        if not config.gmail.client_secret:
-            missing.append("GMAIL_CLIENT_SECRET")
-        if not config.gmail.refresh_token:
-            missing.append("GMAIL_REFRESH_TOKEN")
-        if not config.gmail.user:
-            missing.append("GMAIL_USER")
-        
-        # Check Notion required fields
-        if not config.notion.api_key:
-            missing.append("NOTION_API_KEY")
+        if for_workflow == "digest":
+            # Digest workflow requires Gmail and Notion
+            if not config.gmail.client_id:
+                missing.append("GMAIL_CLIENT_ID")
+            if not config.gmail.client_secret:
+                missing.append("GMAIL_CLIENT_SECRET")
+            if not config.gmail.refresh_token:
+                missing.append("GMAIL_REFRESH_TOKEN")
+            if not config.gmail.user:
+                missing.append("GMAIL_USER")
+            if not config.notion.api_key:
+                missing.append("NOTION_API_KEY")
+                
+        elif for_workflow == "intelligence":
+            # Intelligence reports only need CSV source - Gmail and Notion are optional
+            csv_path = getattr(config, 'csv_source_path', None)
+            if not csv_path:
+                missing.append("CSV_SOURCE_PATH")
+                
+        elif for_workflow == "minimal":
+            # Minimal validation - just check basic config loads
+            pass
         
     except Exception as e:
         missing.append(f"Configuration error: {e}")
     
     return missing
+
+
+def validate_intelligence_reports_config() -> Dict[str, str]:
+    """
+    Validate intelligence reports configuration.
+    Returns a dictionary with service status and messages.
+    """
+    status = {}
+    
+    try:
+        config = get_settings()
+        
+        if not config.intelligence.reports_enabled:
+            status["intelligence_reports"] = "disabled"
+            return status
+        
+        # Check CSV access
+        try:
+            csv_path = getattr(config, 'csv_source_path', None)
+            if csv_path:
+                status["csv_source"] = "configured"
+            else:
+                status["csv_source"] = "missing_csv_path"
+        except Exception:
+            status["csv_source"] = "error"
+        
+        # Check Notion Reports DB
+        if config.notion.reports_db_id:
+            status["notion_reports_db"] = "configured"
+        else:
+            status["notion_reports_db"] = "missing_reports_db_id"
+        
+        # Check optional enhancements
+        if config.intelligence.openai_api_key:
+            status["openai_summaries"] = "available"
+        else:
+            status["openai_summaries"] = "unavailable"
+        
+        if config.intelligence.google_api_key and config.intelligence.google_cse_id:
+            status["google_search"] = "available"
+        else:
+            status["google_search"] = "unavailable"
+        
+        # Overall assessment
+        required_services = ["csv_source"]
+        missing_required = [k for k, v in status.items() if k in required_services and v not in ["configured", "available"]]
+        
+        if not missing_required:
+            status["overall"] = "ready"
+        else:
+            status["overall"] = "missing_requirements"
+        
+        return status
+        
+    except Exception as e:
+        return {"overall": "configuration_error", "error": str(e)}
 
 
 def print_configuration_summary():
@@ -234,8 +311,28 @@ def print_configuration_summary():
         print(f"Digest Recipients: {config.digest.to or 'Same as Gmail user'}")
         print(f"Notion Companies DB: {'✓' if config.notion.companies_db_id else '✗'}")
         print(f"Notion Intel DB: {'✓' if config.notion.intel_db_id else '✗'}")
+        print(f"Notion Reports DB: {'✓' if config.notion.reports_db_id else '✗'}")
         print(f"Google CSE: {'✓' if config.intelligence.google_api_key and config.intelligence.google_cse_id else '✗'}")
         print(f"OpenAI: {'✓' if config.intelligence.openai_api_key else '✗'}")
+        print()
+        print("Intelligence Reports:")
+        print(f"  Enabled: {'✓' if config.intelligence.reports_enabled else '✗'}")
+        print(f"  Default Days: {config.intelligence.default_report_days}")
+        print(f"  Risk Assessment: {'✓' if config.intelligence.risk_assessment_enabled else '✗'}")
+        print(f"  Max News per Company: {config.intelligence.max_news_items_per_company}")
+        
+        # Show intelligence reports status
+        reports_status = validate_intelligence_reports_config()
+        overall_status = reports_status.get("overall", "unknown")
+        if overall_status == "ready":
+            print(f"  Status: ✓ Ready for reports")
+        elif overall_status == "disabled":
+            print(f"  Status: ✗ Disabled")
+        elif overall_status == "missing_requirements":
+            print(f"  Status: ⚠ Missing requirements")
+        else:
+            print(f"  Status: ✗ Configuration error")
+        
         print("=" * 35)
     except Exception as e:
         print(f"Error loading configuration: {e}")

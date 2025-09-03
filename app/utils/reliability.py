@@ -466,3 +466,54 @@ def reset_circuit_breaker(name: str) -> bool:
             logger.info("Circuit breaker reset", name=name)
             return True
     return False
+
+
+def track_performance(operation_name: str):
+    """
+    Decorator to track performance metrics for operations.
+    
+    Args:
+        operation_name: Name of the operation for logging
+    """
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            start_time = time.time()
+            operation_id = f"{operation_name}_{int(start_time)}"
+            
+            logger.info(
+                "Performance tracking started",
+                operation=operation_name,
+                operation_id=operation_id
+            )
+            
+            try:
+                result = func(*args, **kwargs)
+                duration = time.time() - start_time
+                
+                logger.info(
+                    "Performance tracking completed",
+                    operation=operation_name,
+                    operation_id=operation_id,
+                    duration_seconds=duration,
+                    status="success"
+                )
+                
+                return result
+                
+            except Exception as e:
+                duration = time.time() - start_time
+                
+                logger.error(
+                    "Performance tracking failed",
+                    operation=operation_name,
+                    operation_id=operation_id,
+                    duration_seconds=duration,
+                    status="failed",
+                    error=str(e)
+                )
+                
+                raise
+                
+        return wrapper
+    return decorator

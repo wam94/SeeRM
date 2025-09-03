@@ -96,6 +96,7 @@ newco,New Company,newco.com,"[""Bob Wilson""]",50000,0,0.0,True,True"""
         # Create settings with missing required fields
         incomplete_settings = Settings()
         incomplete_settings.gmail.client_id = ""  # Missing required field
+        incomplete_settings.dry_run = False  # Ensure dry_run is False for this test
         
         workflow = WeeklyDigestWorkflow(incomplete_settings)
         
