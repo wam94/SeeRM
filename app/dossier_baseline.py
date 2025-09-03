@@ -634,6 +634,9 @@ def main():
     prof: Dict[str, Dict[str, Any]] = {}
     if df_profile is not None:
         pcols = lower_cols(df_profile)
+        print(f"[CSV DEBUG] Profile CSV loaded: {len(df_profile)} rows, columns: {list(df_profile.columns)}")
+        print(f"[CSV DEBUG] Column mapping: {pcols}")
+        
         for _, r in df_profile.iterrows():
             cs = str(r[pcols.get("callsign")]).strip().lower() if pcols.get("callsign") in r else ""
             if not cs:
@@ -664,7 +667,15 @@ def main():
                     
             if DEBUG or cs == "97labs":  # Always show for 97labs
                 print(f"[CSV DEBUG] {cs}: domain_root='{csv_domain_root_val}', website='{csv_website_val}'")
+                print(f"[CSV DEBUG] {cs}: raw domain_root from CSV: '{r[pcols.get('domain_root')] if pcols.get('domain_root') in r else 'MISSING'}'")
                 print(f"[CSV DEBUG] {cs}: available columns: {list(pcols.keys())}")
+                
+                # Show the actual row data for 97labs
+                if cs == "97labs":
+                    print(f"[CSV DEBUG] {cs}: Full row data:")
+                    for col_key, col_name in pcols.items():
+                        val = r.get(col_name, 'NOT_FOUND')
+                        print(f"[CSV DEBUG] {cs}:   {col_key} ({col_name}): '{val}'")
                 
             base = {
                 "callsign": r[pcols.get("callsign")],
