@@ -256,9 +256,9 @@ class DigestRenderer:
                 "subject": digest_data.subject,
                 "now_date": now.strftime("%Y-%m-%d"),
                 "now_time": now.strftime("%H:%M:%S UTC"),
-                "stats": digest_data.stats.dict(),
-                "top_pct_gainers": [g.dict() for g in digest_data.top_pct_gainers],
-                "top_pct_losers": [l.dict() for l in digest_data.top_pct_losers],
+                "stats": digest_data.stats.model_dump(),
+                "top_pct_gainers": [g.model_dump() for g in digest_data.top_pct_gainers],
+                "top_pct_losers": [l.model_dump() for l in digest_data.top_pct_losers],
                 "product_starts": digest_data.product_starts,
                 "product_stops": digest_data.product_stops,
             }

@@ -16,17 +16,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class GmailConfig(BaseSettings):
     """Gmail API configuration."""
     
-    client_id: str = Field(..., env="GMAIL_CLIENT_ID")
-    client_secret: str = Field(..., env="GMAIL_CLIENT_SECRET")
-    refresh_token: str = Field(..., env="GMAIL_REFRESH_TOKEN")
-    user: str = Field(..., env="GMAIL_USER")
+    client_id: str = Field(alias="GMAIL_CLIENT_ID")
+    client_secret: str = Field(alias="GMAIL_CLIENT_SECRET")
+    refresh_token: str = Field(alias="GMAIL_REFRESH_TOKEN")
+    user: str = Field(alias="GMAIL_USER")
     
     # Query settings
     query: str = Field(
         default='from:metabase@mercury.com subject:"Alert: SeeRM Master Query has results" has:attachment filename:csv newer_than:10d',
-        env="GMAIL_QUERY"
+        alias="GMAIL_QUERY"
     )
-    attachment_regex: str = Field(default=r".*\.csv$", env="ATTACHMENT_REGEX")
+    attachment_regex: str = Field(default=r".*\.csv$", alias="ATTACHMENT_REGEX")
     
     model_config = SettingsConfigDict(env_prefix="")
 
@@ -34,11 +34,11 @@ class GmailConfig(BaseSettings):
 class DigestConfig(BaseSettings):
     """Email digest configuration."""
     
-    to: Optional[str] = Field(default=None, env="DIGEST_TO")
-    cc: Optional[str] = Field(default=None, env="DIGEST_CC") 
-    bcc: Optional[str] = Field(default=None, env="DIGEST_BCC")
-    subject: Optional[str] = Field(default=None, env="DIGEST_SUBJECT")
-    top_movers: int = Field(default=15, env="TOP_MOVERS")
+    to: Optional[str] = Field(default=None, alias="DIGEST_TO")
+    cc: Optional[str] = Field(default=None, alias="DIGEST_CC") 
+    bcc: Optional[str] = Field(default=None, alias="DIGEST_BCC")
+    subject: Optional[str] = Field(default=None, alias="DIGEST_SUBJECT")
+    top_movers: int = Field(default=15, alias="TOP_MOVERS")
     
     model_config = SettingsConfigDict(env_prefix="")
 
@@ -46,10 +46,10 @@ class DigestConfig(BaseSettings):
 class NotionConfig(BaseSettings):
     """Notion API configuration."""
     
-    api_key: str = Field(..., env="NOTION_API_KEY")
-    version: str = Field(default="2022-06-28", env="NOTION_VERSION")
-    companies_db_id: Optional[str] = Field(default=None, env="NOTION_COMPANIES_DB_ID")
-    intel_db_id: Optional[str] = Field(default=None, env="NOTION_INTEL_DB_ID")
+    api_key: str = Field(alias="NOTION_API_KEY")
+    version: str = Field(default="2022-06-28", alias="NOTION_VERSION")
+    companies_db_id: Optional[str] = Field(default=None, alias="NOTION_COMPANIES_DB_ID")
+    intel_db_id: Optional[str] = Field(default=None, alias="NOTION_INTEL_DB_ID")
     
     model_config = SettingsConfigDict(env_prefix="")
 
@@ -58,27 +58,27 @@ class IntelligenceConfig(BaseSettings):
     """News intelligence configuration."""
     
     # Source filtering
-    filter_callsigns: List[str] = Field(default_factory=list, env="FILTER_CALLSIGNS")
-    lookback_days: int = Field(default=10, env="INTEL_LOOKBACK_DAYS")
-    max_per_org: int = Field(default=5, env="INTEL_MAX_PER_ORG")
-    preview_only: bool = Field(default=True, env="PREVIEW_ONLY")
+    filter_callsigns: List[str] = Field(default_factory=list, alias="FILTER_CALLSIGNS")
+    lookback_days: int = Field(default=10, alias="INTEL_LOOKBACK_DAYS")
+    max_per_org: int = Field(default=5, alias="INTEL_MAX_PER_ORG")
+    preview_only: bool = Field(default=True, alias="PREVIEW_ONLY")
     
     # Profile data
     news_profile_subject: str = Field(
         default="Org Profile — Will Mitchell",
-        env="NEWS_PROFILE_SUBJECT"
+        alias="NEWS_PROFILE_SUBJECT"
     )
     
     # Google Custom Search
-    google_api_key: Optional[str] = Field(default=None, env="GOOGLE_API_KEY")
-    google_cse_id: Optional[str] = Field(default=None, env="GOOGLE_CSE_ID")
-    cse_disable: bool = Field(default=False, env="CSE_DISABLE")
-    cse_max_queries_per_org: int = Field(default=5, env="CSE_MAX_QUERIES_PER_ORG")
+    google_api_key: Optional[str] = Field(default=None, alias="GOOGLE_API_KEY")
+    google_cse_id: Optional[str] = Field(default=None, alias="GOOGLE_CSE_ID")
+    cse_disable: bool = Field(default=False, alias="CSE_DISABLE")
+    cse_max_queries_per_org: int = Field(default=5, alias="CSE_MAX_QUERIES_PER_ORG")
     
     # OpenAI for summaries
-    openai_api_key: Optional[str] = Field(default=None, env="OPENAI_API_KEY")
-    openai_model: str = Field(default="gpt-4o-mini", env="OPENAI_CHAT_MODEL")
-    openai_temperature: Optional[float] = Field(default=0.2, env="OPENAI_TEMPERATURE")
+    openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
+    openai_model: str = Field(default="gpt-4o-mini", alias="OPENAI_CHAT_MODEL")
+    openai_temperature: Optional[float] = Field(default=0.2, alias="OPENAI_TEMPERATURE")
     
     @field_validator("filter_callsigns", mode="before")
     @classmethod
@@ -107,8 +107,8 @@ class IntelligenceConfig(BaseSettings):
 class BaselineConfig(BaseSettings):
     """Baseline dossier configuration."""
     
-    callsigns: List[str] = Field(default_factory=list, env="BASELINE_CALLSIGNS")
-    debug: bool = Field(default=False, env="BASELINE_DEBUG")
+    callsigns: List[str] = Field(default_factory=list, alias="BASELINE_CALLSIGNS")
+    debug: bool = Field(default=False, alias="BASELINE_DEBUG")
     
     @field_validator("callsigns", mode="before")
     @classmethod
@@ -131,9 +131,9 @@ class Settings(BaseSettings):
     """Main application settings."""
     
     # Environment
-    environment: str = Field(default="production", env="ENVIRONMENT")
-    debug: bool = Field(default=False, env="DEBUG")
-    dry_run: bool = Field(default=False, env="DRY_RUN")
+    environment: str = Field(default="production", alias="ENVIRONMENT")
+    debug: bool = Field(default=False, alias="DEBUG")
+    dry_run: bool = Field(default=False, alias="DRY_RUN")
     
     # Component configurations
     gmail: GmailConfig = Field(default_factory=GmailConfig)
@@ -143,9 +143,9 @@ class Settings(BaseSettings):
     baseline: BaselineConfig = Field(default_factory=BaselineConfig)
     
     # Performance settings
-    max_workers: int = Field(default=6, env="MAX_WORKERS")
-    request_timeout: int = Field(default=30, env="REQUEST_TIMEOUT")
-    rate_limit_calls_per_second: float = Field(default=2.5, env="RATE_LIMIT_CALLS_PER_SECOND")
+    max_workers: int = Field(default=6, alias="MAX_WORKERS")
+    request_timeout: int = Field(default=30, alias="REQUEST_TIMEOUT")
+    rate_limit_calls_per_second: float = Field(default=2.5, alias="RATE_LIMIT_CALLS_PER_SECOND")
     
     @field_validator("debug", mode="before")
     @classmethod
@@ -173,7 +173,8 @@ class Settings(BaseSettings):
         env_prefix="",
         env_file=".env",
         env_file_encoding="utf-8",
-        case_sensitive=False
+        case_sensitive=False,
+        extra="ignore"
     )
 
 

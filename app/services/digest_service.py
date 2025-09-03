@@ -275,7 +275,7 @@ class DigestService:
             result.completed_at = datetime.now()
             result.items_successful = len(companies)
             result.data = {
-                "digest_stats": digest_data.stats.dict(),
+                "digest_stats": digest_data.stats.model_dump(),
                 "new_callsigns": new_callsigns,
                 "email_message_id": email_response.get("id"),
                 "html_length": len(html_content)

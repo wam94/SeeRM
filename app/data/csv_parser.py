@@ -317,9 +317,9 @@ class CSVProcessor:
             product_stops = []
             
             return {
-                "stats": stats.dict(),
-                "top_pct_gainers": [g.dict() for g in top_pct_gainers],
-                "top_pct_losers": [l.dict() for l in top_pct_losers],
+                "stats": stats.model_dump(),
+                "top_pct_gainers": [g.model_dump() for g in top_pct_gainers],
+                "top_pct_losers": [l.model_dump() for l in top_pct_losers],
                 "product_starts": product_starts,
                 "product_stops": product_stops,
             }
