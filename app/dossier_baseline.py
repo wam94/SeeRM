@@ -1,7 +1,7 @@
 # app/dossier_baseline.py
 from __future__ import annotations
 import os, io, re, time, requests
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 import pandas as pd
 import tldextract
@@ -250,7 +250,7 @@ def collect_recent_news(org: Dict[str, Any], lookback_days: int,
             except Exception:
                 continue
     items = dedupe(items, key=lambda x: x.get("url"))
-    items = [x for x in items if within_days(x.get("published_at", datetime.now(datetime.timezone.utc)), lookback_days)]
+    items = [x for x in items if within_days(x.get("published_at", datetime.now(timezone.utc)), lookback_days)]
     items = normalize_news_items(items)
     return items[:max_items]
 
@@ -835,7 +835,7 @@ def main():
             ),
             getenv("GMAIL_USER") or "",
             to,
-            f"Baselines — {datetime.now(datetime.timezone.utc).date()}",
+            f"Baselines — {datetime.now(timezone.utc).date()}",
             html
         )
         print("Baselines emailed to", to)
