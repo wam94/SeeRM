@@ -1,6 +1,6 @@
 # app/dossier_baseline.py
 from __future__ import annotations
-import os, io, re, time, json, requests
+import os, io, re, time, requests
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 import pandas as pd
@@ -21,9 +21,6 @@ from app.performance_utils import (
 )
 
 # Import probe_funding functionality
-import sys
-from pathlib import Path
-sys.path.append(str(Path(__file__).parent.parent))
 from scripts.probe_funding import probe_funding
 
 # ---------- Debug ----------
@@ -99,13 +96,6 @@ _BLOCKED_SITES = {
     "docs.google.com","wikipedia.org","angel.co"
 }
 
-def _head_ok(url: str) -> bool:
-    try:
-        r = requests.head(url, timeout=6, allow_redirects=True)
-        return r.status_code < 400
-    except Exception:
-        return False
-
 def _website_is_accessible(url: str) -> bool:
     """More permissive check - only fail on clear errors like 404."""
     try:
@@ -126,7 +116,7 @@ def validate_domain_to_url(domain_root: str) -> str | None:
         f"http://{domain_root}",
     ]
     for u in candidates:
-        if _head_ok(u):
+        if _website_is_accessible(u):
             return u
     return candidates[0]
 
@@ -155,10 +145,6 @@ def _is_blank(x) -> bool:
     if x is None: return True
     s = str(x).strip().lower()
     return s in ("", "none", "nan")
-
-def _normalize_csv_text(x: Any) -> Optional[str]:
-    if _is_blank(x): return None
-    return str(x).strip()
 
 def _norm(x: Any) -> Optional[str]:
     """Normalize CSV cell to a clean string or None."""
@@ -228,7 +214,7 @@ def load_latest_weekly_csv(service, user, q, attachment_regex):
         msg = get_message(service, user, m["id"])
         atts = extract_csv_attachments(service, user, msg, attachment_regex)
         if atts:
-            name, data = atts[0]
+            _, data = atts[0]
             try:
                 return pd.read_csv(io.BytesIO(data))
             except Exception:
@@ -264,7 +250,7 @@ def collect_recent_news(org: Dict[str, Any], lookback_days: int,
             except Exception:
                 continue
     items = dedupe(items, key=lambda x: x.get("url"))
-    items = [x for x in items if within_days(x.get("published_at", datetime.utcnow()), lookback_days)]
+    items = [x for x in items if within_days(x.get("published_at", datetime.now(datetime.timezone.utc)), lookback_days)]
     items = normalize_news_items(items)
     return items[:max_items]
 
@@ -633,8 +619,6 @@ def main():
     prof: Dict[str, Dict[str, Any]] = {}
     if df_profile is not None:
         pcols = lower_cols(df_profile)
-        print(f"[CSV DEBUG] Profile CSV loaded: {len(df_profile)} rows, columns: {list(df_profile.columns)}")
-        print(f"[CSV DEBUG] Column mapping: {pcols}")
         
         for _, r in df_profile.iterrows():
             cs = str(r[pcols.get("callsign")]).strip().lower() if pcols.get("callsign") in r else ""
@@ -659,15 +643,6 @@ def main():
                     web_val = _norm(r[c])
                     break
                     
-            # ALWAYS show debug for 97labs (remove DEBUG dependency)
-            print(f"[CSV DEBUG] Processing callsign: '{cs}'")
-            if cs == "97labs":
-                print(f"[CSV DEBUG] {cs}: domain_root='{dom_val}', website='{web_val}'")
-                print(f"[CSV DEBUG] {cs}: available columns: {list(pcols.keys())}")
-                print(f"[CSV DEBUG] {cs}: Full row data:")
-                for col_key, col_name in pcols.items():
-                    val = r.get(col_name, 'NOT_FOUND')
-                    print(f"[CSV DEBUG] {cs}:   {col_key} ({col_name}): '{val}'")
                 
             base = {
                 "callsign": r[pcols.get("callsign")],
@@ -756,16 +731,10 @@ def main():
         print("No callsigns in this batch; nothing to do.")
         return
 
-    if os.getenv("BASELINE_DEBUG","").lower() in ("1","true","yes"):
-        for cs in sorted(targets_keys):
-            o = prof.get(cs,{})
-            print(f"[CSV AUDIT] {cs}: domain_root={o.get('domain_root')} website={o.get('website')} dba={o.get('dba')}")
 
     lookback_days = int(getenv("BASELINE_LOOKBACK_DAYS", "180") or "180")
     g_api_key = getenv("GOOGLE_API_KEY")
     g_cse_id  = getenv("GOOGLE_CSE_ID")
-    llm_delay = float(getenv("LLM_DELAY_SEC", "0") or "0")
-    notion_delay = float(getenv("NOTION_THROTTLE_SEC", "0.35") or "0.35")
 
     # PARALLEL BASELINE PROCESSING
     PERFORMANCE_MONITOR.start_timer("baseline_processing")
@@ -774,30 +743,15 @@ def main():
         org = prof.get(cs, {"callsign": cs, "dba": cs, "owners": []})
         
         try:
-            # Show what CSV metabase data we have before processing
-            csv_website = str(org.get("website") or "").strip()
-            csv_domain_root = str(org.get("domain_root") or "").strip()
-            logd(f"[DOMAIN] {cs} - CSV metabase website: '{csv_website}' | CSV domain_root: '{csv_domain_root}'")
             
             # Always resolve domain - function will prioritize CSV data or search as needed
             dr, url = resolve_domain_for_org(org, g_api_key, g_cse_id)
             
-            csv_domain_root = _normalize_csv_text(org.get("domain_root"))
-            csv_website     = _normalize_csv_text(org.get("website"))
-
-            if dr:
-                if not csv_domain_root:
-                    org["domain_root"] = dr
-                    org["domain"]      = dr
-                else:
-                    # preserve CSV truth
-                    org["domain_root"] = csv_domain_root
-                    org["domain"]      = csv_domain_root
-
-            if url:
-                # If CSV website is empty or url matches the CSV domain, use the url we have
-                if (not csv_website) or (csv_domain_root and url.startswith(("https://"+csv_domain_root, "https://www."+csv_domain_root, "http://"+csv_domain_root))):
-                    org["website"] = url
+            if dr and not org.get("domain_root"):
+                org["domain_root"] = dr
+                org["domain"] = dr
+            if url and not org.get("website"):
+                org["website"] = url
 
             # Collect intelligence data
             news_items = collect_recent_news(org, lookback_days, g_api_key, g_cse_id)
@@ -814,7 +768,6 @@ def main():
             
             # Notion push with rate limiting
             try:
-                logd(f"[NOTION] upsert payload: company={org.get('dba')} domain={org.get('domain')} website={org.get('website')}")
                 push_dossier_to_notion((org.get("callsign") or "").strip(), org, narr, throttle_sec=0)  # Remove throttle, using smart rate limiting instead
                 DEFAULT_RATE_LIMITER.wait_if_needed()  # Smart rate limiting
             except Exception as e:
@@ -826,8 +779,7 @@ def main():
             print(f"Error processing company {cs}: {e}")
             return {"callsign": cs, "body_md": f"Error processing {cs}: {e}", "status": "error"}
     
-    # Process companies in parallel
-    print(f"[PARALLEL] Processing {len(targets_keys)} companies for baseline generation...")
+    print(f"Processing {len(targets_keys)} companies for baseline generation...")
     
     # Use smaller batches for baseline processing due to complexity
     batch_size = min(4, len(targets_keys))  # Conservative for complex operations
@@ -836,7 +788,7 @@ def main():
     # Process in batches to avoid overwhelming APIs
     for i in range(0, len(targets_keys), batch_size):
         batch = targets_keys[i:i+batch_size]
-        print(f"[BATCH] Processing batch {i//batch_size + 1} ({len(batch)} companies)")
+        print(f"Processing batch {i//batch_size + 1} ({len(batch)} companies)")
         
         batch_results = ParallelProcessor.process_batch(
             batch,
@@ -857,7 +809,7 @@ def main():
     
     processing_time = PERFORMANCE_MONITOR.end_timer("baseline_processing")
     successful_count = sum(1 for d in dossiers if d.get("status") == "success")
-    print(f"[PERFORMANCE] Baseline processing completed in {processing_time:.2f}s ({successful_count}/{len(targets_keys)} successful)")
+    print(f"Baseline processing completed in {processing_time:.2f}s ({successful_count}/{len(targets_keys)} successful)")
 
     # Preview or email
     preview = getenv("PREVIEW_ONLY","false").lower() in ("1","true","yes","y")
@@ -883,7 +835,7 @@ def main():
             ),
             getenv("GMAIL_USER") or "",
             to,
-            f"Baselines — {datetime.utcnow().date()}",
+            f"Baselines — {datetime.now(datetime.timezone.utc).date()}",
             html
         )
         print("Baselines emailed to", to)
