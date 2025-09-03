@@ -421,23 +421,29 @@ def main():
 
     # Build roster dict
     def lower_cols(df): return {c.lower().strip(): c for c in df.columns}
+    def safe_str(val):
+        """Safely convert value to string, handling NaN and None"""
+        if val is None or (hasattr(val, '__name__') and val.__name__ == 'nan') or str(val).lower() == 'nan':
+            return ""
+        return str(val).strip()
+    
     cols = lower_cols(df)
     roster: Dict[str, Dict[str, Any]] = {}
     for _, r in df.iterrows():
-        cs = str(r[cols.get("callsign")]).strip().lower() if cols.get("callsign") in r else ""
+        cs = safe_str(r[cols.get("callsign")]).lower() if cols.get("callsign") in r else ""
         if not cs:
             continue
         if filter_callsigns and cs not in filter_callsigns:
             continue
         roster[cs] = {
-            "callsign": r[cols.get("callsign")],
-            "dba": r[cols.get("dba")] if cols.get("dba") in r else None,
-            "website": r[cols.get("website")] if cols.get("website") in r else None,
-            "domain_root": r[cols.get("domain_root")] if cols.get("domain_root") in r else None,
-            "owners": [s.strip() for s in str(r[cols.get("beneficial_owners")] if cols.get("beneficial_owners") in r else "").split(",") if s.strip()],
-            "aka_names": r[cols.get("aka_names")] if cols.get("aka_names") in r else None,
-            "industry_tags": r[cols.get("industry_tags")] if cols.get("industry_tags") in r else None,
-            "blog_url": r[cols.get("blog_url")] if cols.get("blog_url") in r else None,
+            "callsign": safe_str(r[cols.get("callsign")]) if cols.get("callsign") in r else cs,
+            "dba": safe_str(r[cols.get("dba")]) if cols.get("dba") in r and r[cols.get("dba")] is not None else None,
+            "website": safe_str(r[cols.get("website")]) if cols.get("website") in r and r[cols.get("website")] is not None else None,
+            "domain_root": safe_str(r[cols.get("domain_root")]) if cols.get("domain_root") in r and r[cols.get("domain_root")] is not None else None,
+            "owners": [s.strip() for s in safe_str(r[cols.get("beneficial_owners")] if cols.get("beneficial_owners") in r else "").split(",") if s.strip()],
+            "aka_names": safe_str(r[cols.get("aka_names")]) if cols.get("aka_names") in r and r[cols.get("aka_names")] is not None else None,
+            "industry_tags": safe_str(r[cols.get("industry_tags")]) if cols.get("industry_tags") in r and r[cols.get("industry_tags")] is not None else None,
+            "blog_url": safe_str(r[cols.get("blog_url")]) if cols.get("blog_url") in r and r[cols.get("blog_url")] is not None else None,
         }
 
     # Detect new companies and flag for baseline generation
@@ -468,6 +474,14 @@ def main():
     
     if new_callsigns:
         print(f"[NEW COMPANIES] Created {len(new_callsigns)} new company pages: {', '.join(new_callsigns[:8])}{' ...' if len(new_callsigns) > 8 else ''}")
+        
+        # Write new callsigns to trigger baseline generation
+        try:
+            with open("/tmp/new_callsigns.txt", "w") as f:
+                f.write(",".join(new_callsigns))
+            print(f"[TRIGGER] Wrote {len(new_callsigns)} new callsigns to /tmp/new_callsigns.txt for baseline generation")
+        except Exception as e:
+            print(f"[ERROR] Failed to write new callsigns trigger file: {e}")
 
     # Collect intel - PARALLEL PROCESSING
     PERFORMANCE_MONITOR.start_timer("intel_collection")
@@ -510,15 +524,18 @@ def main():
             # Skip if no new intelligence data
             intel_items = intel_by_cs.get(cs, [])
             if not intel_items:
-                return cs, None
+                return None
                 
             try:
-                # Upsert company page first
+                # Ensure org is a dict (safety check)
+                if not isinstance(org, dict):
+                    print(f"[ERROR] Expected dict for org data, got {type(org)}: {org}")
+                    return {"status": "error", "error": f"Invalid org data type: {type(org)}"}
+                
+                # Upsert company page first (without domain/website to avoid overwriting baseline job data)
                 page_id = upsert_company_page(companies_db, {
-                    "callsign": org["callsign"],
-                    "company":  org.get("dba") or "",
-                    "website":  org.get("website") or "",
-                    "domain":   org.get("domain_root") or "",
+                    "callsign": org.get("callsign") or cs,  # Use cs as fallback
+                    "company":  str(org.get("dba") or "").strip() if org.get("dba") is not None else "",
                     "owners":   org.get("owners") or [],
                     "needs_dossier": False,
                 })
@@ -544,7 +561,7 @@ def main():
                         intel_db_id=intel_db,
                         companies_db_id=companies_db,
                         company_page_id=page_id,
-                        callsign=str(org["callsign"]),
+                        callsign=str(org.get("callsign") or cs),
                         date_iso=today_iso,
                         summary_text=summary,
                         items=intel_items,
@@ -555,11 +572,11 @@ def main():
                 except Exception as e:
                     print(f"WARN intel archive for {cs}: {e}")
                 
-                return cs, {"status": "success", "items": len(intel_items)}
+                return {"status": "success", "items": len(intel_items)}
                 
             except Exception as e:
                 print(f"[NOTION ERROR] Failed to process {cs}: {e}")
-                return cs, {"status": "error", "error": str(e)}
+                return {"status": "error", "error": str(e)}
         
         # Process Notion updates in parallel (with lower concurrency for API limits)
         notion_results = ParallelProcessor.process_dict_batch(
