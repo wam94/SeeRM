@@ -4,6 +4,8 @@ Digest service for weekly client digest generation.
 Handles the business logic for generating and sending weekly client digests.
 """
 
+import os
+import tempfile
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -213,18 +215,22 @@ class DigestService:
             # Don't raise - this is not critical for the main workflow
 
     def write_new_callsigns_trigger(
-        self, callsigns: List[str], trigger_file: str = "/tmp/new_callsigns.txt"
+        self, callsigns: List[str], trigger_file: Optional[str] = None
     ) -> None:
         """
         Write new callsigns to trigger file for downstream workflows.
 
         Args:
             callsigns: List of callsigns to write
-            trigger_file: Path to trigger file
+            trigger_file: Path to trigger file (defaults to temp file)
         """
         if not callsigns:
             logger.debug("No new callsigns to write")
             return
+
+        # Use secure temp file if no specific file provided
+        if trigger_file is None:
+            trigger_file = os.path.join(tempfile.gettempdir(), "new_callsigns.txt")
 
         try:
             with open(trigger_file, "w") as f:
@@ -238,7 +244,6 @@ class DigestService:
             )
 
         except Exception as e:
-            error_msg = f"Failed to write new callsigns trigger: {e}"
             logger.error("Trigger file write failed", error=str(e), file=trigger_file)
             # Don't raise exception - this is not critical
 

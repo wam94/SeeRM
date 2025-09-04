@@ -64,8 +64,6 @@ def setup_logging(debug: bool = False, rich_output: bool = True) -> None:
         )
 
         # Configure standard library logging with rich
-        import logging
-
         logging.basicConfig(
             level=logging.DEBUG if debug else logging.INFO,
             format="%(message)s",

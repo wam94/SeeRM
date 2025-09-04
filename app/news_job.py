@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import tempfile
 import time
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
@@ -623,11 +624,12 @@ def main():
         )
 
         # Write new callsigns to trigger baseline generation
+        trigger_file = os.path.join(tempfile.gettempdir(), "new_callsigns.txt")
         try:
-            with open("/tmp/new_callsigns.txt", "w") as f:
+            with open(trigger_file, "w") as f:
                 f.write(",".join(new_callsigns))
             print(
-                f"[TRIGGER] Wrote {len(new_callsigns)} new callsigns to /tmp/new_callsigns.txt for baseline generation"
+                f"[TRIGGER] Wrote {len(new_callsigns)} new callsigns to {trigger_file} for baseline generation"
             )
         except Exception as e:
             print(f"[ERROR] Failed to write new callsigns trigger file: {e}")

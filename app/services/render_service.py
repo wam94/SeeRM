@@ -223,7 +223,9 @@ class DigestRenderer:
     """
 
     def __init__(self):
-        self.jinja_env = Environment(loader=BaseLoader())
+        self.jinja_env = Environment(
+            loader=BaseLoader(), autoescape=True  # Enable autoescape to prevent XSS vulnerabilities
+        )
 
         # Load templates
         try:

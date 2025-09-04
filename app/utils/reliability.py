@@ -4,14 +4,13 @@ Reliability patterns for SeeRM application.
 Provides circuit breakers, retry logic, rate limiting, and other resilience patterns.
 """
 
-import asyncio
 import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import Enum
 from functools import wraps
-from typing import Any, Callable, Dict, Optional, Type, Union
+from typing import Any, Callable, Dict, Optional, Type
 
 import structlog
 from tenacity import (
@@ -22,7 +21,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from app.core.exceptions import CircuitBreakerError, ExternalServiceError, RateLimitError
+from app.core.exceptions import CircuitBreakerError, RateLimitError
 from app.core.exceptions import TimeoutError as SeeRMTimeoutError
 
 logger = structlog.get_logger(__name__)
@@ -77,7 +76,7 @@ class CircuitBreaker:
             result = func(*args, **kwargs)
             self._on_success()
             return result
-        except self.expected_exception as e:
+        except self.expected_exception:
             self._on_failure()
             raise
 

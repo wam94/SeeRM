@@ -7,8 +7,7 @@ with proper type checking and defaults.
 
 from __future__ import annotations
 
-import os
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -336,13 +335,13 @@ def print_configuration_summary():
         reports_status = validate_intelligence_reports_config()
         overall_status = reports_status.get("overall", "unknown")
         if overall_status == "ready":
-            print(f"  Status: ✓ Ready for reports")
+            print("  Status: ✓ Ready for reports")
         elif overall_status == "disabled":
-            print(f"  Status: ✗ Disabled")
+            print("  Status: ✗ Disabled")
         elif overall_status == "missing_requirements":
-            print(f"  Status: ⚠ Missing requirements")
+            print("  Status: ⚠ Missing requirements")
         else:
-            print(f"  Status: ✗ Configuration error")
+            print("  Status: ✗ Configuration error")
 
         print("=" * 35)
     except Exception as e:

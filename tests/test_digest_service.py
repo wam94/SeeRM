@@ -84,7 +84,8 @@ class TestDigestService:
         assert "existing2" not in new_callsigns
 
     @patch("builtins.open", create=True)
-    def test_trigger_file_writing(self, mock_open):
+    @patch("tempfile.gettempdir", return_value="/tmp")
+    def test_trigger_file_writing(self, mock_tempdir, mock_open):
         """Test writing of new callsigns trigger file."""
         mock_file = Mock()
         mock_open.return_value.__enter__.return_value = mock_file

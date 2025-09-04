@@ -82,7 +82,7 @@ def company_deepdive(callsign: str, no_email: bool, config_file: Optional[str]):
         click.echo(f"  Duration: {report.metadata.duration_seconds:.1f}s")
 
         if report.email_sent:
-            click.echo(f"  ✓ Email sent")
+            click.echo("  ✓ Email sent")
 
         if report.notion_page_id:
             click.echo(f"  ✓ Notion page: {report.notion_page_id}")
@@ -131,7 +131,7 @@ def new_clients(callsigns: Optional[str], no_email: bool, config_file: Optional[
             click.echo(f"  Clients: {report.metadata.parameters['client_count']}")
 
             if report.email_sent:
-                click.echo(f"  ✓ Email sent")
+                click.echo("  ✓ Email sent")
 
             if report.notion_page_id:
                 click.echo(f"  ✓ Notion page: {report.notion_page_id}")
@@ -173,7 +173,7 @@ def weekly_news(days: int, no_email: bool, config_file: Optional[str]):
             click.echo(f"  Duration: {report.metadata.duration_seconds:.1f}s")
 
             if report.email_sent:
-                click.echo(f"  ✓ Email sent")
+                click.echo("  ✓ Email sent")
 
             if report.notion_page_id:
                 click.echo(f"  ✓ Notion page: {report.notion_page_id}")
@@ -230,7 +230,8 @@ def health_check(config_file: Optional[str]):
         # Check Gmail
         try:
             if settings.gmail.user and settings.gmail.credentials_path:
-                gmail_client = EnhancedGmailClient(settings)
+                # Test Gmail connection
+                _ = EnhancedGmailClient(settings)
                 click.echo(f"✓ Gmail: Connected as {settings.gmail.user}")
             else:
                 click.echo("- Gmail: Not configured (optional for reports)")
@@ -240,8 +241,9 @@ def health_check(config_file: Optional[str]):
         # Check Notion
         try:
             if settings.notion.api_key:
-                notion_client = EnhancedNotionClient(settings)
-                click.echo(f"✓ Notion API: Connected")
+                # Test Notion connection
+                _ = EnhancedNotionClient(settings)
+                click.echo("✓ Notion API: Connected")
 
                 # Check specific databases
                 if settings.notion.companies_db_id:
@@ -262,19 +264,19 @@ def health_check(config_file: Optional[str]):
         # Check optional enhancements
         openai_status = reports_status.get("openai_summaries", "unavailable")
         if openai_status == "available":
-            click.echo(f"✓ OpenAI: Available for enhanced summaries")
+            click.echo("✓ OpenAI: Available for enhanced summaries")
         else:
             click.echo("- OpenAI: Not configured (optional)")
 
         google_status = reports_status.get("google_search", "unavailable")
         if google_status == "available":
-            click.echo(f"✓ Google Search: Available for data enrichment")
+            click.echo("✓ Google Search: Available for data enrichment")
         else:
             click.echo("- Google CSE: Not configured (optional)")
 
         # Overall status
         overall_status = reports_status.get("overall", "unknown")
-        click.echo(f"\nOverall Status:")
+        click.echo("\nOverall Status:")
         if overall_status == "ready":
             click.echo("✓ Intelligence Reports: Ready for full functionality")
         elif overall_status == "missing_requirements":

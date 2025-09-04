@@ -109,7 +109,7 @@ class Company(BaseEntity):
                 import json
 
                 return json.loads(v)
-            except:
+            except (json.JSONDecodeError, TypeError, ValueError):
                 # Fallback to comma-separated parsing
                 return [owner.strip().strip('"') for owner in v.split(",") if owner.strip()]
         return v or []

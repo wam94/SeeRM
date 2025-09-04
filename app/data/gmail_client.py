@@ -18,7 +18,6 @@ from googleapiclient.errors import HttpError
 
 from app.core.config import GmailConfig
 from app.core.exceptions import GmailError, ValidationError
-from app.core.models import APIResponse
 from app.utils.reliability import (
     AdaptiveRateLimiter,
     default_rate_limiter,
