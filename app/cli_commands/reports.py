@@ -23,8 +23,6 @@ logger = structlog.get_logger(__name__)
 
 def _create_services(settings: Settings):
     """Create shared services for report generation."""
-    # Initialize core services
-    csv_processor = CSVProcessor(settings.csv_source_path)
     gmail_client = None
     notion_client = None
     
@@ -43,7 +41,6 @@ def _create_services(settings: Settings):
     
     # Create aggregator
     aggregator = IntelligenceAggregator(
-        csv_processor=csv_processor,
         gmail_client=gmail_client,
         notion_client=notion_client,
         settings=settings

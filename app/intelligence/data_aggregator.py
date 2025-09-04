@@ -35,7 +35,7 @@ class IntelligenceAggregator:
     
     def __init__(
         self,
-        gmail_client: EnhancedGmailClient,
+        gmail_client: Optional[EnhancedGmailClient] = None,
         notion_client: Optional[EnhancedNotionClient] = None,
         settings: Optional[Settings] = None
     ):
@@ -62,10 +62,18 @@ class IntelligenceAggregator:
         try:
             logger.info("Fetching latest movements", days=days)
             
-            # Get latest CSV from Gmail
-            df = self.gmail_client.get_latest_csv_from_query(max_messages=5)
-            if df is None:
-                logger.warning("No CSV data found")
+            # Get CSV data from Gmail if available, otherwise use csv_source_path
+            if self.gmail_client:
+                df = self.gmail_client.get_latest_csv_from_query(max_messages=5)
+                if df is None:
+                    logger.warning("No CSV data found in Gmail")
+                    return []
+            elif self.settings.csv_source_path:
+                import pandas as pd
+                df = pd.read_csv(self.settings.csv_source_path)
+                logger.info("Loaded CSV from file path", path=self.settings.csv_source_path)
+            else:
+                logger.warning("No CSV data source configured (no Gmail client and no csv_source_path)")
                 return []
             
             # Parse into Company objects
@@ -76,9 +84,9 @@ class IntelligenceAggregator:
             for company in companies:
                 movement = Movement(
                     callsign=company.callsign,
-                    company_name=company.company_name or company.callsign,
-                    current_balance=company.balance,
-                    percentage_change=company.percentage_change,
+                    company_name=company.dba or company.callsign,
+                    current_balance=company.curr_balance or 0,
+                    percentage_change=company.balance_pct_delta_pct,
                     rank=getattr(company, 'rank', None),
                     is_new_account=getattr(company, 'is_new_account', False),
                     products=getattr(company, 'products', [])
