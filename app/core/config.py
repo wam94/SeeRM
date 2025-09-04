@@ -142,6 +142,9 @@ class Settings(BaseSettings):
     debug: bool = Field(default=False, alias="DEBUG")
     dry_run: bool = Field(default=False, alias="DRY_RUN")
     
+    # Data source paths
+    csv_source_path: Optional[str] = Field(default=None, alias="CSV_SOURCE_PATH")
+    
     # Component configurations
     gmail: GmailConfig = Field(default_factory=GmailConfig)
     digest: DigestConfig = Field(default_factory=DigestConfig)

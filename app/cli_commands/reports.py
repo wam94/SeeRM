@@ -231,9 +231,12 @@ def health_check(config_file: Optional[str]):
         csv_status = reports_status.get("csv_source", "unknown")
         if csv_status == "configured":
             try:
-                csv_processor = CSVProcessor(settings.csv_source_path)
-                movements = csv_processor.get_latest_movements()
-                click.echo(f"✓ CSV Access: {len(movements)} movement records available")
+                csv_processor = CSVProcessor()
+                # Test CSV parsing by reading the file
+                import pandas as pd
+                df = pd.read_csv(settings.csv_source_path)
+                companies = csv_processor.parse_companies_csv(df)
+                click.echo(f"✓ CSV Access: {len(companies)} company records available")
             except Exception as e:
                 click.echo(f"✗ CSV Access: {e}")
         else:

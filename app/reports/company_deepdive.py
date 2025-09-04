@@ -68,12 +68,9 @@ class CompanyDeepDiveReport:
             executive_summary = self.company_analyzer.generate_executive_summary(intelligence)
             metrics_analysis = self.company_analyzer.analyze_metrics_trend(intelligence)
             product_analysis = self.company_analyzer.analyze_product_usage(intelligence)
-            risk_assessment = self.company_analyzer.calculate_risk_score(intelligence)
-            recommendations = self.company_analyzer.generate_recommendations(intelligence)
             
             # Step 3: News analysis
             news_timeline = intelligence.news_history
-            opportunities = intelligence.opportunities
             
             # Step 4: Create deep dive structure
             deepdive = CompanyDeepDive(
@@ -81,10 +78,7 @@ class CompanyDeepDiveReport:
                 executive_summary=executive_summary,
                 metrics_analysis=metrics_analysis,
                 news_timeline=news_timeline,
-                product_analysis=product_analysis,
-                recommendations=recommendations,
-                risk_assessment=risk_assessment,
-                opportunities=opportunities
+                product_analysis=product_analysis
             )
             
             # Step 5: Create report
@@ -154,9 +148,6 @@ class CompanyDeepDiveReport:
                                    if self._is_recent(n.published_at, 30)]),
                 "by_type": self._categorize_news_for_summary(deepdive.news_timeline)
             },
-            "risk": deepdive.risk_assessment,
-            "opportunities": deepdive.opportunities,
-            "recommendations": deepdive.recommendations,
             "products": deepdive.product_analysis
         }
     
@@ -186,31 +177,6 @@ class CompanyDeepDiveReport:
                 '</ul>'
             ])
         
-        # Risk Assessment
-        risk = deepdive.risk_assessment
-        html_parts.extend([
-            '<h2>Risk Assessment</h2>',
-            f'<p><strong>Risk Level:</strong> <span style="color: {self._get_risk_color(risk["risk_level"])}">{risk["risk_level"].title()}</span></p>',
-            f'<p><strong>Assessment:</strong> {risk["assessment"]}</p>',
-        ])
-        
-        if risk["risk_factors"]:
-            html_parts.extend([
-                '<p><strong>Risk Factors:</strong></p>',
-                '<ul>',
-            ])
-            for factor in risk["risk_factors"]:
-                html_parts.append(f'<li>{factor}</li>')
-            html_parts.append('</ul>')
-        
-        if risk["protective_factors"]:
-            html_parts.extend([
-                '<p><strong>Protective Factors:</strong></p>',
-                '<ul>',
-            ])
-            for factor in risk["protective_factors"]:
-                html_parts.append(f'<li>{factor}</li>')
-            html_parts.append('</ul>')
         
         # News Timeline
         if deepdive.news_timeline:
@@ -226,24 +192,6 @@ class CompanyDeepDiveReport:
                 html_parts.append('</li>')
             html_parts.append('</ul>')
         
-        # Recommendations
-        html_parts.extend([
-            '<h2>Recommendations</h2>',
-            '<ol>'
-        ])
-        for rec in deepdive.recommendations:
-            html_parts.append(f'<li>{rec}</li>')
-        html_parts.extend(['</ol>', '<hr>'])
-        
-        # Opportunities
-        if deepdive.opportunities:
-            html_parts.extend([
-                '<h2>Opportunities</h2>',
-                '<ul>'
-            ])
-            for opp in deepdive.opportunities:
-                html_parts.append(f'<li>{opp}</li>')
-            html_parts.extend(['</ul>'])
         
         # Footer
         html_parts.extend([
@@ -276,20 +224,6 @@ class CompanyDeepDiveReport:
                 ''
             ])
         
-        # Risk Assessment
-        risk = deepdive.risk_assessment
-        md_parts.extend([
-            '## Risk Assessment',
-            f'**Risk Level:** {risk["risk_level"].title()}',
-            f'**Assessment:** {risk["assessment"]}',
-            ''
-        ])
-        
-        if risk["risk_factors"]:
-            md_parts.extend(['**Risk Factors:**'])
-            for factor in risk["risk_factors"]:
-                md_parts.append(f'- {factor}')
-            md_parts.append('')
         
         # News Timeline
         if deepdive.news_timeline:
@@ -304,24 +238,6 @@ class CompanyDeepDiveReport:
                     md_parts.append(f'[Read more]({news_item.url})')
                 md_parts.append('')
         
-        # Recommendations
-        md_parts.extend([
-            '## Recommendations',
-            ''
-        ])
-        for i, rec in enumerate(deepdive.recommendations, 1):
-            md_parts.append(f'{i}. {rec}')
-        
-        md_parts.append('')
-        
-        # Opportunities
-        if deepdive.opportunities:
-            md_parts.extend([
-                '## Opportunities',
-                ''
-            ])
-            for opp in deepdive.opportunities:
-                md_parts.append(f'- {opp}')
         
         md_parts.extend(['', '_Generated by SeeRM Intelligence Reports_'])
         
@@ -362,7 +278,6 @@ class CompanyDeepDiveReport:
             metadata = {
                 "Callsign": deepdive.company.profile.callsign,
                 "Company Name": deepdive.company.profile.company_name,
-                "Risk Level": deepdive.risk_assessment["risk_level"],
                 "Duration": f"{report.metadata.duration_seconds:.1f}s"
             }
             
@@ -418,12 +333,3 @@ class CompanyDeepDiveReport:
         
         return counts
     
-    def _get_risk_color(self, risk_level: str) -> str:
-        """Get color for risk level."""
-        colors = {
-            "low": "green",
-            "medium": "orange", 
-            "high": "red",
-            "critical": "darkred"
-        }
-        return colors.get(risk_level.lower(), "black")

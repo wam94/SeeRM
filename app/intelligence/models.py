@@ -28,12 +28,6 @@ class NewsType(str, Enum):
     OTHER = "other"
 
 
-class RiskLevel(str, Enum):
-    """Risk assessment levels."""
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-    CRITICAL = "critical"
 
 
 @dataclass
@@ -86,9 +80,6 @@ class CompanyIntelligence:
     news_history: List[NewsItem] = field(default_factory=list)
     latest_intel: Optional[str] = None
     last_intel_date: Optional[datetime] = None
-    risk_level: RiskLevel = RiskLevel.LOW
-    opportunities: List[str] = field(default_factory=list)
-    risk_factors: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -123,8 +114,6 @@ class NewClientSummary:
     products: List[str]
     recent_news: List[NewsItem] = field(default_factory=list)
     similar_clients: List[str] = field(default_factory=list)
-    onboarding_checklist: List[str] = field(default_factory=list)
-    risk_assessment: RiskLevel = RiskLevel.LOW
 
 
 @dataclass 
@@ -147,6 +136,3 @@ class CompanyDeepDive:
     metrics_analysis: Dict[str, Any]
     news_timeline: List[NewsItem]
     product_analysis: Dict[str, Any]
-    recommendations: List[str]
-    risk_assessment: Dict[str, Any]
-    opportunities: List[str]

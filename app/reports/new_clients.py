@@ -148,18 +148,13 @@ class NewClientReport:
             # Find similar clients
             similar_clients = self._find_similar_clients(intelligence)
             
-            # Generate onboarding checklist
-            onboarding_checklist = self._generate_onboarding_checklist(intelligence)
-            
             summary = NewClientSummary(
                 callsign=callsign,
                 company_name=intelligence.profile.company_name,
                 initial_balance=intelligence.movement.current_balance,
                 products=intelligence.profile.products or intelligence.movement.products,
                 recent_news=recent_news,
-                similar_clients=similar_clients,
-                onboarding_checklist=onboarding_checklist,
-                risk_assessment=intelligence.risk_level
+                similar_clients=similar_clients
             )
             
             logger.debug("Client summary generated", callsign=callsign)
@@ -214,43 +209,11 @@ class NewClientReport:
         
         return similar
     
-    def _generate_onboarding_checklist(self, intelligence) -> List[str]:
-        """Generate onboarding checklist for new client."""
-        checklist = [
-            "Send welcome email with key contact information",
-            "Schedule onboarding call within 5 business days",
-            "Provide product documentation and training materials",
-            "Set up regular check-in schedule for first 90 days"
-        ]
-        
-        # Add specific items based on client data
-        if intelligence.movement and intelligence.movement.current_balance > 100000:
-            checklist.append("Assign dedicated account manager for high-value account")
-        
-        if intelligence.profile.products:
-            checklist.append(f"Configure product access: {', '.join(intelligence.profile.products)}")
-        else:
-            checklist.append("Determine product needs and configure access")
-        
-        if intelligence.risk_level.value in ['high', 'critical']:
-            checklist.insert(1, "PRIORITY: Address risk factors before full onboarding")
-        
-        if intelligence.news_history:
-            checklist.append("Review recent company news for conversation topics")
-        
-        return checklist
     
     def _create_consolidated_content(self, summaries: List[NewClientSummary], week_of: str) -> Dict[str, Any]:
         """Create consolidated report content."""
         total_value = sum(s.initial_balance for s in summaries)
         
-        # Group by risk level
-        by_risk = {}
-        for summary in summaries:
-            risk_level = summary.risk_assessment.value
-            if risk_level not in by_risk:
-                by_risk[risk_level] = []
-            by_risk[risk_level].append(summary)
         
         # Product analysis
         all_products = []
@@ -266,9 +229,7 @@ class NewClientReport:
                 "total_new_clients": len(summaries),
                 "total_initial_value": total_value,
                 "average_initial_value": total_value / len(summaries) if summaries else 0,
-                "high_risk_count": len(by_risk.get('high', [])) + len(by_risk.get('critical', []))
             },
-            "by_risk_level": {k: [s.callsign for s in v] for k, v in by_risk.items()},
             "product_adoption": dict(product_counts.most_common(5)),
             "client_details": [
                 {
@@ -276,7 +237,6 @@ class NewClientReport:
                     "company_name": s.company_name,
                     "initial_balance": s.initial_balance,
                     "products": s.products,
-                    "risk_level": s.risk_assessment.value,
                     "news_count": len(s.recent_news),
                     "similar_clients": s.similar_clients
                 }
@@ -304,25 +264,14 @@ class NewClientReport:
         ]
         
         for summary in summaries:
-            risk_color = self._get_risk_color(summary.risk_assessment.value)
-            
             html_parts.extend([
                 f'<h3>{summary.company_name} ({summary.callsign})</h3>',
                 f'<ul>',
                 f'<li><strong>Initial Balance:</strong> ${summary.initial_balance:,.2f}</li>',
                 f'<li><strong>Products:</strong> {", ".join(summary.products) if summary.products else "None specified"}</li>',
-                f'<li><strong>Risk Level:</strong> <span style="color: {risk_color}">{summary.risk_assessment.value.title()}</span></li>',
                 f'<li><strong>Recent News:</strong> {len(summary.recent_news)} items</li>',
-                '</ul>',
-                
-                '<p><strong>Onboarding Checklist:</strong></p>',
-                '<ul>'
+                '</ul>'
             ])
-            
-            for item in summary.onboarding_checklist:
-                html_parts.append(f'<li>{item}</li>')
-            
-            html_parts.extend(['</ul>'])
             
             if summary.similar_clients:
                 html_parts.extend([
@@ -358,14 +307,9 @@ class NewClientReport:
                 f'### {summary.company_name} ({summary.callsign})',
                 f'- **Initial Balance:** ${summary.initial_balance:,.2f}',
                 f'- **Products:** {", ".join(summary.products) if summary.products else "None specified"}',
-                f'- **Risk Level:** {summary.risk_assessment.value.title()}',
                 f'- **Recent News:** {len(summary.recent_news)} items',
-                '',
-                '**Onboarding Checklist:**'
+                ''
             ])
-            
-            for i, item in enumerate(summary.onboarding_checklist, 1):
-                md_parts.append(f'{i}. {item}')
             
             if summary.similar_clients:
                 md_parts.extend([
@@ -411,13 +355,11 @@ class NewClientReport:
             
             # Prepare metadata for the report
             total_value = sum(s.initial_balance for s in summaries)
-            high_risk_count = len([s for s in summaries if s.risk_assessment.value in ['high', 'critical']])
             
             metadata = {
                 "Client Count": len(summaries),
                 "Total Value": total_value,
                 "Average Value": total_value / len(summaries) if summaries else 0,
-                "High Risk Count": high_risk_count,
                 "Duration": f"{report.metadata.duration_seconds:.1f}s",
                 "Week Of": report.metadata.parameters.get('week_of', ''),
                 "Callsigns": [s.callsign for s in summaries]  # Multi-select if supported
@@ -446,12 +388,3 @@ class NewClientReport:
                         error=str(e))
             return None
     
-    def _get_risk_color(self, risk_level: str) -> str:
-        """Get color for risk level."""
-        colors = {
-            "low": "green",
-            "medium": "orange", 
-            "high": "red",
-            "critical": "darkred"
-        }
-        return colors.get(risk_level.lower(), "black")

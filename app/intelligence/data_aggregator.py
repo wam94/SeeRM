@@ -19,7 +19,7 @@ from app.utils.reliability import with_retry, track_performance
 
 from .models import (
     CompanyIntelligence, CompanyProfile, Movement, NewsItem, 
-    MovementType, NewsType, RiskLevel
+    MovementType, NewsType
 )
 
 logger = structlog.get_logger(__name__)
@@ -249,28 +249,17 @@ class IntelligenceAggregator:
         # Get latest intel
         latest_intel, last_intel_date = self._get_latest_intel(callsign)
         
-        # Calculate risk level
-        risk_level = self._calculate_risk_level(movement, news_history)
-        
-        # Identify opportunities and risk factors
-        opportunities = self._identify_opportunities(movement, news_history)
-        risk_factors = self._identify_risk_factors(movement, news_history)
-        
         intelligence = CompanyIntelligence(
             profile=profile,
             movement=movement,
             news_history=news_history,
             latest_intel=latest_intel,
-            last_intel_date=last_intel_date,
-            risk_level=risk_level,
-            opportunities=opportunities,
-            risk_factors=risk_factors
+            last_intel_date=last_intel_date
         )
         
         logger.info("Company intelligence compiled", 
                    callsign=callsign,
-                   news_items=len(news_history),
-                   risk_level=risk_level.value)
+                   news_items=len(news_history))
         
         return intelligence
     
@@ -368,73 +357,5 @@ class IntelligenceAggregator:
             
         return latest.summary or latest.title, latest_date
     
-    def _calculate_risk_level(self, movement: Optional[Movement], news: List[NewsItem]) -> RiskLevel:
-        """Calculate risk level based on movement and news data."""
-        risk_score = 0.0
-        
-        if movement:
-            # High risk if significant negative movement
-            if movement.percentage_change and movement.percentage_change < -30:
-                risk_score += 0.4
-            elif movement.percentage_change and movement.percentage_change < -10:
-                risk_score += 0.2
-        
-        # Check news sentiment and frequency
-        if len(news) == 0:
-            risk_score += 0.1  # No news can be a risk
-        else:
-            negative_news = sum(1 for n in news if n.sentiment == 'negative')
-            if negative_news > len(news) * 0.5:
-                risk_score += 0.3
-        
-        # Convert to risk level
-        if risk_score > 0.7:
-            return RiskLevel.CRITICAL
-        elif risk_score > 0.5:
-            return RiskLevel.HIGH
-        elif risk_score > 0.3:
-            return RiskLevel.MEDIUM
-        else:
-            return RiskLevel.LOW
     
-    def _identify_opportunities(self, movement: Optional[Movement], news: List[NewsItem]) -> List[str]:
-        """Identify potential opportunities based on data."""
-        opportunities = []
-        
-        if movement:
-            if movement.percentage_change and movement.percentage_change > 50:
-                opportunities.append("High growth trajectory - explore upsell opportunities")
-            if movement.is_new_account:
-                opportunities.append("New account - establish strong relationship early")
-        
-        # Check for positive news indicators
-        funding_news = [n for n in news if n.news_type == NewsType.FUNDRAISING]
-        if funding_news:
-            opportunities.append("Recent funding - potential for expanded services")
-        
-        partnership_news = [n for n in news if n.news_type == NewsType.PARTNERSHIP]
-        if partnership_news:
-            opportunities.append("New partnerships - may need additional capabilities")
-        
-        return opportunities
     
-    def _identify_risk_factors(self, movement: Optional[Movement], news: List[NewsItem]) -> List[str]:
-        """Identify potential risk factors based on data."""
-        risk_factors = []
-        
-        if movement:
-            if movement.percentage_change and movement.percentage_change < -20:
-                risk_factors.append("Significant balance decline")
-            if not news:
-                risk_factors.append("No recent news or activity")
-        
-        # Check for concerning news
-        negative_news = [n for n in news if n.sentiment == 'negative']
-        if len(negative_news) > 2:
-            risk_factors.append("Multiple negative news items")
-        
-        leadership_changes = [n for n in news if n.news_type == NewsType.LEADERSHIP]
-        if len(leadership_changes) > 1:
-            risk_factors.append("Recent leadership changes")
-        
-        return risk_factors
