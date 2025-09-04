@@ -5,12 +5,13 @@ Handles template rendering for digests, reports, and notifications.
 """
 
 from datetime import datetime
-from typing import Dict, Any, List, Optional
-import structlog
-from jinja2 import Environment, BaseLoader, TemplateError
+from typing import Any, Dict, List, Optional
 
-from app.core.models import DigestData, CompanyIntelligence
+import structlog
+from jinja2 import BaseLoader, Environment, TemplateError
+
 from app.core.exceptions import ValidationError
+from app.core.models import CompanyIntelligence, DigestData
 
 logger = structlog.get_logger(__name__)
 
@@ -180,7 +181,7 @@ INTELLIGENCE_TEMPLATE = """
     {% for callsign, intel in intelligence_by_company.items() %}
     <div class="company-section">
       <div class="h3">{{ callsign.upper() }}</div>
-      
+
       {% if intel.summary %}
       <div class="summary">
         <strong>Summary:</strong> {{ intel.summary }}
@@ -220,37 +221,37 @@ class DigestRenderer:
     """
     Service for rendering HTML digests and reports.
     """
-    
+
     def __init__(self):
         self.jinja_env = Environment(loader=BaseLoader())
-        
+
         # Load templates
         try:
             self.digest_template = self.jinja_env.from_string(DIGEST_TEMPLATE)
             self.intelligence_template = self.jinja_env.from_string(INTELLIGENCE_TEMPLATE)
-            
+
             logger.info("Digest renderer initialized with templates")
-            
+
         except TemplateError as e:
             logger.error("Failed to initialize templates", error=str(e))
             raise ValidationError(f"Template initialization failed: {e}")
-    
+
     def render_digest(self, digest_data: DigestData) -> str:
         """
         Render digest data to HTML.
-        
+
         Args:
             digest_data: Digest data to render
-            
+
         Returns:
             HTML string
-            
+
         Raises:
             ValidationError: On rendering errors
         """
         try:
             now = datetime.now()
-            
+
             # Prepare template context
             context = {
                 "subject": digest_data.subject,
@@ -262,95 +263,92 @@ class DigestRenderer:
                 "product_starts": digest_data.product_starts,
                 "product_stops": digest_data.product_stops,
             }
-            
+
             # Render template
             html = self.digest_template.render(**context)
-            
+
             logger.info(
                 "Digest rendered successfully",
                 html_length=len(html),
                 accounts=digest_data.stats.total_accounts,
                 gainers=len(digest_data.top_pct_gainers),
-                losers=len(digest_data.top_pct_losers)
+                losers=len(digest_data.top_pct_losers),
             )
-            
+
             return html
-            
+
         except TemplateError as e:
             error_msg = f"Template rendering failed: {e}"
             logger.error("Digest rendering failed", error=str(e))
             raise ValidationError(error_msg)
-        
+
         except Exception as e:
             error_msg = f"Unexpected error rendering digest: {e}"
             logger.error("Digest rendering failed", error=str(e))
             raise ValidationError(error_msg)
-    
+
     def render_intelligence_report(
-        self,
-        intelligence_by_company: Dict[str, CompanyIntelligence]
+        self, intelligence_by_company: Dict[str, CompanyIntelligence]
     ) -> str:
         """
         Render intelligence report to HTML.
-        
+
         Args:
             intelligence_by_company: Dict mapping callsign to intelligence data
-            
+
         Returns:
             HTML string
-            
+
         Raises:
             ValidationError: On rendering errors
         """
         try:
             now = datetime.now()
-            
+
             # Prepare template context
             context = {
                 "now_date": now.strftime("%Y-%m-%d"),
                 "now_time": now.strftime("%H:%M:%S UTC"),
                 "intelligence_by_company": intelligence_by_company,
             }
-            
+
             # Render template
             html = self.intelligence_template.render(**context)
-            
+
             logger.info(
                 "Intelligence report rendered successfully",
                 html_length=len(html),
-                companies=len(intelligence_by_company)
+                companies=len(intelligence_by_company),
             )
-            
+
             return html
-            
+
         except TemplateError as e:
             error_msg = f"Intelligence template rendering failed: {e}"
             logger.error("Intelligence rendering failed", error=str(e))
             raise ValidationError(error_msg)
-        
+
         except Exception as e:
             error_msg = f"Unexpected error rendering intelligence report: {e}"
             logger.error("Intelligence rendering failed", error=str(e))
             raise ValidationError(error_msg)
-    
+
     def render_dry_run_report(
-        self,
-        operations: List[Dict[str, Any]],
-        title: str = "Dry Run Report"
+        self, operations: List[Dict[str, Any]], title: str = "Dry Run Report"
     ) -> str:
         """
         Render dry run operations report to HTML.
-        
+
         Args:
             operations: List of operations that would be performed
             title: Report title
-            
+
         Returns:
             HTML string
         """
         try:
             now = datetime.now()
-            
+
             # Simple template for dry run reports
             template_str = """
             <!doctype html>
@@ -373,11 +371,11 @@ class DigestRenderer:
                   <h1>{{ title }}</h1>
                   <p>Generated on {{ now_date }} at {{ now_time }}</p>
                 </div>
-                
+
                 <div class="summary">
                   <strong>Summary:</strong> {{ operations|length }} operations would be performed.
                 </div>
-                
+
                 {% for op in operations %}
                 <div class="operation {{ op.css_class }}">
                   <strong>{{ op.operation_type|upper }}:</strong> {{ op.description }}
@@ -388,14 +386,14 @@ class DigestRenderer:
                   {% endif %}
                 </div>
                 {% endfor %}
-                
+
                 <div style="margin-top: 24px; font-size: 12px; color: #777;">
                   This is a dry run report - no actual changes were made.
                 </div>
               </body>
             </html>
             """
-            
+
             # Enhance operations with CSS classes
             enhanced_ops = []
             for op in operations:
@@ -403,29 +401,25 @@ class DigestRenderer:
                 if "create" in op.get("operation_type", "").lower():
                     enhanced_op["css_class"] = "would-create"
                 elif "update" in op.get("operation_type", "").lower():
-                    enhanced_op["css_class"] = "would-update" 
+                    enhanced_op["css_class"] = "would-update"
                 elif "delete" in op.get("operation_type", "").lower():
                     enhanced_op["css_class"] = "would-delete"
                 else:
                     enhanced_op["css_class"] = ""
                 enhanced_ops.append(enhanced_op)
-            
+
             template = self.jinja_env.from_string(template_str)
             html = template.render(
                 title=title,
                 now_date=now.strftime("%Y-%m-%d"),
                 now_time=now.strftime("%H:%M:%S UTC"),
-                operations=enhanced_ops
+                operations=enhanced_ops,
             )
-            
-            logger.info(
-                "Dry run report rendered",
-                operations_count=len(operations),
-                title=title
-            )
-            
+
+            logger.info("Dry run report rendered", operations_count=len(operations), title=title)
+
             return html
-            
+
         except Exception as e:
             error_msg = f"Failed to render dry run report: {e}"
             logger.error("Dry run report rendering failed", error=str(e))
@@ -435,7 +429,7 @@ class DigestRenderer:
 def create_digest_renderer() -> DigestRenderer:
     """
     Factory function to create digest renderer.
-    
+
     Returns:
         Configured DigestRenderer
     """

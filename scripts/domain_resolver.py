@@ -1,38 +1,86 @@
 # scripts/domain_resolver.py
 from __future__ import annotations
-import argparse, re, time, json, math
+
+import argparse
+import json
+import math
+import re
+import time
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional, Tuple
+from difflib import SequenceMatcher
+from typing import Any, Dict, List, Optional, Tuple
+
 import requests
 import tldextract
-from difflib import SequenceMatcher
 
 # We reuse your CSE client
 from app.news_job import google_cse_search
 
-DEBUG = (str.__contains__( (".").join([]), "never"))  # always False unless --debug
-def logd(*a): 
-    if DEBUG: print(*a)
+DEBUG = str.__contains__((".").join([]), "never")  # always False unless --debug
+
+
+def logd(*a):
+    if DEBUG:
+        print(*a)
+
 
 # --- Hard filters ------------------------------------------------------------
 
 BLOCK_HOSTS = {
     # Social / directories / aggregators
-    "linkedin.com","x.com","twitter.com","facebook.com","instagram.com","youtube.com",
-    "github.com","medium.com","substack.com","notion.so","notion.site","angel.co",
-    "wikipedia.org","crunchbase.com","pitchbook.com","tracxn.com","cbinsights.com",
-    "producthunt.com","read.cv","about.me","glassdoor.com","indeed.com","stackexchange.com",
+    "linkedin.com",
+    "x.com",
+    "twitter.com",
+    "facebook.com",
+    "instagram.com",
+    "youtube.com",
+    "github.com",
+    "medium.com",
+    "substack.com",
+    "notion.so",
+    "notion.site",
+    "angel.co",
+    "wikipedia.org",
+    "crunchbase.com",
+    "pitchbook.com",
+    "tracxn.com",
+    "cbinsights.com",
+    "producthunt.com",
+    "read.cv",
+    "about.me",
+    "glassdoor.com",
+    "indeed.com",
+    "stackexchange.com",
     # Big media / local media
-    "bloomberg.com","wsj.com","ft.com","reuters.com","apnews.com","yahoo.com",
-    "techcrunch.com","theverge.com","forbes.com","fortune.com","businessinsider.com",
-    "nytimes.com","washingtonpost.com","latimes.com","cnbc.com","cnn.com","bbc.com",
-    "bizjournals.com","prnewswire.com","businesswire.com","globenewswire.com",
-    "medium.com","substack.com",
+    "bloomberg.com",
+    "wsj.com",
+    "ft.com",
+    "reuters.com",
+    "apnews.com",
+    "yahoo.com",
+    "techcrunch.com",
+    "theverge.com",
+    "forbes.com",
+    "fortune.com",
+    "businessinsider.com",
+    "nytimes.com",
+    "washingtonpost.com",
+    "latimes.com",
+    "cnbc.com",
+    "cnn.com",
+    "bbc.com",
+    "bizjournals.com",
+    "prnewswire.com",
+    "businesswire.com",
+    "globenewswire.com",
+    "medium.com",
+    "substack.com",
 }
 
-GOOD_TLDS = { "com","ai","io","co","dev","net","app","org" }
+GOOD_TLDS = {"com", "ai", "io", "co", "dev", "net", "app", "org"}
 
 # --- Utilities ---------------------------------------------------------------
+
 
 def normalized_domain(url: str) -> Optional[str]:
     try:
@@ -43,9 +91,11 @@ def normalized_domain(url: str) -> Optional[str]:
     except Exception:
         return None
 
+
 def sld(domain_root: str) -> str:
     ext = tldextract.extract(domain_root)
     return (ext.domain or "").lower()
+
 
 def head_ok(url: str, timeout: float = 6.0) -> bool:
     """Treat 403/405 as acceptable (common for HEAD). Fallback to a tiny GET."""
@@ -58,34 +108,57 @@ def head_ok(url: str, timeout: float = 6.0) -> bool:
     # Tiny GET fallback (don't download the world)
     try:
         r = requests.get(
-            url, timeout=timeout, allow_redirects=True,
+            url,
+            timeout=timeout,
+            allow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0", "Range": "bytes=0-4096"},
         )
         return (r.status_code < 400) or (r.status_code in (403, 405))
     except Exception:
         return False
 
+
 def get_title(url: str, timeout: float = 6.0) -> Optional[str]:
     try:
-        r = requests.get(url, timeout=timeout, allow_redirects=True, headers={"User-Agent":"Mozilla/5.0"})
+        r = requests.get(
+            url, timeout=timeout, allow_redirects=True, headers={"User-Agent": "Mozilla/5.0"}
+        )
         if r.status_code >= 400:
             return None
-        m = re.search(r"<title[^>]*>(.*?)</title>", r.text, flags=re.I|re.S)
+        m = re.search(r"<title[^>]*>(.*?)</title>", r.text, flags=re.I | re.S)
         if not m:
             return None
         return re.sub(r"\s+", " ", m.group(1)).strip()
     except Exception:
         return None
 
+
 def seq_ratio(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
+
 
 # --- Brand tokens ------------------------------------------------------------
 
 REMOVE_WORDS = {
-    "inc","inc.","llc","l.l.c.","corp","co","co.","company","holdings","group",
-    "technologies","technology","systems","labs","ai","software","the"
+    "inc",
+    "inc.",
+    "llc",
+    "l.l.c.",
+    "corp",
+    "co",
+    "co.",
+    "company",
+    "holdings",
+    "group",
+    "technologies",
+    "technology",
+    "systems",
+    "labs",
+    "ai",
+    "software",
+    "the",
 }
+
 
 def brand_tokens(company_name: str) -> List[str]:
     """
@@ -116,7 +189,9 @@ def brand_tokens(company_name: str) -> List[str]:
             out.append(t)
     return out[:4]
 
-HOMEPAGE_HINTS = ("official site","homepage","home page","welcome","about us","our mission")
+
+HOMEPAGE_HINTS = ("official site", "homepage", "home page", "welcome", "about us", "our mission")
+
 
 @dataclass
 class Hit:
@@ -126,7 +201,9 @@ class Hit:
     domain: str
     family: str
 
+
 # --- Candidate generation ----------------------------------------------------
+
 
 def cse_hits(q: str, family: str, api_key: str, cse_id: str, num: int = 6) -> List[Hit]:
     items: List[Dict[str, Any]] = google_cse_search(api_key, cse_id, q, num=num) or []
@@ -149,7 +226,9 @@ def cse_hits(q: str, family: str, api_key: str, cse_id: str, num: int = 6) -> Li
         )
     return hits
 
+
 # --- Scoring -----------------------------------------------------------------
+
 
 def domain_brand_score(domain: str, tokens: List[str]) -> float:
     d = sld(domain)
@@ -161,6 +240,7 @@ def domain_brand_score(domain: str, tokens: List[str]) -> float:
         return 50.0 * best  # strong base
     return 0.0  # reject later unless forced fallback
 
+
 def path_penalty(url: str) -> float:
     # Prefer homepage-ish URLs
     try:
@@ -170,21 +250,23 @@ def path_penalty(url: str) -> float:
     depth = path.strip("/").count("/")
     return -5.0 * max(0, depth)
 
+
 def tld_bonus(domain: str) -> float:
     ext = tldextract.extract(domain).suffix.lower()
     return 5.0 if ext in GOOD_TLDS else 0.0
+
 
 def homepage_hint_bonus(title: str, snippet: str) -> float:
     text = f"{title} • {snippet}".lower()
     return 8.0 if any(h in text for h in HOMEPAGE_HINTS) else 0.0
 
+
 # --- Resolver ----------------------------------------------------------------
 
-def resolve_domain(company: str,
-                   owners_csv: Optional[str],
-                   api_key: str,
-                   cse_id: str,
-                   debug: bool = False) -> Dict[str, Any]:
+
+def resolve_domain(
+    company: str, owners_csv: Optional[str], api_key: str, cse_id: str, debug: bool = False
+) -> Dict[str, Any]:
     global DEBUG
     DEBUG = debug
 
@@ -196,13 +278,13 @@ def resolve_domain(company: str,
 
     logd("[tokens]", tokens, "| alias:", alias)
 
-    queries: List[Tuple[str,str]] = []
+    queries: List[Tuple[str, str]] = []
     # Company-centric
     cname = company.strip()
     queries += [
         (f'"{cname}" official site', "company"),
         (f'"{cname}" homepage', "company"),
-        (f'{tokens[0]} company site', "brand") if tokens else ("", "brand"),
+        (f"{tokens[0]} company site", "brand") if tokens else ("", "brand"),
     ]
     if alias and alias.lower() != cname.lower():
         queries.append((f'"{alias}" official site', "alias"))
@@ -253,7 +335,7 @@ def resolve_domain(company: str,
         # Take top-most hit for features
         top = slot["hits"][0]
         score = bscore
-        score += 10.0 * min(3, slot["consensus"])   # consensus boost
+        score += 10.0 * min(3, slot["consensus"])  # consensus boost
         score += tld_bonus(dom)
         score += homepage_hint_bonus(top.title, top.snippet)
         score += max(path_penalty(h.url) for h in slot["hits"])  # prefer shallow paths
@@ -271,20 +353,30 @@ def resolve_domain(company: str,
                 if tokens and tokens[0] not in sld(best_dom) and tokens[0] not in title.lower():
                     # title check failed; keep but note
                     logd("[warn] weak title brand signal:", title[:120])
-                result = {"domain_root": best_dom, "homepage_url": u, "score": int(round(best_score)), "why": why}
+                result = {
+                    "domain_root": best_dom,
+                    "homepage_url": u,
+                    "score": int(round(best_score)),
+                    "why": why,
+                }
                 print(json.dumps(result))
                 return result
 
     # Deterministic fallback: try <brand>.{com,ai,io} in order
     if tokens:
         base = tokens[0]
-        for tld in ("com","ai","io"):
+        for tld in ("com", "ai", "io"):
             guess = f"{base}.{tld}"
             if guess in BLOCK_HOSTS:
                 continue
             for u in (f"https://{guess}", f"https://www.{guess}", f"http://{guess}"):
                 if head_ok(u):
-                    result = {"domain_root": guess, "homepage_url": u, "score": 40, "why": "fallback brand.tld + head-ok"}
+                    result = {
+                        "domain_root": guess,
+                        "homepage_url": u,
+                        "score": 40,
+                        "why": "fallback brand.tld + head-ok",
+                    }
                     print(json.dumps(result))
                     return result
 
@@ -297,7 +389,12 @@ def resolve_domain(company: str,
         if not root:
             continue
         if head_ok(f"https://{root}"):
-            result = {"domain_root": root, "homepage_url": f"https://{root}", "score": 10, "why": "last-resort: first live non-blocked"}
+            result = {
+                "domain_root": root,
+                "homepage_url": f"https://{root}",
+                "score": 10,
+                "why": "last-resort: first live non-blocked",
+            }
             print(json.dumps(result))
             return result
 
@@ -306,7 +403,9 @@ def resolve_domain(company: str,
     print(json.dumps(result))
     return result
 
+
 # --- CLI ---------------------------------------------------------------------
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -315,24 +414,33 @@ def main():
     ap.add_argument("--debug", action="store_true")
     args = ap.parse_args()
 
-    api_key = (args and True) and ( (lambda k: k)(None) )  # placeholder to keep linter quiet
-    api_key = (api_key or "")  # noqa
+    api_key = (args and True) and ((lambda k: k)(None))  # placeholder to keep linter quiet
+    api_key = api_key or ""  # noqa
 
-    key = (json and True)  # noqa
+    key = json and True  # noqa
 
-    g_api_key = (requests and True) and (  # noqa
-        (lambda: (requests and None))()
-    ) or None
+    g_api_key = (requests and True) and ((lambda: (requests and None))()) or None  # noqa
 
     # Pull from env (same as the rest of your repo)
     import os
+
     g_api_key = os.getenv("GOOGLE_API_KEY")
-    cse_id    = os.getenv("GOOGLE_CSE_ID")
+    cse_id = os.getenv("GOOGLE_CSE_ID")
     if not (g_api_key and cse_id):
-        print(json.dumps({"domain_root": None, "homepage_url": None, "score": 0, "why": "missing GOOGLE_API_KEY/GOOGLE_CSE_ID"}))
+        print(
+            json.dumps(
+                {
+                    "domain_root": None,
+                    "homepage_url": None,
+                    "score": 0,
+                    "why": "missing GOOGLE_API_KEY/GOOGLE_CSE_ID",
+                }
+            )
+        )
         return
 
     resolve_domain(args.company, args.owners, g_api_key, cse_id, debug=args.debug)
+
 
 if __name__ == "__main__":
     main()

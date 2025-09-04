@@ -1,13 +1,20 @@
 # app/notion_client.py
 from __future__ import annotations
-import os, re, json, datetime, requests
+
+import datetime
+import json
+import os
+import re
 from typing import Any, Dict, List, Optional, Tuple
+
+import requests
 
 NOTION_API = "https://api.notion.com/v1"
 NOTION_VERSION = os.getenv("NOTION_VERSION", "2022-06-28")
 
 
 # -------------------- HTTP --------------------
+
 
 def _headers() -> Dict[str, str]:
     return {
@@ -16,48 +23,60 @@ def _headers() -> Dict[str, str]:
         "Content-Type": "application/json",
     }
 
+
 def notion_get(path: str, params: Dict[str, Any] | None = None) -> requests.Response:
     r = requests.get(f"{NOTION_API}{path}", headers=_headers(), params=params, timeout=30)
     r.raise_for_status()
     return r
+
 
 def notion_post(path: str, json: Dict[str, Any]) -> requests.Response:
     r = requests.post(f"{NOTION_API}{path}", headers=_headers(), json=json, timeout=30)
     r.raise_for_status()
     return r
 
+
 def notion_patch(path: str, json: Dict[str, Any]) -> requests.Response:
     r = requests.patch(f"{NOTION_API}{path}", headers=_headers(), json=json, timeout=30)
     r.raise_for_status()
     return r
+
 
 def notion_delete(path: str) -> requests.Response:
     r = requests.delete(f"{NOTION_API}{path}", headers=_headers(), timeout=30)
     r.raise_for_status()
     return r
 
+
 def notion_query_db(db_id: str, filter_json: Dict[str, Any]) -> Dict[str, Any]:
-    r = requests.post(f"{NOTION_API}/databases/{db_id}/query", headers=_headers(), json=filter_json, timeout=30)
+    r = requests.post(
+        f"{NOTION_API}/databases/{db_id}/query", headers=_headers(), json=filter_json, timeout=30
+    )
     r.raise_for_status()
     return r.json()
 
 
 # -------------------- Schema/utils --------------------
 
+
 def _rt_segments(text: str, chunk: int = 1800) -> Dict[str, Any]:
     # Break into <= ~2k chars per segment (rich_text item limit)
-    parts = [text[i:i+chunk] for i in range(0, len(text), chunk)] or [""]
+    parts = [text[i : i + chunk] for i in range(0, len(text), chunk)] or [""]
     return {"rich_text": [{"type": "text", "text": {"content": p}} for p in parts]}
 
+
 def _title(text: str) -> Dict[str, Any]:
-    parts = [text[i:i+1800] for i in range(0, len(text), 1800)] or [""]
+    parts = [text[i : i + 1800] for i in range(0, len(text), 1800)] or [""]
     return {"title": [{"type": "text", "text": {"content": p}} for p in parts]}
+
 
 def _date_iso(dt: Optional[str]) -> Dict[str, Any]:
     return {"date": {"start": dt or datetime.date.today().isoformat()}}
 
+
 def get_db_schema(db_id: str) -> Dict[str, Any]:
     return notion_get(f"/databases/{db_id}").json()
+
 
 def get_title_prop_name(schema: Dict[str, Any]) -> str:
     for name, meta in (schema.get("properties") or {}).items():
@@ -65,11 +84,15 @@ def get_title_prop_name(schema: Dict[str, Any]) -> str:
             return name
     return "Name"
 
+
 def prop_exists(schema: Dict[str, Any], name: str, typ: str) -> bool:
     meta = (schema.get("properties") or {}).get(name)
     return bool(meta and meta.get("type") == typ)
 
-def _first_prop_of_type(schema: Dict[str, Any], typ: str, preferred: str | None = None) -> Optional[str]:
+
+def _first_prop_of_type(
+    schema: Dict[str, Any], typ: str, preferred: str | None = None
+) -> Optional[str]:
     if preferred and prop_exists(schema, preferred, typ):
         return preferred
     for name, meta in (schema.get("properties") or {}).items():
@@ -77,9 +100,11 @@ def _first_prop_of_type(schema: Dict[str, Any], typ: str, preferred: str | None 
             return name
     return None
 
+
 def _get_rich_text_plain(props: Dict[str, Any], prop: str) -> str:
     node = (props.get(prop) or {}).get("rich_text") or []
-    return "".join(x.get("plain_text","") for x in node)
+    return "".join(x.get("plain_text", "") for x in node)
+
 
 def _bytes(s: str) -> int:
     try:
@@ -90,14 +115,18 @@ def _bytes(s: str) -> int:
 
 # -------------------- Companies DB helpers (existing) --------------------
 
-def find_company_page(companies_db_id: str, callsign: str, title_prop: Optional[str] = None) -> Optional[str]:
+
+def find_company_page(
+    companies_db_id: str, callsign: str, title_prop: Optional[str] = None
+) -> Optional[str]:
     schema = get_db_schema(companies_db_id)
     title_prop = title_prop or get_title_prop_name(schema)
-    data = notion_query_db(companies_db_id, {
-        "filter": {"property": title_prop, "title": {"equals": callsign}}
-    })
+    data = notion_query_db(
+        companies_db_id, {"filter": {"property": title_prop, "title": {"equals": callsign}}}
+    )
     res = data.get("results", [])
     return res[0]["id"] if res else None
+
 
 def upsert_company_page(companies_db_id: str, payload: Dict[str, Any]) -> str:
     """
@@ -109,9 +138,9 @@ def upsert_company_page(companies_db_id: str, payload: Dict[str, Any]) -> str:
 
     cs = payload["callsign"]
     # Find existing
-    data = notion_query_db(companies_db_id, {
-        "filter": {"property": title_prop, "title": {"equals": cs}}
-    })
+    data = notion_query_db(
+        companies_db_id, {"filter": {"property": title_prop, "title": {"equals": cs}}}
+    )
     pid = data.get("results", [{}])
     pid = pid[0]["id"] if pid else None
 
@@ -121,23 +150,40 @@ def upsert_company_page(companies_db_id: str, payload: Dict[str, Any]) -> str:
     if prop_exists(schema, "Website", "url") and payload.get("website"):
         props["Website"] = {"url": payload["website"]}
     if prop_exists(schema, "Domain", "url") and payload.get("domain"):
-        props["Domain"] = {"url": f"https://{payload['domain']}" if not payload['domain'].startswith("http") else payload["domain"]}
+        props["Domain"] = {
+            "url": (
+                f"https://{payload['domain']}"
+                if not payload["domain"].startswith("http")
+                else payload["domain"]
+            )
+        }
     elif prop_exists(schema, "Domain", "rich_text") and payload.get("domain"):
         props["Domain"] = _rt_segments(payload["domain"])
     if prop_exists(schema, "Owners", "rich_text") and payload.get("owners"):
         props["Owners"] = _rt_segments(", ".join(payload["owners"]))
     if prop_exists(schema, "Tags", "multi_select") and payload.get("tags"):
         props["Tags"] = {"multi_select": [{"name": t[:90]} for t in payload["tags"] if t]}
-    if prop_exists(schema, "Needs Dossier", "checkbox") and payload.get("needs_dossier") is not None:
+    if (
+        prop_exists(schema, "Needs Dossier", "checkbox")
+        and payload.get("needs_dossier") is not None
+    ):
         props["Needs Dossier"] = {"checkbox": bool(payload["needs_dossier"])}
 
     if pid:
         notion_patch(f"/pages/{pid}", {"properties": props})
         return pid
-    res = notion_post("/pages", {"parent": {"database_id": companies_db_id}, "properties": props}).json()
+    res = notion_post(
+        "/pages", {"parent": {"database_id": companies_db_id}, "properties": props}
+    ).json()
     return res["id"]
 
-def set_latest_intel(companies_page_id: str, summary_text: str, date_iso: Optional[str] = None, companies_db_id: Optional[str] = None):
+
+def set_latest_intel(
+    companies_page_id: str,
+    summary_text: str,
+    date_iso: Optional[str] = None,
+    companies_db_id: Optional[str] = None,
+):
     """
     Safely set Latest Intel and Last Intel At (if those props exist).
     If companies_db_id provided, we verify property existence/types first.
@@ -158,25 +204,29 @@ def set_latest_intel(companies_page_id: str, summary_text: str, date_iso: Option
         }
     notion_patch(f"/pages/{companies_page_id}", {"properties": props})
 
+
 def set_needs_dossier(companies_page_id: str, needs: bool = True):
-    notion_patch(f"/pages/{companies_page_id}", {"properties": {"Needs Dossier": {"checkbox": bool(needs)}}})
+    notion_patch(
+        f"/pages/{companies_page_id}", {"properties": {"Needs Dossier": {"checkbox": bool(needs)}}}
+    )
+
 
 def get_company_domain_data(companies_db_id: str, callsign: str) -> Dict[str, Optional[str]]:
     """Fetch domain/website data from Notion for a company by callsign."""
     schema = get_db_schema(companies_db_id)
     title_prop = get_title_prop_name(schema)
-    
-    data = notion_query_db(companies_db_id, {
-        "filter": {"property": title_prop, "title": {"equals": callsign}}
-    })
-    
+
+    data = notion_query_db(
+        companies_db_id, {"filter": {"property": title_prop, "title": {"equals": callsign}}}
+    )
+
     results = data.get("results", [])
     if not results:
         return {"domain": None, "website": None}
-    
+
     page = results[0]
     properties = page.get("properties", {})
-    
+
     # Extract domain
     domain = None
     domain_prop = properties.get("Domain")
@@ -190,56 +240,57 @@ def get_company_domain_data(companies_db_id: str, callsign: str) -> Dict[str, Op
             rich_text = domain_prop.get("rich_text", [])
             if rich_text and rich_text[0].get("text"):
                 domain = rich_text[0]["text"].get("content", "").strip()
-    
+
     # Extract website
     website = None
     website_prop = properties.get("Website")
     if website_prop and website_prop.get("type") == "url":
         website = website_prop.get("url")
-    
+
     return {"domain": domain, "website": website}
 
-def get_all_companies_domain_data(companies_db_id: str, callsigns: List[str]) -> Dict[str, Dict[str, Optional[str]]]:
+
+def get_all_companies_domain_data(
+    companies_db_id: str, callsigns: List[str]
+) -> Dict[str, Dict[str, Optional[str]]]:
     """Efficiently fetch domain/website data for multiple companies from Notion."""
     schema = get_db_schema(companies_db_id)
     title_prop = get_title_prop_name(schema)
-    
+
     # Fetch all company pages (paginated)
     all_results = []
     has_more = True
     start_cursor = None
-    
+
     while has_more:
-        query_params = {
-            "page_size": 100  # Max page size
-        }
+        query_params = {"page_size": 100}  # Max page size
         if start_cursor:
             query_params["start_cursor"] = start_cursor
-            
+
         data = notion_query_db(companies_db_id, query_params)
         results = data.get("results", [])
         all_results.extend(results)
-        
+
         has_more = data.get("has_more", False)
         start_cursor = data.get("next_cursor")
-    
+
     # Extract domain data for requested callsigns
     domain_data = {}
     callsigns_set = set(cs.lower() for cs in callsigns)
-    
+
     for page in all_results:
         properties = page.get("properties", {})
-        
+
         # Get callsign from title
         title_prop_data = properties.get(title_prop, {})
         title_array = title_prop_data.get("title", [])
         if not title_array:
             continue
-            
+
         callsign = title_array[0].get("text", {}).get("content", "").strip().lower()
         if callsign not in callsigns_set:
             continue
-        
+
         # Extract domain
         domain = None
         domain_prop = properties.get("Domain")
@@ -252,37 +303,53 @@ def get_all_companies_domain_data(companies_db_id: str, callsigns: List[str]) ->
                 rich_text = domain_prop.get("rich_text", [])
                 if rich_text and rich_text[0].get("text"):
                     domain = rich_text[0]["text"].get("content", "").strip()
-        
+
         # Extract website
         website = None
         website_prop = properties.get("Website")
         if website_prop and website_prop.get("type") == "url":
             website = website_prop.get("url")
-        
+
         domain_data[callsign] = {"domain": domain, "website": website}
-    
+
     # Fill in missing callsigns with None values
     for cs in callsigns:
         if cs.lower() not in domain_data:
             domain_data[cs.lower()] = {"domain": None, "website": None}
-    
+
     return domain_data
 
 
 # -------------------- Intel Archive (timeline-only) --------------------
+
 
 def _intel_schema_hints(intel_db_id: str) -> Dict[str, Optional[str]]:
     s = get_db_schema(intel_db_id)
     return {
         "title": get_title_prop_name(s),
         "company_rel": _first_prop_of_type(s, "relation", preferred="Company"),
-        "callsign_prop": ("Callsign" if "Callsign" in (s.get("properties") or {}) else _first_prop_of_type(s, "rich_text")),
+        "callsign_prop": (
+            "Callsign"
+            if "Callsign" in (s.get("properties") or {})
+            else _first_prop_of_type(s, "rich_text")
+        ),
         "date_prop": "Date" if prop_exists(s, "Date", "date") else _first_prop_of_type(s, "date"),
-        "summary_prop": "Summary" if prop_exists(s, "Summary", "rich_text") else _first_prop_of_type(s, "rich_text"),
-        "last_updated_prop": "Last Updated" if prop_exists(s, "Last Updated", "date") else _first_prop_of_type(s, "date"),
+        "summary_prop": (
+            "Summary"
+            if prop_exists(s, "Summary", "rich_text")
+            else _first_prop_of_type(s, "rich_text")
+        ),
+        "last_updated_prop": (
+            "Last Updated"
+            if prop_exists(s, "Last Updated", "date")
+            else _first_prop_of_type(s, "date")
+        ),
     }
 
-def ensure_intel_page(intel_db_id: str, companies_db_id: Optional[str], company_page_id: Optional[str], callsign: str) -> str:
+
+def ensure_intel_page(
+    intel_db_id: str, companies_db_id: Optional[str], company_page_id: Optional[str], callsign: str
+) -> str:
     hints = _intel_schema_hints(intel_db_id)
     title_prop = hints["title"]
     callsign_prop = hints["callsign_prop"]
@@ -291,7 +358,10 @@ def ensure_intel_page(intel_db_id: str, companies_db_id: Optional[str], company_
     # 1) Try query by callsign if we have a usable property
     if callsign_prop:
         try:
-            data = notion_query_db(intel_db_id, {"filter": {"property": callsign_prop, "rich_text": {"equals": callsign}}})
+            data = notion_query_db(
+                intel_db_id,
+                {"filter": {"property": callsign_prop, "rich_text": {"equals": callsign}}},
+            )
             res = data.get("results", [])
             if res:
                 return res[0]["id"]
@@ -301,7 +371,10 @@ def ensure_intel_page(intel_db_id: str, companies_db_id: Optional[str], company_
     # 2) Try by Company relation (if we have both)
     if company_rel and company_page_id:
         try:
-            data = notion_query_db(intel_db_id, {"filter": {"property": company_rel, "relation": {"contains": company_page_id}}})
+            data = notion_query_db(
+                intel_db_id,
+                {"filter": {"property": company_rel, "relation": {"contains": company_page_id}}},
+            )
             res = data.get("results", [])
             if res:
                 return res[0]["id"]
@@ -317,15 +390,20 @@ def ensure_intel_page(intel_db_id: str, companies_db_id: Optional[str], company_
     if callsign_prop:
         props[callsign_prop] = _rt_segments(callsign)
 
-    res = notion_post("/pages", {"parent": {"database_id": intel_db_id}, "properties": props}).json()
+    res = notion_post(
+        "/pages", {"parent": {"database_id": intel_db_id}, "properties": props}
+    ).json()
     return res["id"]
+
 
 def _get_page_properties(page_id: str) -> Dict[str, Any]:
     return notion_get(f"/pages/{page_id}").json().get("properties", {})
 
+
 def _set_page_props(page_id: str, props: Dict[str, Any]):
     if props:
         notion_patch(f"/pages/{page_id}", {"properties": props})
+
 
 def _set_summary_latest(page_id: str, summary_prop: str, text: str, max_bytes: int = 250_000):
     """
@@ -344,68 +422,89 @@ def _set_summary_latest(page_id: str, summary_prop: str, text: str, max_bytes: i
                 enc = enc[:-1]
     _set_page_props(page_id, {summary_prop: _rt_segments(text)})
 
-def _append_timeline_group(page_id: str, date_iso: str, summary_text: str, items: List[Dict[str, Any]]):
+
+def _append_timeline_group(
+    page_id: str, date_iso: str, summary_text: str, items: List[Dict[str, Any]]
+):
     """Append a toggle group: heading line + summary paragraph + bullets."""
     toggle_title = f"{date_iso} — Weekly intel"
     bullets: List[Dict[str, Any]] = []
-    for it in (items or []):
+    for it in items or []:
         ttl = (it.get("title") or "").strip()[:180]
         src = (it.get("source") or "").strip()
         url = (it.get("url") or "").strip()
         line = f"{ttl} — {src}".strip(" —")
-        bullets.append({
-            "object": "block",
-            "type": "bulleted_list_item",
-            "bulleted_list_item": {
-                "rich_text": [{
-                    "type": "text",
-                    "text": {"content": line, "link": {"url": url} if url else None}
-                }]
+        bullets.append(
+            {
+                "object": "block",
+                "type": "bulleted_list_item",
+                "bulleted_list_item": {
+                    "rich_text": [
+                        {
+                            "type": "text",
+                            "text": {"content": line, "link": {"url": url} if url else None},
+                        }
+                    ]
+                },
             }
-        })
-    children = [{
-        "object": "block",
-        "type": "paragraph",
-        "paragraph": {"rich_text": [{"type": "text", "text": {"content": summary_text[:1800]}}]}
-    }] + bullets
+        )
+    children = [
+        {
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {
+                "rich_text": [{"type": "text", "text": {"content": summary_text[:1800]}}]
+            },
+        }
+    ] + bullets
 
     r = notion_patch(
         f"/blocks/{page_id}/children",
         {
-            "children": [{
-                "object": "block",
-                "type": "toggle",
-                "toggle": {"rich_text": [{"type": "text", "text": {"content": toggle_title}}], "children": children}
-            }]
-        }
+            "children": [
+                {
+                    "object": "block",
+                    "type": "toggle",
+                    "toggle": {
+                        "rich_text": [{"type": "text", "text": {"content": toggle_title}}],
+                        "children": children,
+                    },
+                }
+            ]
+        },
     )
     r.raise_for_status()
+
 
 def _estimate_block_text_bytes(block: Dict[str, Any]) -> int:
     t = block.get("type")
     node = block.get(t, {})
     txt = ""
     if "rich_text" in node:
-        txt += "".join(x.get("plain_text","") for x in node.get("rich_text") or [])
+        txt += "".join(x.get("plain_text", "") for x in node.get("rich_text") or [])
     if node.get("children"):
         for ch in node["children"]:
             t2 = ch.get("type")
             nd2 = ch.get(t2, {})
             if "rich_text" in nd2:
-                txt += "".join(x.get("plain_text","") for x in nd2.get("rich_text") or [])
+                txt += "".join(x.get("plain_text", "") for x in nd2.get("rich_text") or [])
     return _bytes(txt)
+
 
 def _list_block_children(page_id: str, page_size: int = 100) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     start = None
     while True:
         params = {"page_size": page_size}
-        if start: params["start_cursor"] = start
+        if start:
+            params["start_cursor"] = start
         r = notion_get(f"/blocks/{page_id}/children", params=params).json()
         out.extend(r.get("results", []))
-        if not r.get("has_more"): break
+        if not r.get("has_more"):
+            break
         start = r.get("next_cursor")
     return out
+
 
 def _prune_oldest_toggles_by_budget(page_id: str, approx_max_bytes: int = 800_000):
     """
@@ -431,15 +530,25 @@ def _prune_oldest_toggles_by_budget(page_id: str, approx_max_bytes: int = 800_00
             except Exception:
                 pass
 
-def _set_last_updated(intel_page_id: str, companies_page_id: Optional[str], date_iso: str,
-                      intel_db_id: str, companies_db_id: Optional[str]):
+
+def _set_last_updated(
+    intel_page_id: str,
+    companies_page_id: Optional[str],
+    date_iso: str,
+    intel_db_id: str,
+    companies_db_id: Optional[str],
+):
     s = get_db_schema(intel_db_id)
     if prop_exists(s, "Last Updated", "date"):
         _set_page_props(intel_page_id, {"Last Updated": _date_iso(date_iso)})
     if companies_page_id and companies_db_id:
         sc = get_db_schema(companies_db_id)
         if prop_exists(sc, "Last Intel At", "date"):
-            notion_patch(f"/pages/{companies_page_id}", {"properties": {"Last Intel At": _date_iso(date_iso)}})
+            notion_patch(
+                f"/pages/{companies_page_id}",
+                {"properties": {"Last Intel At": _date_iso(date_iso)}},
+            )
+
 
 def update_intel_archive_for_company(
     intel_db_id: str,

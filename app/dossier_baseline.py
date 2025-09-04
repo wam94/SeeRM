@@ -1,23 +1,40 @@
 # app/dossier_baseline.py
 from __future__ import annotations
-import os, io, re, time, requests
+
+import io
+import os
+import re
+import time
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
+
 import pandas as pd
+import requests
 import tldextract
 
 from app.gmail_client import (
-    build_service, search_messages, get_message,
-    extract_csv_attachments, send_html_email
+    build_service,
+    extract_csv_attachments,
+    get_message,
+    search_messages,
+    send_html_email,
 )
 from app.news_job import (
-    fetch_csv_by_subject, build_queries, try_rss_feeds,
-    google_cse_search, dedupe, within_days
+    build_queries,
+    dedupe,
+    fetch_csv_by_subject,
+    google_cse_search,
+    try_rss_feeds,
+    within_days,
 )
-from app.notion_client import upsert_company_page, set_needs_dossier
+from app.notion_client import set_needs_dossier, upsert_company_page
 from app.performance_utils import (
-    ParallelProcessor, ConcurrentAPIClient, DEFAULT_RATE_LIMITER,
-    PERFORMANCE_MONITOR, has_valid_domain, should_skip_processing
+    DEFAULT_RATE_LIMITER,
+    PERFORMANCE_MONITOR,
+    ConcurrentAPIClient,
+    ParallelProcessor,
+    has_valid_domain,
+    should_skip_processing,
 )
 
 # Import probe_funding functionality
@@ -25,18 +42,27 @@ from scripts.probe_funding import probe_funding
 
 # ---------- Debug ----------
 
-DEBUG = (os.getenv("BASELINE_DEBUG","").lower() in ("1","true","yes"))
+DEBUG = os.getenv("BASELINE_DEBUG", "").lower() in ("1", "true", "yes")
+
+
 def logd(msg: str):
     if DEBUG:
         print(msg)
 
+
 # ---------- Normalization (date, source, url, title) ----------
+
 
 def _source_from_url(url: str | None) -> str:
     if not url:
         return ""
     ext = tldextract.extract(url)
-    return ext.registered_domain or (f"{ext.domain}.{ext.suffix}" if ext.domain and ext.suffix else "") or ""
+    return (
+        ext.registered_domain
+        or (f"{ext.domain}.{ext.suffix}" if ext.domain and ext.suffix else "")
+        or ""
+    )
+
 
 def _iso_date(dt_or_str) -> str:
     if not dt_or_str:
@@ -54,47 +80,69 @@ def _iso_date(dt_or_str) -> str:
         pass
     return s
 
+
 def normalize_news_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for it in items:
-        url   = (it.get("url") or "").strip()
+        url = (it.get("url") or "").strip()
         title = (it.get("title") or "").strip()
-        src   = (it.get("source") or "").strip() or _source_from_url(url)
-        date  = it.get("date") or it.get("published_at")
-        out.append({
-            "url": url,
-            "title": title,
-            "source": src,
-            "published_at": _iso_date(date),
-        })
+        src = (it.get("source") or "").strip() or _source_from_url(url)
+        date = it.get("date") or it.get("published_at")
+        out.append(
+            {
+                "url": url,
+                "title": title,
+                "source": src,
+                "published_at": _iso_date(date),
+            }
+        )
     return out
+
 
 # ---------- Domain helpers ----------
 
+
 def ensure_http(u: str | None) -> str | None:
-    if not u: return None
+    if not u:
+        return None
     s = u.strip()
-    if not s: return None
-    if not s.startswith(("http://","https://")):
+    if not s:
+        return None
+    if not s.startswith(("http://", "https://")):
         s = "https://" + s
     return s
 
+
 def compute_domain_root(website: str | None) -> str | None:
-    if not website: return None
+    if not website:
+        return None
     w = website.strip().lower()
-    w = re.sub(r'^https?://', '', w)
-    w = re.sub(r'^www\.', '', w)
-    host = w.split('/')[0]
+    w = re.sub(r"^https?://", "", w)
+    w = re.sub(r"^www\.", "", w)
+    host = w.split("/")[0]
     ext = tldextract.extract(host)
     if ext.domain and ext.suffix:
         return f"{ext.domain}.{ext.suffix}"
     return host or None
 
+
 _BLOCKED_SITES = {
-    "linkedin.com","x.com","twitter.com","facebook.com","instagram.com","youtube.com",
-    "github.com","medium.com","substack.com","notion.so","notion.site",
-    "docs.google.com","wikipedia.org","angel.co"
+    "linkedin.com",
+    "x.com",
+    "twitter.com",
+    "facebook.com",
+    "instagram.com",
+    "youtube.com",
+    "github.com",
+    "medium.com",
+    "substack.com",
+    "notion.so",
+    "notion.site",
+    "docs.google.com",
+    "wikipedia.org",
+    "angel.co",
 }
+
 
 def _website_is_accessible(url: str) -> bool:
     """More permissive check - only fail on clear errors like 404."""
@@ -109,6 +157,7 @@ def _website_is_accessible(url: str) -> bool:
         # Any other error - assume the website is valid
         return True
 
+
 def validate_domain_to_url(domain_root: str) -> str | None:
     candidates = [
         f"https://{domain_root}",
@@ -120,11 +169,14 @@ def validate_domain_to_url(domain_root: str) -> str | None:
             return u
     return candidates[0]
 
-def discover_domain_by_search(name: str, g_api_key: Optional[str], g_cse_id: Optional[str]) -> Optional[str]:
+
+def discover_domain_by_search(
+    name: str, g_api_key: Optional[str], g_cse_id: Optional[str]
+) -> Optional[str]:
     if not (g_api_key and g_cse_id and name):
         return None
     try:
-        q = f'{name} (official site OR homepage) -site:linkedin.com -site:twitter.com -site:x.com'
+        q = f"{name} (official site OR homepage) -site:linkedin.com -site:twitter.com -site:x.com"
         items = google_cse_search(g_api_key, g_cse_id, q, num=5)
         for it in items:
             url = (it.get("url") or "").strip()
@@ -141,16 +193,22 @@ def discover_domain_by_search(name: str, g_api_key: Optional[str], g_cse_id: Opt
         logd(f"[discover_domain_by_search] error: {e}")
     return None
 
+
 def _is_blank(x) -> bool:
-    if x is None: return True
+    if x is None:
+        return True
     s = str(x).strip().lower()
     return s in ("", "none", "nan")
+
 
 def _norm(x: Any) -> Optional[str]:
     """Normalize CSV cell to a clean string or None."""
     return None if _is_blank(x) else str(x).strip()
 
-def resolve_domain_for_org(org: dict, g_api_key: Optional[str], g_cse_id: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+
+def resolve_domain_for_org(
+    org: dict, g_api_key: Optional[str], g_cse_id: Optional[str]
+) -> tuple[Optional[str], Optional[str]]:
     """
     Final authority order:
       1) CSV `domain_root` (trusted). Build URL variants and accept 200–399/403/405.
@@ -159,11 +217,15 @@ def resolve_domain_for_org(org: dict, g_api_key: Optional[str], g_cse_id: Option
     Returns: (domain_root, homepage_url) – either or both may be None.
     """
     csv_domain_root = _norm(org.get("domain_root"))
-    csv_website     = _norm(org.get("website"))
+    csv_website = _norm(org.get("website"))
 
     # 1) CSV domain_root is gospel
     if csv_domain_root:
-        for u in (f"https://{csv_domain_root}", f"https://www.{csv_domain_root}", f"http://{csv_domain_root}"):
+        for u in (
+            f"https://{csv_domain_root}",
+            f"https://www.{csv_domain_root}",
+            f"http://{csv_domain_root}",
+        ):
             if _website_is_accessible(u):
                 logd(f"[DOMAIN] Trust CSV domain_root -> {csv_domain_root} ({u})")
                 return csv_domain_root, u
@@ -183,9 +245,10 @@ def resolve_domain_for_org(org: dict, g_api_key: Optional[str], g_cse_id: Option
 
     try:
         from scripts.domain_resolver import resolve_domain
+
         owners_csv = ",".join(org.get("owners") or [])
         result = resolve_domain(company_name, owners_csv, g_api_key, g_cse_id, debug=DEBUG) or {}
-        dr  = (result.get("domain_root") or "").strip() or None
+        dr = (result.get("domain_root") or "").strip() or None
         url = (result.get("homepage_url") or "").strip() or None
         if dr and url:
             logd(f"[DOMAIN] Search accepted -> {dr} ({url}) why={result.get('why')}")
@@ -200,11 +263,14 @@ def resolve_domain_for_org(org: dict, g_api_key: Optional[str], g_cse_id: Option
 
     return None, None
 
+
 # ---------- Env helpers ----------
+
 
 def getenv(n: str, d: Optional[str] = None) -> Optional[str]:
     v = os.getenv(n)
     return d if v in (None, "") else v
+
 
 def load_latest_weekly_csv(service, user, q, attachment_regex):
     if not q:
@@ -221,14 +287,22 @@ def load_latest_weekly_csv(service, user, q, attachment_regex):
                 pass
     return None
 
+
 def lower_cols(df: pd.DataFrame) -> Dict[str, str]:
     return {c.lower().strip(): c for c in df.columns}
 
+
 # ---------- Evidence collection ----------
 
-def collect_recent_news(org: Dict[str, Any], lookback_days: int,
-                        g_api_key: Optional[str], g_cse_id: Optional[str],
-                        max_items: int = 6, max_queries: int = 5) -> List[Dict[str, Any]]:
+
+def collect_recent_news(
+    org: Dict[str, Any],
+    lookback_days: int,
+    g_api_key: Optional[str],
+    g_cse_id: Optional[str],
+    max_items: int = 6,
+    max_queries: int = 5,
+) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     site_for_rss = ensure_http(org.get("blog_url") or org.get("website"))
     if site_for_rss:
@@ -236,9 +310,16 @@ def collect_recent_news(org: Dict[str, Any], lookback_days: int,
             items += try_rss_feeds(site_for_rss)
         except Exception:
             pass
-    if (g_api_key and g_cse_id) and str(getenv("BASELINE_DISABLE_CSE","false")).lower() not in ("1","true","yes","y"):
+    if (g_api_key and g_cse_id) and str(getenv("BASELINE_DISABLE_CSE", "false")).lower() not in (
+        "1",
+        "true",
+        "yes",
+        "y",
+    ):
         queries = build_queries(
-            org.get("dba"), org.get("website"), org.get("owners"),
+            org.get("dba"),
+            org.get("website"),
+            org.get("owners"),
             domain_root=org.get("domain_root") or org.get("domain"),
             aka_names=org.get("aka_names"),
             tags=org.get("industry_tags"),
@@ -246,17 +327,28 @@ def collect_recent_news(org: Dict[str, Any], lookback_days: int,
         limit = int(getenv("BASELINE_CSE_MAX_QUERIES", str(max_queries)) or max_queries)
         for q in queries[:limit]:
             try:
-                items += google_cse_search(g_api_key, g_cse_id, q, date_restrict=f"d{lookback_days}", num=5)
+                items += google_cse_search(
+                    g_api_key, g_cse_id, q, date_restrict=f"d{lookback_days}", num=5
+                )
             except Exception:
                 continue
     items = dedupe(items, key=lambda x: x.get("url"))
-    items = [x for x in items if within_days(x.get("published_at", datetime.now(timezone.utc)), lookback_days)]
+    items = [
+        x
+        for x in items
+        if within_days(x.get("published_at", datetime.now(timezone.utc)), lookback_days)
+    ]
     items = normalize_news_items(items)
     return items[:max_items]
 
-def collect_people_background(org: Dict[str, Any], lookback_days: int,
-                              g_api_key: Optional[str], g_cse_id: Optional[str],
-                              max_people: int = 3) -> List[Dict[str, Any]]:
+
+def collect_people_background(
+    org: Dict[str, Any],
+    lookback_days: int,
+    g_api_key: Optional[str],
+    g_cse_id: Optional[str],
+    max_people: int = 3,
+) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
     owners = [o for o in (org.get("owners") or []) if o][:max_people]
     if not (g_api_key and g_cse_id) or not owners:
@@ -270,7 +362,9 @@ def collect_people_background(org: Dict[str, Any], lookback_days: int,
         items: List[Dict[str, Any]] = []
         for q in qs:
             try:
-                items += google_cse_search(g_api_key, g_cse_id, q, date_restrict=f"d{lookback_days}", num=3)
+                items += google_cse_search(
+                    g_api_key, g_cse_id, q, date_restrict=f"d{lookback_days}", num=3
+                )
             except Exception:
                 continue
         items = dedupe(items, key=lambda x: x.get("url"))[:5]
@@ -281,7 +375,9 @@ def collect_people_background(org: Dict[str, Any], lookback_days: int,
         results.append({"name": person, "findings": items})
     return results
 
+
 # ---------- Funding data collection ----------
+
 
 def collect_funding_data(org: Dict[str, Any], lookback_days: int = 540) -> Dict[str, Any]:
     """
@@ -292,13 +388,13 @@ def collect_funding_data(org: Dict[str, Any], lookback_days: int = 540) -> Dict[
         name = org.get("dba") or org.get("callsign") or ""
         domain = org.get("domain_root") or org.get("domain")
         owners = org.get("owners") or []
-        
+
         if not name:
             logd("[FUNDING] No company name available, skipping funding collection")
             return {}
-        
+
         logd(f"[FUNDING] Collecting funding data for {name}, domain={domain}, owners={owners}")
-        
+
         # Use probe_funding with reduced result count to keep it fast
         result = probe_funding(
             name=name,
@@ -307,55 +403,61 @@ def collect_funding_data(org: Dict[str, Any], lookback_days: int = 540) -> Dict[
             aka=None,
             lookback_days=lookback_days,
             max_results=3,  # Keep it concise
-            fetch_pages=False  # Skip page fetching for speed
+            fetch_pages=False,  # Skip page fetching for speed
         )
-        
+
         best_guess = result.get("best_guess")
         crunchbase_hint = result.get("crunchbase_hint", {})
-        
+
         funding_data = {}
-        
+
         # Extract key funding information
         if best_guess:
             facts = best_guess.get("facts", {})
-            funding_data.update({
-                "latest_funding_source": best_guess.get("source", ""),
-                "latest_funding_url": best_guess.get("url", ""),
-                "latest_funding_date": best_guess.get("published_at") or facts.get("announced_on", ""),
-                "latest_funding_title": best_guess.get("title", ""),
-                "score": best_guess.get("score", 0.0)
-            })
-            
+            funding_data.update(
+                {
+                    "latest_funding_source": best_guess.get("source", ""),
+                    "latest_funding_url": best_guess.get("url", ""),
+                    "latest_funding_date": best_guess.get("published_at")
+                    or facts.get("announced_on", ""),
+                    "latest_funding_title": best_guess.get("title", ""),
+                    "score": best_guess.get("score", 0.0),
+                }
+            )
+
             if "amount_usd" in facts:
                 funding_data["latest_amount_usd"] = facts["amount_usd"]
             if "round_type" in facts:
                 funding_data["latest_round_type"] = facts["round_type"]
             if "investors" in facts and facts["investors"]:
                 funding_data["latest_investors"] = facts["investors"][:5]  # Limit to top 5
-        
+
         # Add Crunchbase data if available
         if crunchbase_hint:
-            funding_data.update({
-                "total_funding_usd": crunchbase_hint.get("total_funding_usd"),
-                "cb_last_round_type": crunchbase_hint.get("last_round_type"),
-                "cb_last_round_date": crunchbase_hint.get("last_round_date"),
-                "cb_last_round_amount_usd": crunchbase_hint.get("last_round_amount_usd"),
-                "cb_investors": crunchbase_hint.get("investors", [])[:5]  # Limit to top 5
-            })
-        
+            funding_data.update(
+                {
+                    "total_funding_usd": crunchbase_hint.get("total_funding_usd"),
+                    "cb_last_round_type": crunchbase_hint.get("last_round_type"),
+                    "cb_last_round_date": crunchbase_hint.get("last_round_date"),
+                    "cb_last_round_amount_usd": crunchbase_hint.get("last_round_amount_usd"),
+                    "cb_investors": crunchbase_hint.get("investors", [])[:5],  # Limit to top 5
+                }
+            )
+
         # Clean up empty values
         funding_data = {k: v for k, v in funding_data.items() if v not in (None, "", [], 0)}
-        
+
         if funding_data:
             logd(f"[FUNDING] Found funding data: {funding_data}")
         else:
             logd("[FUNDING] No funding data found")
-            
+
         return funding_data
-        
+
     except Exception as e:
         logd(f"[FUNDING] Error collecting funding data: {e}")
         return {}
+
 
 # ---------- LLM: dossier narrative ----------
 
@@ -393,11 +495,14 @@ Use the following sections and headings exactly:
 - 1–3 bullets for uncertainty, gaps, or identity ambiguities that need confirmation.
 """
 
-def _build_evidence_block(org: dict, news_items: List[dict], people_bg: List[dict], funding_data: dict = None) -> str:
+
+def _build_evidence_block(
+    org: dict, news_items: List[dict], people_bg: List[dict], funding_data: dict = None
+) -> str:
     news_lines = []
     for n in news_items[:8]:
         date = n.get("published_at", "")
-        src  = n.get("source", "")
+        src = n.get("source", "")
         title = n.get("title", "")
         url = n.get("url", "")
         news_lines.append(f"- {date} — {title} — {src} {url}")
@@ -406,7 +511,9 @@ def _build_evidence_block(org: dict, news_items: List[dict], people_bg: List[dic
     for p in people_bg:
         name = p.get("name") or ""
         finds = p.get("findings", [])[:4]
-        inner = "\n  ".join([f"- {it.get('title','')} — {it.get('source','')} {it.get('url','')}" for it in finds])
+        inner = "\n  ".join(
+            [f"- {it.get('title','')} — {it.get('source','')} {it.get('url','')}" for it in finds]
+        )
         ppl_lines.append(f"* {name}:\n  {inner}" if inner else f"* {name}")
 
     evidence = []
@@ -424,7 +531,7 @@ def _build_evidence_block(org: dict, news_items: List[dict], people_bg: List[dic
     evidence.append("")
     evidence.append("People background findings:")
     evidence.append("\n".join(ppl_lines) if ppl_lines else "(none)")
-    
+
     # Add funding information if available
     if funding_data:
         evidence.append("")
@@ -434,23 +541,26 @@ def _build_evidence_block(org: dict, news_items: List[dict], people_bg: List[dic
             round_type = funding_data.get("latest_round_type", "")
             date = funding_data.get("latest_funding_date", "")
             evidence.append(f"- Latest round: {amount} {round_type} ({date})")
-        
+
         if funding_data.get("latest_investors"):
             investors = ", ".join(funding_data["latest_investors"])
             evidence.append(f"- Recent investors: {investors}")
-        
+
         if funding_data.get("total_funding_usd"):
             total = f"${funding_data['total_funding_usd']:,}"
             evidence.append(f"- Total funding (CB): {total}")
-        
+
         if funding_data.get("cb_investors"):
             cb_investors = ", ".join(funding_data["cb_investors"])
             evidence.append(f"- All investors (CB): {cb_investors}")
-        
+
         if funding_data.get("latest_funding_url"):
-            evidence.append(f"- Source: {funding_data.get('latest_funding_title', '')} — {funding_data.get('latest_funding_source', '')} {funding_data['latest_funding_url']}")
-    
+            evidence.append(
+                f"- Source: {funding_data.get('latest_funding_title', '')} — {funding_data.get('latest_funding_source', '')} {funding_data['latest_funding_url']}"
+            )
+
     return "\n".join(evidence)
+
 
 def _openai_write_narrative(prompt: str) -> Optional[str]:
     api_key = os.getenv("OPENAI_API_KEY")
@@ -458,13 +568,14 @@ def _openai_write_narrative(prompt: str) -> Optional[str]:
         return None
     try:
         import openai
+
         client = openai.OpenAI(api_key=api_key)
-        model = (os.getenv("OPENAI_CHAT_MODEL_DOSSIER")
-                 or os.getenv("OPENAI_CHAT_MODEL")
-                 or "gpt-5-mini").strip()
-        temp_env = (os.getenv("OPENAI_TEMPERATURE_DOSSIER")
-                    or os.getenv("OPENAI_TEMPERATURE")
-                    or "").strip()
+        model = (
+            os.getenv("OPENAI_CHAT_MODEL_DOSSIER") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-5-mini"
+        ).strip()
+        temp_env = (
+            os.getenv("OPENAI_TEMPERATURE_DOSSIER") or os.getenv("OPENAI_TEMPERATURE") or ""
+        ).strip()
         temperature = None if temp_env in ("", "auto", "none") else float(temp_env)
 
         def try_call(send_temperature: bool):
@@ -475,7 +586,7 @@ def _openai_write_narrative(prompt: str) -> Optional[str]:
                 r = client.responses.create(**kwargs)
                 return r.output_text
             else:
-                kwargs = {"model": model, "messages": [{"role":"user","content":prompt}]}
+                kwargs = {"model": model, "messages": [{"role": "user", "content": prompt}]}
                 if send_temperature and temperature is not None:
                     kwargs["temperature"] = temperature
                 r = client.chat.completions.create(**kwargs)
@@ -490,9 +601,14 @@ def _openai_write_narrative(prompt: str) -> Optional[str]:
     except Exception:
         return None
 
-def generate_narrative(org: dict, news_items: List[dict], people_bg: List[dict], funding_data: dict = None) -> str:
+
+def generate_narrative(
+    org: dict, news_items: List[dict], people_bg: List[dict], funding_data: dict = None
+) -> str:
     evidence = _build_evidence_block(org, news_items, people_bg, funding_data)
-    prompt = f"{DOSSIER_GUIDANCE}\n\nEVIDENCE START\n{evidence}\nEVIDENCE END\n\nWrite the profile now."
+    prompt = (
+        f"{DOSSIER_GUIDANCE}\n\nEVIDENCE START\n{evidence}\nEVIDENCE END\n\nWrite the profile now."
+    )
     text = _openai_write_narrative(prompt)
     if text:
         return text
@@ -509,8 +625,8 @@ def generate_narrative(org: dict, news_items: List[dict], people_bg: List[dict],
     lines.append("📰 Recent Announcements (last ~6 months)")
     if news_items:
         for n in news_items[:4]:
-            date = n.get("published_at","")
-            src  = n.get("source","")
+            date = n.get("published_at", "")
+            src = n.get("source", "")
             lines.append(f"- {date} — {n.get('title','')} — {src} {n.get('url','')}")
     else:
         lines.append("- None found")
@@ -522,36 +638,47 @@ def generate_narrative(org: dict, news_items: List[dict], people_bg: List[dict],
         lines.append("- (no background findings)")
     return "\n".join(lines)
 
+
 # ---------- Notion push ----------
+
 
 def _notion_headers() -> Dict[str, str]:
     return {
         "Authorization": f"Bearer {os.environ['NOTION_API_KEY']}",
-        "Notion-Version": os.getenv("NOTION_VERSION","2022-06-28"),
+        "Notion-Version": os.getenv("NOTION_VERSION", "2022-06-28"),
         "Content-Type": "application/json",
     }
 
+
 def append_dossier_blocks(page_id: str, markdown_body: str):
-    chunks = [markdown_body[i:i+1800] for i in range(0, len(markdown_body), 1800)] or [markdown_body]
+    chunks = [markdown_body[i : i + 1800] for i in range(0, len(markdown_body), 1800)] or [
+        markdown_body
+    ]
     hdr = {
         "object": "block",
         "type": "heading_2",
-        "heading_2": {"rich_text": [{"type": "text", "text": {"content": "Dossier"}}]}
+        "heading_2": {"rich_text": [{"type": "text", "text": {"content": "Dossier"}}]},
     }
-    paras = [{
-        "object": "block",
-        "type": "paragraph",
-        "paragraph": {"rich_text": [{"type": "text", "text": {"content": ch}}]}
-    } for ch in chunks]
+    paras = [
+        {
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {"rich_text": [{"type": "text", "text": {"content": ch}}]},
+        }
+        for ch in chunks
+    ]
     r = requests.patch(
         f"https://api.notion.com/v1/blocks/{page_id}/children",
         headers=_notion_headers(),
         json={"children": [hdr] + paras},
-        timeout=30
+        timeout=30,
     )
     r.raise_for_status()
 
-def push_dossier_to_notion(callsign: str, org: dict, markdown_body: str, throttle_sec: float = 0.35):
+
+def push_dossier_to_notion(
+    callsign: str, org: dict, markdown_body: str, throttle_sec: float = 0.35
+):
     token = os.getenv("NOTION_API_KEY")
     companies_db = os.getenv("NOTION_COMPANIES_DB_ID")
     if not (token and companies_db):
@@ -564,10 +691,10 @@ def push_dossier_to_notion(callsign: str, org: dict, markdown_body: str, throttl
 
     payload = {
         "callsign": callsign,
-        "company":  (org.get("dba") or "").strip(),
-        "website":  website,
-        "domain":   domain_root,
-        "owners":   org.get("owners") or [],
+        "company": (org.get("dba") or "").strip(),
+        "website": website,
+        "domain": domain_root,
+        "owners": org.get("owners") or [],
         "needs_dossier": False,
     }
 
@@ -583,9 +710,13 @@ def push_dossier_to_notion(callsign: str, org: dict, markdown_body: str, throttl
     if throttle_sec and throttle_sec > 0:
         time.sleep(throttle_sec)
 
+
 # ---------- Batching ----------
 
-def slice_batch(keys: List[str], batch_size: Optional[int], batch_index: Optional[int]) -> List[str]:
+
+def slice_batch(
+    keys: List[str], batch_size: Optional[int], batch_index: Optional[int]
+) -> List[str]:
     if not keys:
         return []
     if not batch_size:
@@ -596,7 +727,9 @@ def slice_batch(keys: List[str], batch_size: Optional[int], batch_index: Optiona
     end = start + n
     return keys[start:end]
 
+
 # ---------- Main ----------
+
 
 def main():
     # Gmail
@@ -608,25 +741,27 @@ def main():
     user = getenv("GMAIL_USER") or os.environ["GMAIL_USER"]
 
     profile_subject = getenv("PROFILE_SUBJECT") or getenv("NEWS_PROFILE_SUBJECT")
-    weekly_query    = getenv("WEEKLY_GMAIL_QUERY") or getenv("NEWS_GMAIL_QUERY")
-    attach_rx       = getenv("ATTACHMENT_REGEX", r".*\.csv$")
+    weekly_query = getenv("WEEKLY_GMAIL_QUERY") or getenv("NEWS_GMAIL_QUERY")
+    attach_rx = getenv("ATTACHMENT_REGEX", r".*\.csv$")
 
     df_profile = fetch_csv_by_subject(svc, user, profile_subject) if profile_subject else None
-    weekly     = load_latest_weekly_csv(svc, user, weekly_query, attach_rx) if weekly_query else None
+    weekly = load_latest_weekly_csv(svc, user, weekly_query, attach_rx) if weekly_query else None
     if df_profile is None and weekly is None:
         raise SystemExit("Need at least one CSV (profile or weekly) to build a baseline.")
 
     prof: Dict[str, Dict[str, Any]] = {}
     if df_profile is not None:
         pcols = lower_cols(df_profile)
-        
+
         for _, r in df_profile.iterrows():
             cs = str(r[pcols.get("callsign")]).strip().lower() if pcols.get("callsign") in r else ""
             if not cs:
                 continue
-            owners_raw = r[pcols.get("beneficial_owners")] if pcols.get("beneficial_owners") in r else ""
+            owners_raw = (
+                r[pcols.get("beneficial_owners")] if pcols.get("beneficial_owners") in r else ""
+            )
             owners = [s.strip() for s in str(owners_raw or "").split(",") if s.strip()]
-            
+
             # BEFORE building base
             dom_val = None
             web_val = None
@@ -642,26 +777,47 @@ def main():
                 if c in r and _norm(r[c]):
                     web_val = _norm(r[c])
                     break
-                    
-                
+
             base = {
                 "callsign": r[pcols.get("callsign")],
                 "dba": _norm(r[pcols.get("dba")]) if pcols.get("dba") in r else None,
                 "website": web_val,
                 "domain_root": dom_val,
-                "aka_names": _norm(r[pcols.get("aka_names")]) if pcols.get("aka_names") in r else None,
+                "aka_names": (
+                    _norm(r[pcols.get("aka_names")]) if pcols.get("aka_names") in r else None
+                ),
                 "blog_url": _norm(r[pcols.get("blog_url")]) if pcols.get("blog_url") in r else None,
-                "rss_feeds": _norm(r[pcols.get("rss_feeds")]) if pcols.get("rss_feeds") in r else None,
-                "linkedin_url": _norm(r[pcols.get("linkedin_url")]) if pcols.get("linkedin_url") in r else None,
-                "twitter_handle": _norm(r[pcols.get("twitter_handle")]) if pcols.get("twitter_handle") in r else None,
-                "crunchbase_url": _norm(r[pcols.get("crunchbase_url")]) if pcols.get("crunchbase_url") in r else None,
-                "industry_tags": _norm(r[pcols.get("industry_tags")]) if pcols.get("industry_tags") in r else None,
+                "rss_feeds": (
+                    _norm(r[pcols.get("rss_feeds")]) if pcols.get("rss_feeds") in r else None
+                ),
+                "linkedin_url": (
+                    _norm(r[pcols.get("linkedin_url")]) if pcols.get("linkedin_url") in r else None
+                ),
+                "twitter_handle": (
+                    _norm(r[pcols.get("twitter_handle")])
+                    if pcols.get("twitter_handle") in r
+                    else None
+                ),
+                "crunchbase_url": (
+                    _norm(r[pcols.get("crunchbase_url")])
+                    if pcols.get("crunchbase_url") in r
+                    else None
+                ),
+                "industry_tags": (
+                    _norm(r[pcols.get("industry_tags")])
+                    if pcols.get("industry_tags") in r
+                    else None
+                ),
                 "hq_city": _norm(r[pcols.get("hq_city")]) if pcols.get("hq_city") in r else None,
-                "hq_region": _norm(r[pcols.get("hq_region")]) if pcols.get("hq_region") in r else None,
-                "hq_country": _norm(r[pcols.get("hq_country")]) if pcols.get("hq_country") in r else None,
+                "hq_region": (
+                    _norm(r[pcols.get("hq_region")]) if pcols.get("hq_region") in r else None
+                ),
+                "hq_country": (
+                    _norm(r[pcols.get("hq_country")]) if pcols.get("hq_country") in r else None
+                ),
                 "owners": owners,
             }
-            
+
             # If no CSV domain_root but we do have website, derive it
             if not base.get("domain_root"):
                 base["domain_root"] = compute_domain_root(base.get("website"))
@@ -671,7 +827,7 @@ def main():
         wcols = lower_cols(weekly)
         for _, r in weekly.iterrows():
             cs = str(r[wcols.get("callsign")]).strip().lower() if wcols.get("callsign") in r else ""
-            if not cs: 
+            if not cs:
                 continue
 
             base = prof.get(cs, {"callsign": r[wcols.get("callsign")], "owners": []})
@@ -682,7 +838,7 @@ def main():
 
             # website (first non-blank among common headings)
             if not base.get("website"):
-                for cand in ("website","homepage","site","url"):
+                for cand in ("website", "homepage", "site", "url"):
                     c = wcols.get(cand)
                     if c in r and _norm(r[c]):
                         base["website"] = _norm(r[c])
@@ -724,29 +880,31 @@ def main():
     if targets_keys:
         head = targets_keys[:5]
         remainder = max(0, len(targets_keys) - len(head))
-        print("Batch head (first 5 callsigns):", ", ".join(head) + (f" … (+{remainder} more)" if remainder else ""))
+        print(
+            "Batch head (first 5 callsigns):",
+            ", ".join(head) + (f" … (+{remainder} more)" if remainder else ""),
+        )
     else:
         print("Batch head: (empty)")
     if not targets_keys:
         print("No callsigns in this batch; nothing to do.")
         return
 
-
     lookback_days = int(getenv("BASELINE_LOOKBACK_DAYS", "180") or "180")
     g_api_key = getenv("GOOGLE_API_KEY")
-    g_cse_id  = getenv("GOOGLE_CSE_ID")
+    g_cse_id = getenv("GOOGLE_CSE_ID")
 
     # PARALLEL BASELINE PROCESSING
     PERFORMANCE_MONITOR.start_timer("baseline_processing")
-    
+
     def process_single_company(cs):
         org = prof.get(cs, {"callsign": cs, "dba": cs, "owners": []})
-        
+
         try:
-            
+
             # Always resolve domain - function will prioritize CSV data or search as needed
             dr, url = resolve_domain_for_org(org, g_api_key, g_cse_id)
-            
+
             if dr and not org.get("domain_root"):
                 org["domain_root"] = dr
                 org["domain"] = dr
@@ -755,64 +913,70 @@ def main():
 
             # Collect intelligence data
             news_items = collect_recent_news(org, lookback_days, g_api_key, g_cse_id)
-            people_bg  = collect_people_background(org, lookback_days, g_api_key, g_cse_id)
-            
+            people_bg = collect_people_background(org, lookback_days, g_api_key, g_cse_id)
+
             # Skip funding collection if we have recent data
             if should_skip_processing(org, "funding_collection"):
                 funding_data = org.get("cached_funding_data", {})
             else:
-                funding_data = collect_funding_data(org, lookback_days=540)  # 18 months for funding searches
-            
+                funding_data = collect_funding_data(
+                    org, lookback_days=540
+                )  # 18 months for funding searches
+
             # Generate narrative
             narr = generate_narrative(org, news_items, people_bg, funding_data)
-            
+
             # Notion push with rate limiting
             try:
-                push_dossier_to_notion((org.get("callsign") or "").strip(), org, narr, throttle_sec=0)  # Remove throttle, using smart rate limiting instead
+                push_dossier_to_notion(
+                    (org.get("callsign") or "").strip(), org, narr, throttle_sec=0
+                )  # Remove throttle, using smart rate limiting instead
                 DEFAULT_RATE_LIMITER.wait_if_needed()  # Smart rate limiting
             except Exception as e:
                 print(f"Notion dossier push error for {cs}: {e}")
 
             return {"callsign": org.get("callsign"), "body_md": narr, "status": "success"}
-            
+
         except Exception as e:
             print(f"Error processing company {cs}: {e}")
             return {"callsign": cs, "body_md": f"Error processing {cs}: {e}", "status": "error"}
-    
+
     print(f"Processing {len(targets_keys)} companies for baseline generation...")
-    
+
     # Use smaller batches for baseline processing due to complexity
     batch_size = min(4, len(targets_keys))  # Conservative for complex operations
     dossiers: List[Dict[str, Any]] = []
-    
+
     # Process in batches to avoid overwhelming APIs
     for i in range(0, len(targets_keys), batch_size):
-        batch = targets_keys[i:i+batch_size]
+        batch = targets_keys[i : i + batch_size]
         print(f"Processing batch {i//batch_size + 1} ({len(batch)} companies)")
-        
+
         batch_results = ParallelProcessor.process_batch(
             batch,
             process_single_company,
             max_workers=batch_size,
-            timeout=600  # 10 minutes per batch
+            timeout=600,  # 10 minutes per batch
         )
-        
+
         # Collect results
         for cs in batch:
             result = batch_results.get(cs)
             if result:
                 dossiers.append(result)
-        
+
         # Brief pause between batches to be respectful to APIs
         if i + batch_size < len(targets_keys):
             time.sleep(2)
-    
+
     processing_time = PERFORMANCE_MONITOR.end_timer("baseline_processing")
     successful_count = sum(1 for d in dossiers if d.get("status") == "success")
-    print(f"Baseline processing completed in {processing_time:.2f}s ({successful_count}/{len(targets_keys)} successful)")
+    print(
+        f"Baseline processing completed in {processing_time:.2f}s ({successful_count}/{len(targets_keys)} successful)"
+    )
 
     # Preview or email
-    preview = getenv("PREVIEW_ONLY","false").lower() in ("1","true","yes","y")
+    preview = getenv("PREVIEW_ONLY", "false").lower() in ("1", "true", "yes", "y")
     if preview:
         for d in dossiers:
             print(f"\n=== {d.get('callsign')} ===\n")
@@ -820,10 +984,12 @@ def main():
             print("\n----------------------------")
         return
 
-    if getenv("SEND_EMAIL","false").lower() in ("1","true","yes","y"):
+    if getenv("SEND_EMAIL", "false").lower() in ("1", "true", "yes", "y"):
         body = ["<html><body><h2>Baselines</h2>"]
         for d in dossiers:
-            body.append(f"<h3>{d.get('callsign')}</h3><pre style='white-space:pre-wrap'>{d['body_md']}</pre><hr/>")
+            body.append(
+                f"<h3>{d.get('callsign')}</h3><pre style='white-space:pre-wrap'>{d['body_md']}</pre><hr/>"
+            )
         body.append("</body></html>")
         html = "\n".join(body)
         to = getenv("DIGEST_TO") or getenv("GMAIL_USER") or ""
@@ -836,12 +1002,13 @@ def main():
             getenv("GMAIL_USER") or "",
             to,
             f"Baselines — {datetime.now(timezone.utc).date()}",
-            html
+            html,
         )
         print("Baselines emailed to", to)
-    
+
     # Print performance statistics
     PERFORMANCE_MONITOR.print_stats()
+
 
 if __name__ == "__main__":
     main()

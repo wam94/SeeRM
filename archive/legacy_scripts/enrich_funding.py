@@ -1,37 +1,42 @@
 # app/enrich_funding.py
 from __future__ import annotations
 
-import os, re, math
+import math
+import os
+import re
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 import tldextract
 from trafilatura import extract as trafi_extract
 
 # ------------- Env / knobs -------------
-DEBUG = (os.getenv("BASELINE_DEBUG","").lower() in ("1","true","yes","y"))
+DEBUG = os.getenv("BASELINE_DEBUG", "").lower() in ("1", "true", "yes", "y")
 FUNDING_FETCH_TIMEOUT = float(os.getenv("FUNDING_FETCH_TIMEOUT_SEC", "5") or "5")
 CB_HTTP_TIMEOUT = float(os.getenv("CB_HTTP_TIMEOUT_SEC", "10") or "10")
 
 UA = {"User-Agent": "Mozilla/5.0 (compatible; SeeRM/1.0; +https://example.invalid/bot)"}
 
+
 def _logd(*parts: Any) -> None:
     if DEBUG:
         print(*parts)
 
+
 # ------------- Regex heuristics -------------
 AMOUNT_RE = re.compile(
-    r'(?<![\d$])(?:USD\s*)?\$?\s*([0-9][\d,\.]*)\s*(billion|bn|million|mm|m|thousand|k)?',
+    r"(?<![\d$])(?:USD\s*)?\$?\s*([0-9][\d,\.]*)\s*(billion|bn|million|mm|m|thousand|k)?",
     re.I,
 )
-ROUND_RE  = re.compile(
-    r'\b(Pre-Seed|Seed|Angel|Series\s+[A-K]|Series\s+[A-K]\s+extension|Bridge|Convertible\s+Note|SAFE|Debt|Venture\s+Round|Equity\s+Round)\b',
+ROUND_RE = re.compile(
+    r"\b(Pre-Seed|Seed|Angel|Series\s+[A-K]|Series\s+[A-K]\s+extension|Bridge|Convertible\s+Note|SAFE|Debt|Venture\s+Round|Equity\s+Round)\b",
     re.I,
 )
-DATE_RE   = re.compile(r'\b(20\d{2}|19\d{2})[-/\.](\d{1,2})[-/\.](\d{1,2})\b')
-LED_BY_RE = re.compile(r'\b(led by|co-led by)\s+([^.;,\n]+)', re.I)
-WITH_PARTICIPATION_RE = re.compile(r'\b(with participation from|including)\s+([^.;\n]+)', re.I)
+DATE_RE = re.compile(r"\b(20\d{2}|19\d{2})[-/\.](\d{1,2})[-/\.](\d{1,2})\b")
+LED_BY_RE = re.compile(r"\b(led by|co-led by)\s+([^.;,\n]+)", re.I)
+WITH_PARTICIPATION_RE = re.compile(r"\b(with participation from|including)\s+([^.;\n]+)", re.I)
+
 
 def _to_usd(value_str: str, unit: Optional[str]) -> Optional[float]:
     try:
@@ -47,6 +52,7 @@ def _to_usd(value_str: str, unit: Optional[str]) -> Optional[float]:
         n *= 1_000
     return n
 
+
 def _norm_date(text: str) -> Optional[str]:
     m = DATE_RE.search(text)
     if not m:
@@ -56,6 +62,7 @@ def _norm_date(text: str) -> Optional[str]:
         return datetime(y, mo, d).strftime("%Y-%m-%d")
     except Exception:
         return None
+
 
 def extract_funding_from_text(text: str) -> Dict[str, Any]:
     """Parse human text for round type/amount/date/investors."""
@@ -81,14 +88,16 @@ def extract_funding_from_text(text: str) -> Dict[str, Any]:
     for rx in (LED_BY_RE, WITH_PARTICIPATION_RE):
         mm = rx.search(text)
         if mm:
-            investors += [p.strip(" .") for p in re.split(r',| and ', mm.group(2)) if p.strip()]
+            investors += [p.strip(" .") for p in re.split(r",| and ", mm.group(2)) if p.strip()]
     if investors:
-        investors = [re.sub(r'\(.*?\)$', '', i).strip() for i in investors]
+        investors = [re.sub(r"\(.*?\)$", "", i).strip() for i in investors]
         res["investors"] = sorted(set(investors))
 
     return res
 
+
 # ------------- Fetching helpers (fast timeouts) -------------
+
 
 def fetch_page_text(url: Optional[str], timeout: float = FUNDING_FETCH_TIMEOUT) -> Optional[str]:
     if not url:
@@ -98,16 +107,12 @@ def fetch_page_text(url: Optional[str], timeout: float = FUNDING_FETCH_TIMEOUT) 
         if r.status_code >= 400:
             return None
         # Let trafilatura do the cleaning from the HTML string
-        txt = trafi_extract(
-            r.text,
-            output="txt",
-            include_comments=False,
-            favor_precision=True
-        )
+        txt = trafi_extract(r.text, output="txt", include_comments=False, favor_precision=True)
         return txt
     except Exception as e:
         _logd("[fetch_page_text] error:", repr(e), "url=", url)
         return None
+
 
 # ------------- Optional: Crunchbase API -------------
 def crunchbase_enrich(domain_root: Optional[str], name: Optional[str]) -> Dict[str, Any]:
@@ -124,25 +129,45 @@ def crunchbase_enrich(domain_root: Optional[str], name: Optional[str]) -> Dict[s
     # Search by domain, then by name
     payloads = []
     if domain_root:
-        payloads.append({
-            "field_ids": ["identifier","name","website","short_description"],
-            "query": [{"type":"predicate","field_id":"website","operator_id":"contains","values":[domain_root]}],
-            "limit": 1
-        })
+        payloads.append(
+            {
+                "field_ids": ["identifier", "name", "website", "short_description"],
+                "query": [
+                    {
+                        "type": "predicate",
+                        "field_id": "website",
+                        "operator_id": "contains",
+                        "values": [domain_root],
+                    }
+                ],
+                "limit": 1,
+            }
+        )
     if name:
-        payloads.append({
-            "field_ids": ["identifier","name","website","short_description"],
-            "query": [{"type":"predicate","field_id":"name","operator_id":"contains","values":[name]}],
-            "limit": 1
-        })
+        payloads.append(
+            {
+                "field_ids": ["identifier", "name", "website", "short_description"],
+                "query": [
+                    {
+                        "type": "predicate",
+                        "field_id": "name",
+                        "operator_id": "contains",
+                        "values": [name],
+                    }
+                ],
+                "limit": 1,
+            }
+        )
 
     org_id = None
     for body in payloads:
         try:
-            r = requests.post(f"{BASE}/searches/organizations", headers=H, json=body, timeout=CB_HTTP_TIMEOUT)
+            r = requests.post(
+                f"{BASE}/searches/organizations", headers=H, json=body, timeout=CB_HTTP_TIMEOUT
+            )
             if r.status_code != 200:
                 continue
-            ents = (r.json().get("entities") or [])
+            ents = r.json().get("entities") or []
             if ents:
                 org_id = ents[0]["identifier"].get("uuid") or ents[0]["identifier"].get("permalink")
                 break
@@ -154,13 +179,22 @@ def crunchbase_enrich(domain_root: Optional[str], name: Optional[str]) -> Dict[s
 
     body = {
         "field_ids": [
-            "name","identifier","website",
-            "last_funding_type","last_funding_at","last_funding_total_usd",
-            "funding_total_usd","investors","investors_names","announced_on"
+            "name",
+            "identifier",
+            "website",
+            "last_funding_type",
+            "last_funding_at",
+            "last_funding_total_usd",
+            "funding_total_usd",
+            "investors",
+            "investors_names",
+            "announced_on",
         ]
     }
     try:
-        r = requests.post(f"{BASE}/entities/organizations/{org_id}", headers=H, json=body, timeout=CB_HTTP_TIMEOUT)
+        r = requests.post(
+            f"{BASE}/entities/organizations/{org_id}", headers=H, json=body, timeout=CB_HTTP_TIMEOUT
+        )
         if r.status_code != 200:
             return {}
         ent = r.json().get("properties", {})
@@ -172,9 +206,9 @@ def crunchbase_enrich(domain_root: Optional[str], name: Optional[str]) -> Dict[s
                     return ent.get(k)
             return None
 
-        out["total_funding_usd"]     = get("funding_total_usd")
-        out["last_round_type"]       = get("last_funding_type")
-        out["last_round_date"]       = get("last_funding_at") or get("announced_on")
+        out["total_funding_usd"] = get("funding_total_usd")
+        out["last_round_type"] = get("last_funding_type")
+        out["last_round_date"] = get("last_funding_at") or get("announced_on")
         out["last_round_amount_usd"] = get("last_funding_total_usd")
 
         inv = get("investors_names") or get("investors")
@@ -189,6 +223,7 @@ def crunchbase_enrich(domain_root: Optional[str], name: Optional[str]) -> Dict[s
         _logd("[crunchbase] entity error:", repr(e))
         return {}
 
+
 # ------------- Combine/score -------------
 def merge_funding(primary: Dict[str, Any], secondary: Dict[str, Any]) -> Dict[str, Any]:
     """Prefer 'primary', use 'secondary' when primary is empty or missing."""
@@ -198,10 +233,13 @@ def merge_funding(primary: Dict[str, Any], secondary: Dict[str, Any]) -> Dict[st
             out[k] = v
     return out
 
-def best_funding_from_pages(org: Dict[str, Any], fetched_pages: List[Dict[str, Any]]) -> Dict[str, Any]:
+
+def best_funding_from_pages(
+    org: Dict[str, Any], fetched_pages: List[Dict[str, Any]]
+) -> Dict[str, Any]:
     heur: Dict[str, Any] = {}
     sources: List[str] = []
-    for p in (fetched_pages or []):
+    for p in fetched_pages or []:
         text = p.get("text") or ""
         if not text:
             continue
@@ -216,23 +254,36 @@ def best_funding_from_pages(org: Dict[str, Any], fetched_pages: List[Dict[str, A
         heur["funding_present"] = True
     return heur
 
+
 # ------------- Optional discovery via Google CSE -------------
 # We import lazily to avoid circular deps when this module is used standalone.
 _BLOCKED_SITES = {
-    "linkedin.com","x.com","twitter.com","facebook.com","instagram.com","youtube.com",
-    "github.com","medium.com","substack.com","notion.so","notion.site",
-    "docs.google.com","wikipedia.org","angel.co"
+    "linkedin.com",
+    "x.com",
+    "twitter.com",
+    "facebook.com",
+    "instagram.com",
+    "youtube.com",
+    "github.com",
+    "medium.com",
+    "substack.com",
+    "notion.so",
+    "notion.site",
+    "docs.google.com",
+    "wikipedia.org",
+    "angel.co",
 }
+
 
 def _registered_domain(url: str) -> Optional[str]:
     ext = tldextract.extract(url or "")
     rd = (ext.registered_domain or "").lower()
     return rd or None
 
-def discover_candidate_urls(org: Dict[str, Any],
-                            g_api_key: Optional[str],
-                            g_cse_id: Optional[str],
-                            max_pages: int = 6) -> List[str]:
+
+def discover_candidate_urls(
+    org: Dict[str, Any], g_api_key: Optional[str], g_cse_id: Optional[str], max_pages: int = 6
+) -> List[str]:
     if not (g_api_key and g_cse_id):
         return []
     try:
@@ -245,8 +296,10 @@ def discover_candidate_urls(org: Dict[str, Any],
 
     queries = []
     if domain:
-        queries.append(f'site:{domain} (funding OR raised OR financing OR "Series A" OR "Series B" OR seed)')
-        queries.append(f'site:{domain} (press release OR newsroom) (funding OR raised)')
+        queries.append(
+            f'site:{domain} (funding OR raised OR financing OR "Series A" OR "Series B" OR seed)'
+        )
+        queries.append(f"site:{domain} (press release OR newsroom) (funding OR raised)")
     if name:
         queries.append(f'"{name}" funding')
         queries.append(f'"{name}" raised')
@@ -259,7 +312,7 @@ def discover_candidate_urls(org: Dict[str, Any],
         except Exception as e:
             _logd("[discover_candidate_urls] CSE error:", repr(e), "q=", q)
             continue
-        for it in (items or []):
+        for it in items or []:
             u = (it.get("url") or "").strip()
             if not u:
                 continue
@@ -281,10 +334,10 @@ def discover_candidate_urls(org: Dict[str, Any],
             break
     return out
 
-def discover_and_fetch_funding_pages(org: Dict[str, Any],
-                                     g_api_key: Optional[str],
-                                     g_cse_id: Optional[str],
-                                     max_pages: int = 6) -> List[Dict[str, Any]]:
+
+def discover_and_fetch_funding_pages(
+    org: Dict[str, Any], g_api_key: Optional[str], g_cse_id: Optional[str], max_pages: int = 6
+) -> List[Dict[str, Any]]:
     urls = discover_candidate_urls(org, g_api_key, g_cse_id, max_pages=max_pages)
     pages: List[Dict[str, Any]] = []
     for u in urls:
@@ -293,13 +346,16 @@ def discover_and_fetch_funding_pages(org: Dict[str, Any],
             pages.append({"url": u, "text": txt})
     return pages
 
+
 # ------------- Public API -------------
-def best_funding(org: Dict[str, Any],
-                 fetched_pages: List[Dict[str, Any]],
-                 g_api_key: Optional[str] = None,
-                 g_cse_id: Optional[str] = None,
-                 discover: bool = False,
-                 max_discovery_pages: int = 6) -> Dict[str, Any]:
+def best_funding(
+    org: Dict[str, Any],
+    fetched_pages: List[Dict[str, Any]],
+    g_api_key: Optional[str] = None,
+    g_cse_id: Optional[str] = None,
+    discover: bool = False,
+    max_discovery_pages: int = 6,
+) -> Dict[str, Any]:
     """
     Combine:
       - heuristics from already-fetched pages (fetched_pages = [{url, text}])
@@ -314,7 +370,9 @@ def best_funding(org: Dict[str, Any],
     pages_more: List[Dict[str, Any]] = []
     if discover and g_api_key and g_cse_id:
         try:
-            pages_more = discover_and_fetch_funding_pages(org, g_api_key, g_cse_id, max_pages=max_discovery_pages)
+            pages_more = discover_and_fetch_funding_pages(
+                org, g_api_key, g_cse_id, max_pages=max_discovery_pages
+            )
         except Exception as e:
             _logd("[best_funding] discovery error:", repr(e))
 
@@ -329,6 +387,7 @@ def best_funding(org: Dict[str, Any],
     if out:
         out["funding_present"] = True
     return out
+
 
 __all__ = [
     "extract_funding_from_text",
