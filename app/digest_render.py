@@ -1,8 +1,11 @@
 from __future__ import annotations
-from jinja2 import Template
+
 from datetime import datetime
 
-TEMPLATE = Template("""
+from jinja2 import Template
+
+TEMPLATE = Template(
+    """
 <!doctype html>
 <html>
   <head>
@@ -116,7 +119,9 @@ TEMPLATE = Template("""
     </div>
   </body>
 </html>
-""")
+"""
+)
+
 
 def render_digest(context: dict) -> str:
     now_date = datetime.utcnow().strftime("%Y-%m-%d")

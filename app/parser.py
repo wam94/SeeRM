@@ -1,7 +1,10 @@
 from __future__ import annotations
+
 import json
+from typing import Any, Dict, Optional
+
 import pandas as pd
-from typing import Dict, Any, Optional
+
 
 def _num(series: Optional[pd.Series]) -> Optional[pd.Series]:
     """
@@ -10,8 +13,14 @@ def _num(series: Optional[pd.Series]) -> Optional[pd.Series]:
     """
     if series is None:
         return None
-    s = series.astype(str).str.replace(",", "", regex=False).str.replace("$", "", regex=False).str.strip()
+    s = (
+        series.astype(str)
+        .str.replace(",", "", regex=False)
+        .str.replace("$", "", regex=False)
+        .str.strip()
+    )
     return pd.to_numeric(s, errors="coerce")
+
 
 def _pct(series: Optional[pd.Series]) -> Optional[pd.Series]:
     """
@@ -22,6 +31,7 @@ def _pct(series: Optional[pd.Series]) -> Optional[pd.Series]:
         return None
     s = series.astype(str).str.replace("%", "", regex=False).str.strip()
     return pd.to_numeric(s, errors="coerce")
+
 
 def parse_csv_to_context(df: pd.DataFrame, top_n: int = 15) -> Dict[str, Any]:
     # Normalize column names (case/space-insensitive)
@@ -43,23 +53,35 @@ def parse_csv_to_context(df: pd.DataFrame, top_n: int = 15) -> Dict[str, Any]:
             bal_delta = curr - prev
 
     # any_change (or infer from base flags)
-    base_flags = {"is_new_account", "is_removed_account", "dba_changed", "website_changed", "owners_changed", "balance_changed"}
+    base_flags = {
+        "is_new_account",
+        "is_removed_account",
+        "dba_changed",
+        "website_changed",
+        "owners_changed",
+        "balance_changed",
+    }
     any_change = get("any_change")
     if any_change is None and base_flags.issubset(set(cols.keys())):
         any_change = (
-            get("is_new_account") | get("is_removed_account")
-            | get("dba_changed") | get("website_changed")
-            | get("owners_changed") | get("balance_changed")
+            get("is_new_account")
+            | get("is_removed_account")
+            | get("dba_changed")
+            | get("website_changed")
+            | get("owners_changed")
+            | get("balance_changed")
         )
 
     # --- percent-based movers (gainers/losers) ---
     top_pct_gainers, top_pct_losers = [], []
     if callsign is not None and bal_pct is not None:
-        base = pd.DataFrame({
-            "callsign": callsign,
-            "pct": bal_pct,                 # percentage points (e.g., 2.34 == 2.34%)
-            "balance_delta": bal_delta
-        })
+        base = pd.DataFrame(
+            {
+                "callsign": callsign,
+                "pct": bal_pct,  # percentage points (e.g., 2.34 == 2.34%)
+                "balance_delta": bal_delta,
+            }
+        )
         # Filter out rows where pct is NaN
         base = base.dropna(subset=["pct"])
         # Biggest increases (pct > 0)
@@ -67,7 +89,7 @@ def parse_csv_to_context(df: pd.DataFrame, top_n: int = 15) -> Dict[str, Any]:
         # Biggest decreases (pct < 0)
         dec = base[base["pct"] < 0].sort_values("pct", ascending=True).head(top_n)
         top_pct_gainers = inc.to_dict(orient="records")
-        top_pct_losers  = dec.to_dict(orient="records")
+        top_pct_losers = dec.to_dict(orient="records")
 
     # --- product flips (JSON array per row) ---
     flips_key = None
@@ -89,7 +111,7 @@ def parse_csv_to_context(df: pd.DataFrame, top_n: int = 15) -> Dict[str, Any]:
             for obj in arr:
                 prod = obj.get("product")
                 from_v = obj.get("from")
-                to_v   = obj.get("to")
+                to_v = obj.get("to")
                 if from_v == 0 and to_v == 1:
                     starts.append({"callsign": cs, "product": prod})
                 elif from_v == 1 and to_v == 0:
@@ -97,9 +119,15 @@ def parse_csv_to_context(df: pd.DataFrame, top_n: int = 15) -> Dict[str, Any]:
 
     # --- stats ---
     total_accounts = int(len(df))
-    changed_accounts = int(any_change.sum()) if any_change is not None else len(top_pct_gainers) + len(top_pct_losers)
+    changed_accounts = (
+        int(any_change.sum())
+        if any_change is not None
+        else len(top_pct_gainers) + len(top_pct_losers)
+    )
     new_accounts = int(df[cols["is_new_account"]].sum()) if "is_new_account" in cols else 0
-    removed_accounts = int(df[cols["is_removed_account"]].sum()) if "is_removed_account" in cols else 0
+    removed_accounts = (
+        int(df[cols["is_removed_account"]].sum()) if "is_removed_account" in cols else 0
+    )
 
     return {
         "stats": {

@@ -4,12 +4,13 @@ Data models for SeeRM intelligence and reporting system.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Dict, Any, Optional
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
 
 class MovementType(str, Enum):
     """Types of account movements."""
+
     TOP_GAINER = "top_gainer"
     TOP_LOSER = "top_loser"
     NEW_ACCOUNT = "new_account"
@@ -19,6 +20,7 @@ class MovementType(str, Enum):
 
 class NewsType(str, Enum):
     """Categories of news items."""
+
     FUNDRAISING = "fundraising"
     PARTNERSHIP = "partnership"
     PRODUCT_LAUNCH = "product_launch"
@@ -28,11 +30,10 @@ class NewsType(str, Enum):
     OTHER = "other"
 
 
-
-
 @dataclass
 class NewsItem:
     """Individual news item with metadata."""
+
     title: str
     url: str
     source: str
@@ -47,6 +48,7 @@ class NewsItem:
 @dataclass
 class Movement:
     """Account balance movement data."""
+
     callsign: str
     company_name: str
     current_balance: float
@@ -61,6 +63,7 @@ class Movement:
 @dataclass
 class CompanyProfile:
     """Company profile from Notion."""
+
     callsign: str
     company_name: str
     website: Optional[str] = None
@@ -75,6 +78,7 @@ class CompanyProfile:
 @dataclass
 class CompanyIntelligence:
     """Complete intelligence profile for a company."""
+
     profile: CompanyProfile
     movement: Optional[Movement] = None
     news_history: List[NewsItem] = field(default_factory=list)
@@ -85,6 +89,7 @@ class CompanyIntelligence:
 @dataclass
 class ReportMetadata:
     """Metadata for generated reports."""
+
     report_id: str
     report_type: str
     generated_at: datetime
@@ -96,6 +101,7 @@ class ReportMetadata:
 @dataclass
 class Report:
     """Base report structure."""
+
     metadata: ReportMetadata
     title: str
     content: Dict[str, Any]
@@ -108,6 +114,7 @@ class Report:
 @dataclass
 class NewClientSummary:
     """Summary data for a new client."""
+
     callsign: str
     company_name: str
     initial_balance: float
@@ -116,9 +123,10 @@ class NewClientSummary:
     similar_clients: List[str] = field(default_factory=list)
 
 
-@dataclass 
+@dataclass
 class WeeklyNewsDigest:
     """Weekly news digest structure."""
+
     week_of: str
     total_items: int
     by_type: Dict[NewsType, List[NewsItem]] = field(default_factory=dict)
@@ -131,6 +139,7 @@ class WeeklyNewsDigest:
 @dataclass
 class CompanyDeepDive:
     """Company deep dive report structure."""
+
     company: CompanyIntelligence
     executive_summary: str
     metrics_analysis: Dict[str, Any]

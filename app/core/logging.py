@@ -4,11 +4,12 @@ Structured logging configuration for SeeRM application.
 Provides consistent, structured logging with correlation IDs and rich formatting.
 """
 
+import logging
 import sys
 import uuid
-import logging
-import structlog
 from typing import Optional
+
+import structlog
 from rich.console import Console
 from rich.logging import RichHandler
 
@@ -38,12 +39,12 @@ def add_correlation_id(logger, method_name, event_dict):
 def setup_logging(debug: bool = False, rich_output: bool = True) -> None:
     """
     Configure structured logging for the application.
-    
+
     Args:
         debug: Enable debug level logging
         rich_output: Use rich formatting for console output
     """
-    
+
     # Configure structlog
     processors = [
         structlog.contextvars.merge_contextvars,
@@ -52,36 +53,35 @@ def setup_logging(debug: bool = False, rich_output: bool = True) -> None:
         structlog.processors.TimeStamper(fmt="ISO"),
         structlog.dev.set_exc_info,
     ]
-    
+
     if rich_output:
         # Rich console output for development
         console = Console(stderr=True, force_terminal=True)
         processors.append(
             structlog.dev.ConsoleRenderer(
-                colors=True,
-                exception_formatter=structlog.dev.rich_traceback
+                colors=True, exception_formatter=structlog.dev.rich_traceback
             )
         )
-        
+
         # Configure standard library logging with rich
         import logging
+
         logging.basicConfig(
             level=logging.DEBUG if debug else logging.INFO,
             format="%(message)s",
             datefmt="[%X]",
-            handlers=[RichHandler(console=console, show_path=False)]
+            handlers=[RichHandler(console=console, show_path=False)],
         )
     else:
         # JSON output for production
         processors.append(structlog.processors.JSONRenderer())
-        
+
         import logging
+
         logging.basicConfig(
-            level=logging.DEBUG if debug else logging.INFO,
-            format="%(message)s",
-            stream=sys.stdout
+            level=logging.DEBUG if debug else logging.INFO, format="%(message)s", stream=sys.stdout
         )
-    
+
     structlog.configure(
         processors=processors,
         wrapper_class=structlog.stdlib.BoundLogger,
@@ -97,7 +97,7 @@ def get_logger(name: str) -> structlog.BoundLogger:
 
 # Convenience loggers for common components
 gmail_logger = structlog.get_logger("gmail")
-notion_logger = structlog.get_logger("notion") 
+notion_logger = structlog.get_logger("notion")
 digest_logger = structlog.get_logger("digest")
 news_logger = structlog.get_logger("news")
 baseline_logger = structlog.get_logger("baseline")

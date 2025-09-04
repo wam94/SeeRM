@@ -46,13 +46,13 @@ jobs:
           echo "Owners:  ${{ inputs.owners }}"
           echo ""
           echo "Running domain resolution..."
-          
+
           # Build command with proper arguments
           if [ -n "${{ inputs.owners }}" ]; then
             python -m scripts.domain_resolver "${{ inputs.name }}" "${{ inputs.owners }}" --debug
           else
             python -m scripts.domain_resolver "${{ inputs.name }}" "" --debug
           fi
-          
+
           echo ""
           echo "Resolution complete!"

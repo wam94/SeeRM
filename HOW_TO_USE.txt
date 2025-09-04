@@ -1,0 +1,182 @@
+================================================================================
+                        SeeRM - Client Intelligence System
+                              How to Use This Program
+================================================================================
+
+WHAT IS SeeRM?
+--------------
+SeeRM is an automated intelligence system that monitors your client portfolio,
+tracks financial movements, gathers market intelligence, and delivers actionable
+insights. Think of it as your automated analyst that never sleeps.
+
+The system automatically:
+- Monitors client account balances and changes weekly
+- Identifies new clients and significant movements
+- Gathers news and market intelligence on your portfolio
+- Generates comprehensive company dossiers
+- Delivers formatted reports and alerts to your inbox
+
+
+HOW IT WORKS
+------------
+Every Monday at 9:00 AM ET, SeeRM automatically:
+
+1. Pulls your latest client data from Metabase (via email CSV)
+2. Analyzes balance changes and identifies top movers
+3. Detects new client accounts
+4. Generates a visual weekly digest showing:
+   - Top gainers and losers
+   - New accounts added
+   - Portfolio statistics
+   - Movement trends
+5. Emails the digest to your team
+6. Triggers intelligence gathering for new clients
+7. Updates your Notion database with new information
+
+
+WHAT YOU RECEIVE
+----------------
+
+1. WEEKLY DIGEST (Every Monday)
+   - Visual HTML email with charts and tables
+   - Top 15 gainers/losers by percentage and dollar amount
+   - New client alerts
+   - Portfolio summary statistics
+
+2. INTELLIGENCE REPORTS (On-Demand)
+   - Company Deep Dives: Comprehensive analysis of individual clients
+   - New Client Summaries: Onboarding intelligence for new accounts
+   - Weekly News Digest: Categorized news across your portfolio
+
+3. NOTION DATABASE (Continuous Updates)
+   - Company dossiers with funding, domain, and business intelligence
+   - News items linked to companies
+   - Risk assessments and recommendations
+   - Historical tracking
+
+
+KEY FEATURES BY USE CASE
+-------------------------
+
+FOR RELATIONSHIP MANAGERS:
+- Track which clients are growing or shrinking
+- Get alerts on new accounts that need attention
+- Access comprehensive dossiers before client meetings
+- Monitor news that might affect client relationships
+
+FOR LEADERSHIP:
+- Weekly portfolio health snapshots
+- Identify trends across client segments
+- Track new business acquisition
+- Monitor at-risk accounts
+
+FOR OPERATIONS:
+- Automated data collection and processing
+- Consistent weekly reporting cadence
+- Integrated with existing tools (Metabase, Gmail, Notion)
+- No manual data entry required
+
+
+AVAILABLE COMMANDS
+------------------
+
+AUTOMATED (Runs Weekly):
+- Weekly Digest: Automatic every Monday at 9 AM ET
+- News Intelligence: Automatic after digest completes
+
+MANUAL REPORTS (Run Anytime):
+- Company Analysis: Generate deep dive on specific client
+  Example: "Generate company deep dive for ACME"
+
+- New Client Report: Get intelligence on new accounts
+  Example: "Show me this week's new clients"
+
+- News Summary: Get categorized news digest
+  Example: "Generate weekly news summary"
+
+- Custom Analysis: Run reports for specific date ranges or client lists
+  Example: "Analyze top movers for last 30 days"
+
+
+DATA SOURCES
+------------
+The system combines multiple data sources:
+
+1. Metabase: Your primary client balance and movement data
+2. Google Search: Public company information and news
+3. News APIs: Real-time news and press releases
+4. Notion: Your internal knowledge base
+5. Domain Intelligence: Company website and digital presence
+
+
+GETTING STARTED
+---------------
+
+For Users:
+1. You'll automatically receive weekly digests every Monday
+2. Request on-demand reports by contacting your admin
+3. Access Notion for detailed company dossiers
+4. Review trigger alerts for accounts needing attention
+
+For Administrators:
+1. Ensure Metabase is configured to email CSV weekly
+2. Set up Gmail API credentials for data retrieval
+3. Configure Notion workspace (optional but recommended)
+4. Add team members to digest distribution list
+5. Schedule any custom reports needed
+
+
+TYPICAL WORKFLOW
+----------------
+
+Monday Morning:
+1. 9:00 AM - Automated digest generation begins
+2. 9:05 AM - Email arrives in your inbox with weekly summary
+3. 9:15 AM - News intelligence gathering begins for portfolio
+4. 9:30 AM - Notion updated with new client dossiers
+
+Throughout the Week:
+- Request company deep dives before important meetings
+- Check Notion for latest intelligence on clients
+- Monitor trigger alerts for urgent situations
+- Generate custom reports as needed
+
+
+UNDERSTANDING THE OUTPUTS
+-------------------------
+
+Weekly Digest Includes:
+- Total portfolio statistics (accounts, changes)
+- Top 15 gainers by percentage
+- Top 15 gainers by dollar amount
+- Top 15 losers by percentage
+- Top 15 losers by dollar amount
+- New account notifications
+- Visual charts and formatted tables
+
+Company Dossiers Include:
+- Basic company information and domain
+- Funding history and investors
+- Recent news and developments
+- Risk assessment and indicators
+- Recommendations and action items
+- Key personnel and contacts
+
+
+SUPPORT & CUSTOMIZATION
+------------------------
+
+The system can be customized for:
+- Different reporting schedules
+- Custom alert thresholds
+- Additional data sources
+- Specific report formats
+- Distribution lists
+- Integration with other tools
+
+For assistance or to request new features, contact your system administrator.
+
+
+================================================================================
+                         Making Intelligence Actionable
+================================================================================
