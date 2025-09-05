@@ -320,6 +320,72 @@ def get_all_companies_domain_data(
     return domain_data
 
 
+def get_companies_needing_dossiers(companies_db_id: str) -> List[Tuple[str, str]]:
+    """
+    Query Notion for companies that have 'Needs Dossier' = true.
+    Returns list of (callsign, page_id) tuples.
+    """
+    schema = get_db_schema(companies_db_id)
+    title_prop = get_title_prop_name(schema)
+
+    # Only proceed if the database has a "Needs Dossier" property
+    if not prop_exists(schema, "Needs Dossier", "checkbox"):
+        return []
+
+    # Query for companies with Needs Dossier = true
+    filter_query = {"filter": {"property": "Needs Dossier", "checkbox": {"equals": True}}}
+
+    companies_needing_dossiers = []
+    has_more = True
+    start_cursor = None
+
+    while has_more:
+        if start_cursor:
+            filter_query["start_cursor"] = start_cursor
+
+        data = notion_query_db(companies_db_id, filter_query)
+        results = data.get("results", [])
+
+        for page in results:
+            page_id = page["id"]
+            properties = page.get("properties", {})
+
+            # Get callsign from title
+            title_prop_data = properties.get(title_prop, {})
+            title_array = title_prop_data.get("title", [])
+            if title_array:
+                callsign = title_array[0].get("text", {}).get("content", "").strip()
+                if callsign:
+                    companies_needing_dossiers.append((callsign, page_id))
+
+        has_more = data.get("has_more", False)
+        start_cursor = data.get("next_cursor")
+
+    return companies_needing_dossiers
+
+
+def page_has_dossier(page_id: str) -> bool:
+    """
+    Check if a Notion page already has a dossier by looking for a "Dossier" heading.
+    Returns True if dossier exists, False otherwise.
+    """
+    try:
+        blocks = _list_block_children(page_id)
+        for block in blocks:
+            block_type = block.get("type")
+            if block_type == "heading_2":
+                heading_text = ""
+                rich_text = block.get("heading_2", {}).get("rich_text", [])
+                for text_obj in rich_text:
+                    heading_text += text_obj.get("plain_text", "")
+                if "Dossier" in heading_text:
+                    return True
+        return False
+    except Exception:
+        # If we can't check, assume no dossier to be safe
+        return False
+
+
 # -------------------- Intel Archive (timeline-only) --------------------
 
 

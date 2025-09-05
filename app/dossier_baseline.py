@@ -27,7 +27,12 @@ from app.news_job import (
     try_rss_feeds,
     within_days,
 )
-from app.notion_client import set_needs_dossier, upsert_company_page
+from app.notion_client import (
+    get_companies_needing_dossiers,
+    page_has_dossier,
+    set_needs_dossier,
+    upsert_company_page,
+)
 from app.performance_utils import (
     DEFAULT_RATE_LIMITER,
     PERFORMANCE_MONITOR,
@@ -732,6 +737,15 @@ def slice_batch(
 
 
 def main():
+    """
+    Generate baseline dossiers for companies.
+
+    Two modes:
+    1. Notion Mode (BASELINE_USE_NOTION_FLAGS=true): Query Notion for companies with 'Needs Dossier' = true
+    2. CSV Mode (default): Use CSV data filtered by BASELINE_CALLSIGNS
+
+    Notion mode is preferred as it doesn't rely on the unreliable CSV is_new_account flag.
+    """
     # Gmail
     svc = build_service(
         client_id=os.environ["GMAIL_CLIENT_ID"],
@@ -863,11 +877,59 @@ def main():
 
             prof[cs] = base
 
-    base_list = sorted(prof.keys())
-    requested = (getenv("BASELINE_CALLSIGNS") or "").strip()
-    if requested and requested.upper() != "ALL":
-        want = [c.strip().lower() for c in requested.split(",") if c.strip()]
-        base_list = [c for c in base_list if c in want]
+    # Determine target selection mode
+    use_notion_flags = getenv("BASELINE_USE_NOTION_FLAGS", "false").lower() in (
+        "1",
+        "true",
+        "yes",
+        "y",
+    )
+    companies_db = getenv("NOTION_COMPANIES_DB_ID")
+
+    if use_notion_flags and companies_db:
+        print("[NOTION MODE] Using Notion 'Needs Dossier' flags to determine targets")
+
+        # Query Notion for companies needing dossiers
+        try:
+            notion_targets = get_companies_needing_dossiers(companies_db)
+            print(f"[NOTION MODE] Found {len(notion_targets)} companies flagged for dossiers")
+
+            # Filter to only include companies we have profile data for, or create minimal entries
+            notion_callsigns = []
+            for callsign, page_id in notion_targets:
+                cs_lower = callsign.lower()
+                notion_callsigns.append(cs_lower)
+
+                # If we don't have profile data, create a minimal entry
+                if cs_lower not in prof:
+                    prof[cs_lower] = {
+                        "callsign": callsign,
+                        "dba": callsign,  # Use callsign as fallback
+                        "owners": [],
+                    }
+
+                # Double-check that this page doesn't already have a dossier
+                # (optional safety check in case flags weren't cleared)
+                if page_has_dossier(page_id):
+                    print(
+                        f"[NOTION MODE] WARNING: {callsign} flagged but already has dossier, processing anyway"
+                    )
+
+            base_list = notion_callsigns
+            print(f"[NOTION MODE] Targeting {len(base_list)} companies from Notion flags")
+
+        except Exception as e:
+            print(f"[NOTION MODE] ERROR: Failed to query Notion: {e}")
+            print("[NOTION MODE] Falling back to CSV-based mode")
+            base_list = sorted(prof.keys())
+    else:
+        # Traditional CSV-based mode
+        print("[CSV MODE] Using CSV data and BASELINE_CALLSIGNS for targeting")
+        base_list = sorted(prof.keys())
+        requested = (getenv("BASELINE_CALLSIGNS") or "").strip()
+        if requested and requested.upper() != "ALL":
+            want = [c.strip().lower() for c in requested.split(",") if c.strip()]
+            base_list = [c for c in base_list if c in want]
 
     batch_size = int(getenv("BATCH_SIZE", "0") or "0") or None
     batch_index = int(getenv("BATCH_INDEX", "0") or "0") if batch_size else None

@@ -166,6 +166,9 @@ class DigestService:
 
         try:
             # Find companies that are marked as new
+            # NOTE: This relies on CSV is_new_account flag which may be unreliable.
+            # The news job also sets needs_dossier=True in Notion for new companies,
+            # which is the preferred mechanism for triggering baseline dossiers.
             new_companies = [c for c in companies if getattr(c, "is_new_account", False)]
 
             if not new_companies:
