@@ -74,9 +74,6 @@ jobs:
           ENVIRONMENT: 'production'
           DEBUG: 'false'
           DRY_RUN: ${{ inputs.dry_run }}
-          FILTER_CALLSIGNS: ${{ inputs.callsigns }}
-          INTEL_LOOKBACK_DAYS: ${{ inputs.lookback_days }}
-          INTEL_MAX_PER_ORG: ${{ inputs.max_per_org }}
 
         run: |
           # Run the news intelligence analysis
