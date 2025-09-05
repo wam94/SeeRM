@@ -24,7 +24,7 @@ on:
         default: "5"
         type: string
   schedule:
-    - cron: "15 13 * * FRI"  # Run 15 minutes after main workflow
+    - cron: "15 13 * * MON"  # Run 15 minutes after main workflow
   workflow_run:
     workflows: ["Weekly Digest"]
     types: [completed]
