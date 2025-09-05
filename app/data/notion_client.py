@@ -43,7 +43,9 @@ class EnhancedNotionClient:
 
         # HTTP client with proper timeout and retries
         self.client = httpx.Client(
-            timeout=httpx.Timeout(30.0), headers=self._get_headers(), follow_redirects=True
+            timeout=httpx.Timeout(30.0),
+            headers=self._get_headers(),
+            follow_redirects=True,
         )
 
         # Schema cache to avoid repeated API calls
@@ -75,7 +77,10 @@ class EnhancedNotionClient:
         recovery_timeout=60.0,
         expected_exception=NotionError,
     )
-    @with_retry(max_attempts=3, retry_exceptions=(HTTPStatusError, TimeoutException, NotionError))
+    @with_retry(
+        max_attempts=3,
+        retry_exceptions=(HTTPStatusError, TimeoutException, NotionError),
+    )
     def _make_request(
         self,
         method: str,
@@ -105,7 +110,10 @@ class EnhancedNotionClient:
 
         try:
             logger.debug(
-                "Making Notion API request", method=method, path=path, has_data=bool(json_data)
+                "Making Notion API request",
+                method=method,
+                path=path,
+                has_data=bool(json_data),
             )
 
             response = self.client.request(method=method, url=url, json=json_data, params=params)
@@ -344,7 +352,9 @@ class EnhancedNotionClient:
         """
         if self.dry_run:
             logger.info(
-                "DRY RUN: Would update company page", page_id=page_id, callsign=company.callsign
+                "DRY RUN: Would update company page",
+                page_id=page_id,
+                callsign=company.callsign,
             )
             return NotionPage(
                 page_id=page_id,
@@ -478,7 +488,11 @@ class EnhancedNotionClient:
             update_data = {"properties": properties}
             self._make_request("PATCH", f"/pages/{page_id}", json_data=update_data)
 
-            logger.info("Latest intel updated", page_id=page_id, summary_length=len(summary_text))
+            logger.info(
+                "Latest intel updated",
+                page_id=page_id,
+                summary_length=len(summary_text),
+            )
 
     def get_company_domain_data(self, database_id: str, callsign: str) -> Dict[str, Optional[str]]:
         """
@@ -641,7 +655,9 @@ class EnhancedNotionClient:
 
         except Exception as e:
             logger.error(
-                "Failed to get companies domain data", database_id=database_id, error=str(e)
+                "Failed to get companies domain data",
+                database_id=database_id,
+                error=str(e),
             )
             # Return empty data for all callsigns
             return {
@@ -674,7 +690,11 @@ class EnhancedNotionClient:
             }
 
         except Exception as e:
-            return {"status": "unhealthy", "error": str(e), "error_type": type(e).__name__}
+            return {
+                "status": "unhealthy",
+                "error": str(e),
+                "error_type": type(e).__name__,
+            }
 
     def create_report_page(
         self,
@@ -754,7 +774,10 @@ class EnhancedNotionClient:
                             properties[key] = {"multi_select": [{"name": item} for item in value]}
 
             # Create page
-            page_data = {"parent": {"database_id": database_id}, "properties": properties}
+            page_data = {
+                "parent": {"database_id": database_id},
+                "properties": properties,
+            }
 
             # Add content as children if provided
             children = []
@@ -770,7 +793,10 @@ class EnhancedNotionClient:
                                     "type": "heading_1",
                                     "heading_1": {
                                         "rich_text": [
-                                            {"type": "text", "text": {"content": line[2:].strip()}}
+                                            {
+                                                "type": "text",
+                                                "text": {"content": line[2:].strip()},
+                                            }
                                         ]
                                     },
                                 }
@@ -782,7 +808,10 @@ class EnhancedNotionClient:
                                     "type": "heading_2",
                                     "heading_2": {
                                         "rich_text": [
-                                            {"type": "text", "text": {"content": line[3:].strip()}}
+                                            {
+                                                "type": "text",
+                                                "text": {"content": line[3:].strip()},
+                                            }
                                         ]
                                     },
                                 }
@@ -794,7 +823,10 @@ class EnhancedNotionClient:
                                     "type": "heading_3",
                                     "heading_3": {
                                         "rich_text": [
-                                            {"type": "text", "text": {"content": line[4:].strip()}}
+                                            {
+                                                "type": "text",
+                                                "text": {"content": line[4:].strip()},
+                                            }
                                         ]
                                     },
                                 }
@@ -806,7 +838,10 @@ class EnhancedNotionClient:
                                     "type": "bulleted_list_item",
                                     "bulleted_list_item": {
                                         "rich_text": [
-                                            {"type": "text", "text": {"content": line[2:].strip()}}
+                                            {
+                                                "type": "text",
+                                                "text": {"content": line[2:].strip()},
+                                            }
                                         ]
                                     },
                                 }
@@ -850,8 +885,52 @@ class EnhancedNotionClient:
             )
             return None
 
-    # NOTE: This method is no longer used. We now get intel directly from the Companies database "Latest
-    # Intel" field.
+    def get_notion_page_url(self, page_id: Optional[str]) -> Optional[str]:
+        """
+        Convert a Notion page ID to a clickable URL.
+
+        Args:
+            page_id: Notion page ID (with or without dashes)
+
+        Returns:
+            Clickable Notion URL or None if page_id is invalid
+
+        Raises:
+            ValueError: If page_id contains invalid characters
+        """
+        if not page_id:
+            return None
+
+        # Remove any existing dashes and format with dashes every 8 characters
+        # Notion page IDs are typically 32 characters (UUID without dashes)
+        clean_id = page_id.replace("-", "")
+
+        if len(clean_id) != 32:
+            logger.debug(
+                "Invalid page ID length",
+                page_id=page_id,
+                clean_length=len(clean_id),
+            )
+            return None
+
+        # Validate that clean_id contains only hexadecimal characters
+        if not all(c in "0123456789abcdefABCDEF" for c in clean_id):
+            logger.debug(
+                "Invalid page ID format - contains non-hex characters",
+                page_id=page_id,
+            )
+            return None
+
+        # Format as: 8-4-4-4-12 (UUID format with dashes)
+        formatted_id = (
+            f"{clean_id[:8]}-{clean_id[8:12]}-{clean_id[12:16]}-"
+            f"{clean_id[16:20]}-{clean_id[20:]}"
+        )
+
+        return f"https://www.notion.so/{formatted_id}"
+
+    # NOTE: This method is no longer used. We now get intel directly from the
+    # Companies database "Latest Intel" field.
     # @with_circuit_breaker(
     #     name="notion_intel_query",
     #     failure_threshold=3,
@@ -958,7 +1037,9 @@ class EnhancedNotionClient:
 
 
 def create_notion_client(
-    config: NotionConfig, rate_limiter: Optional[AdaptiveRateLimiter] = None, dry_run: bool = False
+    config: NotionConfig,
+    rate_limiter: Optional[AdaptiveRateLimiter] = None,
+    dry_run: bool = False,
 ) -> EnhancedNotionClient:
     """
     Factory function to create Notion client.

@@ -5,8 +5,9 @@ Creates weekly bulletized news summaries categorized by type
 and organized by company for portfolio intelligence.
 """
 
+import html
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import structlog
 
@@ -59,7 +60,10 @@ class WeeklyNewsReport:
         report_id = f"weekly_news_{week_of}_{start_time.strftime('%H%M%S')}"
 
         logger.info(
-            "Generating weekly news report", days=days, week_of=week_of, report_id=report_id
+            "Generating weekly news report",
+            days=days,
+            week_of=week_of,
+            report_id=report_id,
         )
 
         try:
@@ -157,8 +161,14 @@ class WeeklyNewsReport:
         """Render HTML version of the report."""
         html_parts = [
             f"<h1>Weekly News Digest - Week of {digest.week_of}</h1>",
-            f'<p><strong>Generated:</strong> {datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")}</p>',
-            f"<p><strong>Total Items:</strong> {digest.total_items} across {len(digest.by_company)} companies</p>",
+            (
+                f"<p><strong>Generated:</strong> "
+                f'{datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")}</p>'
+            ),
+            (
+                f"<p><strong>Total Items:</strong> {digest.total_items} across "
+                f"{len(digest.by_company)} companies</p>"
+            ),
             "<hr>",
         ]
 
@@ -372,6 +382,60 @@ class WeeklyNewsReport:
             # Don't re-raise - allow report generation to continue
             report.email_sent = False
 
+    def _get_company_page_urls(self, digest: WeeklyNewsDigest) -> Dict[str, Optional[str]]:
+        """
+        Get Notion page URLs for all companies mentioned in the news digest.
+
+        Args:
+            digest: WeeklyNewsDigest containing news items
+
+        Returns:
+            Dict mapping company callsigns to their Notion page URLs
+            (or None if unavailable)
+        """
+        # Extract all unique company callsigns from the digest
+        all_companies = set()
+        for news_type, items in digest.by_type.items():
+            for item in items:
+                all_companies.update(item.company_mentions)
+
+        company_callsigns = list(all_companies)
+
+        if not company_callsigns or not self.notion_client:
+            logger.debug("No companies or Notion client unavailable for URL mapping")
+            return {company: None for company in company_callsigns}
+
+        try:
+            # Batch fetch company data including page IDs
+            companies_data = self.notion_client.get_all_companies_domain_data(
+                self.settings.notion.companies_db_id, company_callsigns
+            )
+
+            # Convert page IDs to URLs
+            company_urls = {}
+            for callsign in company_callsigns:
+                callsign_lower = callsign.lower()
+                company_data = companies_data.get(callsign_lower, {})
+                page_id = company_data.get("page_id")
+
+                if page_id:
+                    company_urls[callsign] = self.notion_client.get_notion_page_url(page_id)
+                else:
+                    company_urls[callsign] = None
+
+            logger.debug(
+                "Company page URLs retrieved",
+                total_companies=len(company_callsigns),
+                companies_with_urls=len([url for url in company_urls.values() if url]),
+            )
+
+            return company_urls
+
+        except Exception as e:
+            logger.warning("Failed to get company page URLs", error=str(e))
+            # Return None for all companies on error
+            return {company: None for company in company_callsigns}
+
     def _create_email_bulletin(self, digest: WeeklyNewsDigest) -> str:
         """Create scannable intelligence digest optimized for executive review."""
 
@@ -381,9 +445,15 @@ class WeeklyNewsReport:
         classifier = create_news_classifier(self.settings)
         category_info = classifier.get_category_display_info()
 
+        # Get Notion page URLs for all companies in the digest
+        company_urls = self._get_company_page_urls(digest)
+
         parts = [
             "<h2>📊 Portfolio Intelligence Digest</h2>",
-            f"<p><strong>Week of {digest.week_of}</strong> • {digest.total_items} intel items analyzed</p>",
+            (
+                f"<p><strong>Week of {digest.week_of}</strong> • "
+                f"{digest.total_items} intel items analyzed</p>"
+            ),
             "<hr>",
         ]
 
@@ -417,9 +487,30 @@ class WeeklyNewsReport:
                 info = category_info.get(category, {"emoji": "📰", "title": category.value.title()})
                 companies = companies_by_category[category]
 
+                # Create company links (HTML links for companies with page URLs, plain text for others)
+                company_links = []
+                for company in companies:
+                    page_url = company_urls.get(company)
+                    if page_url:
+                        # Escape both the URL and company name to prevent XSS
+                        escaped_url = html.escape(page_url, quote=True)
+                        escaped_company = html.escape(company)
+                        company_links.append(
+                            (
+                                f'<a href="{escaped_url}" '
+                                f'style="text-decoration: none; color: #0066cc;">'
+                                f"{escaped_company}</a>"
+                            )
+                        )
+                    else:
+                        company_links.append(html.escape(company))
+
                 parts.append(
-                    f"<p><strong>{info['emoji']} {info['title'].upper()} ({len(companies)} companies)</strong><br>"
-                    f"• {', '.join(companies)}</p>"
+                    (
+                        f"<p><strong>{info['emoji']} {info['title'].upper()} "
+                        f"({len(companies)} companies)</strong><br>"
+                        f"• {', '.join(company_links)}</p>"
+                    )
                 )
                 active_categories.append(category)
 
@@ -432,7 +523,10 @@ class WeeklyNewsReport:
 
         if empty_categories:
             parts.extend(
-                ["<hr>", f"<p><small>No activity in: {', '.join(empty_categories)}</small></p>"]
+                [
+                    "<hr>",
+                    f"<p><small>No activity in: {', '.join(empty_categories)}</small></p>",
+                ]
             )
 
         # Summary footer
@@ -495,6 +589,8 @@ class WeeklyNewsReport:
 
         except Exception as e:
             logger.error(
-                "Failed to create Notion report", news_items=digest.total_items, error=str(e)
+                "Failed to create Notion report",
+                news_items=digest.total_items,
+                error=str(e),
             )
             return None
