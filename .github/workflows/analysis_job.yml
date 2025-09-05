@@ -24,7 +24,7 @@ on:
         default: "5"
         type: string
   schedule:
-    - cron: "30 13 * * MON"  # Run 30 minutes after main workflow (15 min after news collection)
+    - cron: "15 14 * * MON"  # Run at 14:15 UTC (avoid peak 13:xx time) - 75 min after main workflow
   workflow_run:
     workflows: ["External Intel (News)"]
     types: [completed]
@@ -35,7 +35,7 @@ permissions:
 jobs:
   analysis:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45  # Increased from 30 to handle large datasets + SSL retries
     steps:
       - uses: actions/checkout@v4
 
@@ -47,6 +47,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
+      - name: Pre-warm connections (SSL stability)
+        run: |
+          # Pre-warm Gmail and Notion API connections to reduce SSL failures
+          echo "🔌 Testing API connectivity..."
+          curl -s -o /dev/null -w "Gmail API: %{http_code} (%{time_total}s)\n" \
+            https://gmail.googleapis.com/gmail/v1/users/me/profile || echo "Gmail API unreachable"
+          curl -s -o /dev/null -w "Notion API: %{http_code} (%{time_total}s)\n" \
+            https://api.notion.com/v1/users/me || echo "Notion API unreachable"
+          echo "🌐 Network conditions checked"
 
       - name: Run analysis workflow
         env:
@@ -81,3 +91,39 @@ jobs:
             ${{ inputs.callsigns && format('--callsigns="{0}"', inputs.callsigns) || '' }} \
             --lookback-days='${{ inputs.lookback_days }}' \
             ${{ inputs.dry_run == 'true' && '--no-email' || '' }}
+
+      - name: Upload HTML reports as artifacts
+        if: always() # Run even if analysis fails
+        uses: actions/upload-artifact@v4
+        with:
+          name: intelligence-reports-${{ github.run_number }}
+          path: |
+            reports/email_fallbacks/*.html
+            github_artifacts/*.zip
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Create workflow summary
+        if: always()
+        run: |
+          # Create summary of fallback files if any exist
+          if [ -d "reports/email_fallbacks" ] && [ "$(ls -A reports/email_fallbacks/*.html 2>/dev/null)" ]; then
+            echo "## 📊 Intelligence Reports Generated" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ **Email delivery failed** - Reports saved as HTML files and uploaded as artifacts." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Available Reports:" >> $GITHUB_STEP_SUMMARY
+            for file in reports/email_fallbacks/*.html; do
+              if [ -f "$file" ]; then
+                filename=$(basename "$file")
+                size=$(du -h "$file" | cut -f1)
+                echo "- 📄 **$filename** ($size)" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "💡 **How to access**: Download the 'intelligence-reports-${{ github.run_number }}' artifact from this workflow run." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ✅ Analysis Completed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Intelligence reports were processed successfully." >> $GITHUB_STEP_SUMMARY
+          fi

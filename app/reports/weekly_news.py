@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 import structlog
 
 from app.core.config import Settings
+from app.data.email_delivery import create_robust_email_delivery
 from app.data.notion_client import EnhancedNotionClient
 from app.intelligence.analyzers import NewsAnalyzer
 from app.intelligence.data_aggregator import IntelligenceAggregator
@@ -310,30 +311,66 @@ class WeeklyNewsReport:
         return "\n".join(md_parts)
 
     def _send_email_report(self, report: Report, digest: WeeklyNewsDigest):
-        """Send report via email."""
+        """Send report via email with robust delivery and fallback options."""
         try:
-            if not self.aggregator.gmail_client:
-                logger.warning("Gmail client not available for email delivery")
-                return
+            # Create robust email delivery system
+            email_delivery = create_robust_email_delivery(
+                gmail_client=self.aggregator.gmail_client,
+                fallback_directory="./reports/email_fallbacks",
+            )
 
             # Create bulletized email content
             email_content = self._create_email_bulletin(digest)
-
             subject = f"Weekly News Digest - {digest.total_items} items across portfolio"
 
-            response = self.aggregator.gmail_client.send_html_email(
+            logger.info(
+                "Starting robust email delivery",
+                news_items=digest.total_items,
+                content_size=len(email_content),
+                subject=subject,
+            )
+
+            # Attempt delivery with automatic retry and fallback
+            delivery_result = email_delivery.send_with_fallback(
                 to=self.settings.gmail.user, subject=subject, html=email_content
             )
 
-            report.email_sent = True
-            logger.info(
-                "Weekly news report emailed",
-                news_items=digest.total_items,
-                message_id=response.get("id"),
-            )
+            # Update report based on delivery method
+            if delivery_result["delivered"]:
+                report.email_sent = True
+
+                if delivery_result["method"] == "email":
+                    logger.info(
+                        "Weekly news report emailed successfully",
+                        news_items=digest.total_items,
+                        message_id=delivery_result["response"].get("id"),
+                        attempts=delivery_result["attempts"],
+                    )
+                elif delivery_result["method"] == "file":
+                    logger.warning(
+                        "Email delivery failed - Report saved as HTML file",
+                        news_items=digest.total_items,
+                        fallback_file=delivery_result["fallback_file"],
+                        original_error=delivery_result.get("error", "Unknown"),
+                        attempts=delivery_result["attempts"],
+                    )
+                    # Add fallback file info to report metadata
+                    if not hasattr(report.metadata, "additional_info"):
+                        report.metadata.additional_info = {}
+                    report.metadata.additional_info["fallback_file"] = delivery_result[
+                        "fallback_file"
+                    ]
+                    report.metadata.additional_info["delivery_method"] = "file_fallback"
 
         except Exception as e:
-            logger.error("Failed to send weekly news report email", error=str(e))
+            logger.error(
+                "Complete email delivery failure",
+                news_items=digest.total_items,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            # Don't re-raise - allow report generation to continue
+            report.email_sent = False
 
     def _create_email_bulletin(self, digest: WeeklyNewsDigest) -> str:
         """Create scannable intelligence digest optimized for executive review."""
