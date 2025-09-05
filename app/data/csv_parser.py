@@ -225,6 +225,10 @@ class CSVProcessor:
                         balance_pct_delta_pct=pd.to_numeric(
                             row.get(cols.get("balance_pct_delta_pct")), errors="coerce"
                         ),
+                        # Product changes
+                        product_flips_json=self.safe_string_conversion(
+                            row.get(cols.get("product_flips_json"))
+                        ),
                     )
 
                     # Calculate any_change if not provided
@@ -319,9 +323,48 @@ class CSVProcessor:
                 for c in losers[:top_n]
             ]
 
-            # TODO: Parse product flips from JSON columns if available
+            # Parse product flips from JSON columns
             product_starts = []
             product_stops = []
+            
+            for company in companies:
+                if hasattr(company, 'product_flips_json') and company.product_flips_json:
+                    try:
+                        import json
+                        # Handle the case where product_flips_json might be a string
+                        if isinstance(company.product_flips_json, str) and company.product_flips_json.strip():
+                            flips = json.loads(company.product_flips_json)
+                        elif isinstance(company.product_flips_json, list):
+                            flips = company.product_flips_json
+                        else:
+                            continue
+                            
+                        for flip in flips:
+                            if isinstance(flip, dict) and 'product' in flip:
+                                product_name = flip.get('product', 'Unknown')
+                                from_status = flip.get('from', 0)
+                                to_status = flip.get('to', 0)
+                                
+                                if from_status == 0 and to_status == 1:
+                                    # Started using product
+                                    product_starts.append({
+                                        'callsign': company.callsign,
+                                        'product': product_name
+                                    })
+                                elif from_status == 1 and to_status == 0:
+                                    # Stopped using product
+                                    product_stops.append({
+                                        'callsign': company.callsign,
+                                        'product': product_name
+                                    })
+                    except (json.JSONDecodeError, AttributeError, KeyError, TypeError) as e:
+                        logger.debug("Failed to parse product flips for company", 
+                                   callsign=getattr(company, 'callsign', 'unknown'), 
+                                   error=str(e))
+                        continue
+            
+            # Update stats with total product flips
+            stats.total_product_flips = len(product_starts) + len(product_stops)
 
             return {
                 "stats": stats.model_dump(),
