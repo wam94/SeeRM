@@ -55,38 +55,29 @@ main.add_command(reports)
 
 
 @main.command()
+@click.option("--callsigns", help="Comma-separated callsigns to limit analysis (optional)")
 @click.option(
-    "--callsigns", 
-    help="Comma-separated callsigns to limit analysis (optional)"
+    "--lookback-days",
+    type=int,
+    default=10,
+    help="Number of days to look back for news (default: 10)",
 )
-@click.option(
-    "--lookback-days", 
-    type=int, 
-    default=10, 
-    help="Number of days to look back for news (default: 10)"
-)
-@click.option(
-    "--no-email", 
-    is_flag=True, 
-    help="Generate report without sending email"
-)
+@click.option("--no-email", is_flag=True, help="Generate report without sending email")
 @click.pass_context
 def news(ctx, callsigns: Optional[str], lookback_days: int, no_email: bool):
     """Generate weekly news intelligence report.
-    
+
     This is equivalent to running 'reports weekly-news' but matches
     the expected interface for the news intelligence workflow.
     """
     try:
         # Use the existing weekly-news report functionality
-        ctx.invoke(
-            reports.commands['weekly-news'],
-            no_email=no_email
-        )
+        ctx.invoke(reports.commands["weekly-news"], no_email=no_email)
     except Exception as e:
         console.print(f"[red]News Intelligence Error:[/red] {e}")
         if ctx.obj and ctx.obj.get("debug"):
             import traceback
+
             console.print(traceback.format_exc())
         sys.exit(1)
 
