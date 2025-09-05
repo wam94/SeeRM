@@ -37,13 +37,13 @@ def _create_services(settings: Settings):
         ]
     ):
         try:
-            gmail_client = EnhancedGmailClient(settings.gmail)
+            gmail_client = EnhancedGmailClient(settings.gmail, dry_run=settings.dry_run)
         except Exception as e:
             logger.warning("Gmail client initialization failed", error=str(e))
 
     if settings.notion.api_key:
         try:
-            notion_client = EnhancedNotionClient(settings.notion)
+            notion_client = EnhancedNotionClient(settings.notion, dry_run=settings.dry_run)
         except Exception as e:
             logger.warning("Notion client initialization failed", error=str(e))
 

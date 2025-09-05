@@ -595,12 +595,43 @@ class EnhancedNotionClient:
                 if website_prop.get("type") == "url":
                     website = website_prop.get("url")
 
-                domain_data[callsign] = {"domain": domain, "website": website}
+                # Extract Latest Intel field
+                latest_intel = None
+                latest_intel_at = None
+
+                latest_intel_prop = properties.get("Latest Intel", {})
+                if latest_intel_prop.get("type") == "rich_text":
+                    rich_text = latest_intel_prop.get("rich_text", [])
+                    if rich_text and rich_text[0].get("text"):
+                        latest_intel = rich_text[0]["text"].get("content", "").strip()
+
+                latest_intel_at_prop = properties.get("Latest Intel At", {})
+                if latest_intel_at_prop.get("type") == "date":
+                    date_data = latest_intel_at_prop.get("date")
+                    if date_data:
+                        latest_intel_at = date_data.get("start")
+
+                # Get page ID
+                page_id = page.get("id")
+
+                domain_data[callsign] = {
+                    "domain": domain,
+                    "website": website,
+                    "latest_intel": latest_intel,
+                    "latest_intel_at": latest_intel_at,
+                    "page_id": page_id,
+                }
 
             # Fill in missing callsigns
             for cs in callsigns:
                 if cs.lower() not in domain_data:
-                    domain_data[cs.lower()] = {"domain": None, "website": None}
+                    domain_data[cs.lower()] = {
+                        "domain": None,
+                        "website": None,
+                        "latest_intel": None,
+                        "latest_intel_at": None,
+                        "page_id": None,
+                    }
 
             logger.info(
                 "Company domain data retrieved",
@@ -615,7 +646,16 @@ class EnhancedNotionClient:
                 "Failed to get companies domain data", database_id=database_id, error=str(e)
             )
             # Return empty data for all callsigns
-            return {cs.lower(): {"domain": None, "website": None} for cs in callsigns}
+            return {
+                cs.lower(): {
+                    "domain": None,
+                    "website": None,
+                    "latest_intel": None,
+                    "latest_intel_at": None,
+                    "page_id": None,
+                }
+                for cs in callsigns
+            }
 
     def health_check(self) -> Dict[str, Any]:
         """
@@ -812,109 +852,110 @@ class EnhancedNotionClient:
             )
             return None
 
-    @with_circuit_breaker(
-        name="notion_intel_query",
-        failure_threshold=3,
-        recovery_timeout=30.0,
-        expected_exception=NotionError,
-    )
-    @with_retry(max_attempts=3, retry_exceptions=(HTTPStatusError, TimeoutException))
-    def get_intel_archive_for_company(
-        self,
-        database_id: str,
-        callsign: str,
-        start_date: datetime.datetime,
-        end_date: datetime.datetime,
-    ) -> List[Dict[str, Any]]:
-        """
-        Get intelligence archive data for a specific company from Notion.
-
-        Args:
-            database_id: Intelligence database ID
-            callsign: Company callsign to filter by
-            start_date: Start date for filtering
-            end_date: End date for filtering
-
-        Returns:
-            List of intelligence items as dictionaries
-        """
-        if self.dry_run:
-            logger.info(
-                "DRY RUN: Would query intel archive", database_id=database_id, callsign=callsign
-            )
-            return []
-
-        try:
-            logger.debug("Querying intel archive", database_id=database_id, callsign=callsign)
-
-            # Build the filter for callsign
-            filter_conditions = {
-                "and": [
-                    {"property": "Callsign", "rich_text": {"equals": callsign}},
-                    {"property": "Last Updated", "date": {"on_or_after": start_date.isoformat()}},
-                    {"property": "Last Updated", "date": {"on_or_before": end_date.isoformat()}},
-                ]
-            }
-
-            response = self.query_database(database_id, filter_conditions)
-            pages = response.get("results", [])
-
-            intel_items = []
-            for page in pages:
-                # Get basic page info
-                page_id = page.get("id")
-
-                # Get the page content to extract news items
-                try:
-                    # Get page content blocks
-                    blocks_response = self._make_request("GET", f"/blocks/{page_id}/children")
-                    blocks = blocks_response.get("results", [])
-
-                    # Parse blocks to extract news items
-                    # This is a simplified version - adjust based on actual content structure
-                    for block in blocks:
-                        if block.get("type") == "toggle":
-                            toggle_data = block.get("toggle", {})
-                            rich_text = toggle_data.get("rich_text", [])
-                            if rich_text:
-                                title = "".join([t.get("plain_text", "") for t in rich_text])
-
-                                # Try to extract structured data from toggle content
-                                intel_items.append(
-                                    {
-                                        "title": title,
-                                        "url": "",  # You may need to extract this from the content
-                                        "source": "Notion Intel Archive",
-                                        "published_at": start_date.isoformat(),  # Use actual date
-                                        "summary": title,  # Use title as summary for now
-                                        "relevance_score": 0.8,
-                                        "sentiment": "neutral",
-                                    }
-                                )
-
-                except Exception as block_error:
-                    logger.warning(
-                        "Failed to get page content", page_id=page_id, error=str(block_error)
-                    )
-                    continue
-
-            logger.info(
-                "Intel archive query completed",
-                database_id=database_id,
-                callsign=callsign,
-                items_found=len(intel_items),
-            )
-
-            return intel_items
-
-        except Exception as e:
-            logger.error(
-                "Failed to query intel archive",
-                database_id=database_id,
-                callsign=callsign,
-                error=str(e),
-            )
-            raise NotionError(f"Failed to query intelligence archive: {e}")
+    # NOTE: This method is no longer used. We now get intel directly from the Companies database "Latest Intel" field.
+    # @with_circuit_breaker(
+    #     name="notion_intel_query",
+    #     failure_threshold=3,
+    #     recovery_timeout=30.0,
+    #     expected_exception=NotionError,
+    # )
+    # @with_retry(max_attempts=3, retry_exceptions=(HTTPStatusError, TimeoutException))
+    # def get_intel_archive_for_company(
+    #     self,
+    #     database_id: str,
+    #     callsign: str,
+    #     start_date: datetime.datetime,
+    #     end_date: datetime.datetime,
+    # ) -> List[Dict[str, Any]]:
+    #     """
+    #     Get intelligence archive data for a specific company from Notion.
+    #
+    #     Args:
+    #         database_id: Intelligence database ID
+    #         callsign: Company callsign to filter by
+    #         start_date: Start date for filtering
+    #         end_date: End date for filtering
+    #
+    #     Returns:
+    #         List of intelligence items as dictionaries
+    #     """
+    #     if self.dry_run:
+    #         logger.info(
+    #             "DRY RUN: Would query intel archive", database_id=database_id, callsign=callsign
+    #         )
+    #         return []
+    #
+    #     try:
+    #         logger.debug("Querying intel archive", database_id=database_id, callsign=callsign)
+    #
+    #         # Build the filter for callsign
+    #         filter_conditions = {
+    #             "and": [
+    #                 {"property": "Callsign", "rich_text": {"equals": callsign}},
+    #                 {"property": "Last Updated", "date": {"on_or_after": start_date.isoformat()}},
+    #                 {"property": "Last Updated", "date": {"on_or_before": end_date.isoformat()}},
+    #             ]
+    #         }
+    #
+    #         response = self.query_database(database_id, filter_conditions)
+    #         pages = response.get("results", [])
+    #
+    #         intel_items = []
+    #         for page in pages:
+    #             # Get basic page info
+    #             page_id = page.get("id")
+    #
+    #             # Get the page content to extract news items
+    #             try:
+    #                 # Get page content blocks
+    #                 blocks_response = self._make_request("GET", f"/blocks/{page_id}/children")
+    #                 blocks = blocks_response.get("results", [])
+    #
+    #                 # Parse blocks to extract news items
+    #                 # This is a simplified version - adjust based on actual content structure
+    #                 for block in blocks:
+    #                     if block.get("type") == "toggle":
+    #                         toggle_data = block.get("toggle", {})
+    #                         rich_text = toggle_data.get("rich_text", [])
+    #                         if rich_text:
+    #                             title = "".join([t.get("plain_text", "") for t in rich_text])
+    #
+    #                             # Try to extract structured data from toggle content
+    #                             intel_items.append(
+    #                                 {
+    #                                     "title": title,
+    #                                     "url": "",  # You may need to extract this from the content
+    #                                     "source": "Notion Intel Archive",
+    #                                     "published_at": start_date.isoformat(),  # Use actual date
+    #                                     "summary": title,  # Use title as summary for now
+    #                                     "relevance_score": 0.8,
+    #                                     "sentiment": "neutral",
+    #                                 }
+    #                             )
+    #
+    #             except Exception as block_error:
+    #                 logger.warning(
+    #                     "Failed to get page content", page_id=page_id, error=str(block_error)
+    #                 )
+    #                 continue
+    #
+    #         logger.info(
+    #             "Intel archive query completed",
+    #             database_id=database_id,
+    #             callsign=callsign,
+    #             items_found=len(intel_items),
+    #         )
+    #
+    #         return intel_items
+    #
+    #     except Exception as e:
+    #         logger.error(
+    #             "Failed to query intel archive",
+    #             database_id=database_id,
+    #             callsign=callsign,
+    #             error=str(e),
+    #         )
+    #         raise NotionError(f"Failed to query intelligence archive: {e}")
 
 
 def create_notion_client(

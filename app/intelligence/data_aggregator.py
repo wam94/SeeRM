@@ -184,46 +184,65 @@ class IntelligenceAggregator:
     @with_retry(max_attempts=3)
     def get_company_news(self, callsign: str, days: int = 90) -> List[NewsItem]:
         """
-        Get news history for a company from Notion intelligence database.
+        Get news for a company from the "Latest Intel" field in Companies database.
 
         Args:
             callsign: Company callsign
-            days: Number of days of history to retrieve
+            days: Number of days of history to retrieve (used for filtering by Latest Intel At)
 
         Returns:
             List of NewsItem objects
         """
-        if not self.notion_client or not self.settings.notion.intel_db_id:
-            logger.debug("Notion intelligence DB not configured")
+        if not self.notion_client or not self.settings.notion.companies_db_id:
+            logger.debug("Notion companies DB not configured")
             return []
 
         try:
             logger.debug("Fetching company news", callsign=callsign, days=days)
 
-            # Calculate date range
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days)
-
-            # Get intelligence data from Notion
-            # This would use the existing intel archive functionality
-            intel_data = self.notion_client.get_intel_archive_for_company(
-                self.settings.notion.intel_db_id, callsign, start_date, end_date
+            # Get company data from Companies database including latest intel
+            companies_data = self.notion_client.get_all_companies_domain_data(
+                self.settings.notion.companies_db_id, callsigns=[callsign]
             )
 
+            if not companies_data or callsign.lower() not in companies_data:
+                logger.debug("Company not found", callsign=callsign)
+                return []
+
+            company_data = companies_data[callsign.lower()]
+            latest_intel = company_data.get("latest_intel")
+            latest_intel_at = company_data.get("latest_intel_at")
+
             news_items = []
-            for item in intel_data:
-                news_item = NewsItem(
-                    title=item.get("title", "Untitled"),
-                    url=item.get("url", ""),
-                    source=item.get("source", ""),
-                    published_at=item.get("published_at", ""),
-                    summary=item.get("summary"),
-                    news_type=self._classify_news_type(item.get("title", "")),
-                    relevance_score=item.get("relevance_score", 0.5),
-                    sentiment=item.get("sentiment"),
-                    company_mentions=[callsign],
-                )
-                news_items.append(news_item)
+
+            # Check if there's actual intel content (not "0 new items")
+            if latest_intel and latest_intel.strip() and not latest_intel.startswith("0 new items"):
+                # Calculate if the intel is within our date range
+                intel_date = datetime.now()
+                if latest_intel_at:
+                    try:
+                        intel_date = datetime.fromisoformat(latest_intel_at.replace("Z", "+00:00"))
+                    except ValueError:
+                        logger.debug("Could not parse intel date", date=latest_intel_at)
+
+                # Check if intel is within the requested time range
+                cutoff_date = datetime.now() - timedelta(days=days)
+                if intel_date >= cutoff_date:
+                    # Create a NewsItem from the latest intel
+                    news_item = NewsItem(
+                        title=f"Latest Intel: {callsign.upper()}",
+                        url="",
+                        source="Notion Companies DB",
+                        published_at=(
+                            intel_date.isoformat() if intel_date else datetime.now().isoformat()
+                        ),
+                        summary=latest_intel,
+                        news_type=self._classify_news_type(latest_intel),
+                        relevance_score=0.8,  # High relevance since it's the latest intel
+                        sentiment="neutral",  # Default to neutral
+                        company_mentions=[callsign.upper()],
+                    )
+                    news_items.append(news_item)
 
             logger.debug("Company news loaded", callsign=callsign, count=len(news_items))
             return news_items
