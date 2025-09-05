@@ -18,8 +18,10 @@ from app.data.gmail_client import EnhancedGmailClient
 from app.data.notion_client import EnhancedNotionClient
 from app.utils.reliability import track_performance, with_retry
 
+from .cache import cache_company_profile, cache_movements, cache_notion_query, get_cache
 from .models import CompanyIntelligence, CompanyProfile, Movement, MovementType, NewsItem, NewsType
 from .news_classifier import NewsClassifier
+from .parallel_processor import get_parallel_processor
 
 logger = structlog.get_logger(__name__)
 
@@ -52,6 +54,7 @@ class IntelligenceAggregator:
 
     @track_performance("get_latest_movements")
     @with_retry(max_attempts=3)
+    @cache_movements(ttl=300)  # Cache for 5 minutes
     def get_latest_movements(self, days: int = 7) -> List[Movement]:
         """
         Get latest account movements from CSV data.
@@ -139,6 +142,7 @@ class IntelligenceAggregator:
 
     @track_performance("get_company_profile")
     @with_retry(max_attempts=3)
+    @cache_company_profile(ttl=3600)  # Cache for 1 hour
     def get_company_profile(self, callsign: str) -> Optional[CompanyProfile]:
         """
         Get company profile from Notion.
@@ -345,15 +349,34 @@ class IntelligenceAggregator:
         """
         # Get all companies from movements
         movements = self.get_latest_movements()
-        all_news = []
 
-        for movement in movements:
-            company_news = self.get_company_news(movement.callsign, days=days)
+        # Use parallel processing to fetch news for all companies
+        processor = get_parallel_processor(max_workers=min(10, len(movements)))
+        callsigns = [movement.callsign for movement in movements]
+
+        # Fetch news in parallel
+        news_by_company = processor.parallel_fetch_news(
+            companies=callsigns, fetch_news_func=self.get_company_news, days=days
+        )
+
+        # Flatten news items
+        all_news = []
+        for company_news in news_by_company.values():
             all_news.extend(company_news)
 
         # Classify news items using intelligent categorization
         if all_news:
-            all_news = self.news_classifier.classify_news_items(all_news)
+            # Batch news items for parallel classification
+            batch_size = 20
+            news_batches = [
+                all_news[i : i + batch_size] for i in range(0, len(all_news), batch_size)
+            ]
+
+            # Classify in parallel batches
+            all_news = processor.batch_classify_news(
+                news_items_batches=news_batches,
+                classify_func=self.news_classifier.classify_news_items,
+            )
 
         # Sort by date (most recent first)
         all_news.sort(key=lambda x: x.published_at, reverse=True)

@@ -14,6 +14,7 @@ from openai import OpenAI
 from app.core.config import Settings
 from app.core.exceptions import WorkflowError
 
+from .cache import cache_news_classification
 from .models import NewsItem, NewsType
 
 logger = structlog.get_logger(__name__)
