@@ -572,6 +572,115 @@ def _list_block_children(page_id: str, page_size: int = 100) -> List[Dict[str, A
     return out
 
 
+def _append_sources_summary(page_id: str, date_iso: str, source_metadata: Dict[str, List[str]]):
+    """
+    Append or update a 'News Sources' section at the bottom of the Intel Archive page.
+    This provides clickable URLs for RSS feeds and readable search queries used this week.
+    """
+    rss_feeds = source_metadata.get("rss_feeds", [])
+    search_queries = source_metadata.get("search_queries", [])
+
+    if not rss_feeds and not search_queries:
+        return  # No sources to add
+
+    # Build sources content
+    sources_content = []
+
+    if rss_feeds:
+        sources_content.append(
+            {
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [
+                        {
+                            "type": "text",
+                            "text": {"content": "📡 RSS Feeds:", "link": None},
+                            "annotations": {"bold": True},
+                        }
+                    ]
+                },
+            }
+        )
+
+        # Add each RSS feed as a bulleted list item with clickable link
+        for feed_url in rss_feeds:
+            sources_content.append(
+                {
+                    "object": "block",
+                    "type": "bulleted_list_item",
+                    "bulleted_list_item": {
+                        "rich_text": [
+                            {
+                                "type": "text",
+                                "text": {"content": feed_url, "link": {"url": feed_url}},
+                            }
+                        ]
+                    },
+                }
+            )
+
+    if search_queries:
+        if sources_content:  # Add spacing if we had RSS feeds above
+            sources_content.append(
+                {
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {"rich_text": [{"type": "text", "text": {"content": ""}}]},
+                }
+            )
+
+        sources_content.append(
+            {
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [
+                        {
+                            "type": "text",
+                            "text": {"content": "🔍 Search Queries:", "link": None},
+                            "annotations": {"bold": True},
+                        }
+                    ]
+                },
+            }
+        )
+
+        # Add each search query as a bulleted list item
+        for query in search_queries:
+            # Make Google search URL clickable
+            search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+            sources_content.append(
+                {
+                    "object": "block",
+                    "type": "bulleted_list_item",
+                    "bulleted_list_item": {
+                        "rich_text": [
+                            {
+                                "type": "text",
+                                "text": {"content": f'"{query}"', "link": {"url": search_url}},
+                            }
+                        ]
+                    },
+                }
+            )
+
+    # Create the main sources toggle block
+    sources_toggle = {
+        "object": "block",
+        "type": "toggle",
+        "toggle": {
+            "rich_text": [
+                {"type": "text", "text": {"content": f"📋 News Sources Used - {date_iso}"}}
+            ],
+            "children": sources_content,
+        },
+    }
+
+    # Append to page
+    notion_post(f"/blocks/{page_id}/children", json={"children": [sources_toggle]})
+
+
 def _prune_oldest_toggles_by_budget(page_id: str, approx_max_bytes: int = 800_000):
     """
     Keep the page's top-level toggle groups within an approximate byte budget.
@@ -627,6 +736,7 @@ def update_intel_archive_for_company(
     summary_max_bytes: int = 250_000,
     timeline_max_bytes: int = 800_000,
     overwrite_summary_only: bool = True,
+    source_metadata: Optional[Dict[str, List[str]]] = None,
 ) -> str:
     """
     Upsert a single Intel page per company, overwrite Summary with latest (no history),
@@ -648,6 +758,10 @@ def update_intel_archive_for_company(
 
     # 2) Append timeline (toggle with bullets)
     _append_timeline_group(page_id, date_iso, summary_text, items)
+
+    # 2.5) Append sources summary if provided
+    if source_metadata:
+        _append_sources_summary(page_id, date_iso, source_metadata)
 
     # 3) Prune oldest groups to keep under budget
     _prune_oldest_toggles_by_budget(page_id, approx_max_bytes=timeline_max_bytes)

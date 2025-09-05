@@ -215,24 +215,31 @@ def build_queries(
 # ---------------- RSS / Feeds ----------------
 
 
-def _try_feed(url: str) -> List[Dict[str, Any]]:
+def _try_feed(url: str) -> tuple[List[Dict[str, Any]], Optional[str]]:
+    """Try to fetch RSS feed and return items plus successful feed URL."""
     out: List[Dict[str, Any]] = []
     fp = feedparser.parse(url)
-    for e in fp.entries[:10]:
-        title = getattr(e, "title", "") or ""
-        link = getattr(e, "link", "") or ""
-        date = ""
-        for key in ("published", "updated"):
-            if hasattr(e, key):
-                date = getattr(e, key) or ""
-                break
-        out.append({"title": title, "url": link, "source": "", "published_at": date})
-    return out
+    successful_feed_url = None
+
+    if fp.entries:  # Only consider successful if we got entries
+        successful_feed_url = url
+        for e in fp.entries[:10]:
+            title = getattr(e, "title", "") or ""
+            link = getattr(e, "link", "") or ""
+            date = ""
+            for key in ("published", "updated"):
+                if hasattr(e, key):
+                    date = getattr(e, key) or ""
+                    break
+            out.append({"title": title, "url": link, "source": "", "published_at": date})
+
+    return out, successful_feed_url
 
 
-def try_rss_feeds(site: Optional[str]) -> List[Dict[str, Any]]:
+def try_rss_feeds(site: Optional[str]) -> tuple[List[Dict[str, Any]], List[str]]:
+    """Try RSS feeds and return items plus list of successful feed URLs."""
     if not site:
-        return []
+        return [], []
     site = str(site).strip()
     cand = []
     if site.startswith("http"):
@@ -240,13 +247,21 @@ def try_rss_feeds(site: Optional[str]) -> List[Dict[str, Any]]:
         cand = [f"{base}/feed", f"{base}/rss", base]
     else:
         cand = [f"https://{site}/feed", f"https://{site}/rss", f"https://{site}"]
+
     items: List[Dict[str, Any]] = []
+    successful_feeds: List[str] = []
+
     for u in cand:
         try:
-            items.extend(_try_feed(u))
+            feed_items, successful_url = _try_feed(u)
+            items.extend(feed_items)
+            if successful_url:
+                successful_feeds.append(successful_url)
+                # Stop after first successful feed to avoid duplicates
+                break
         except Exception:
             continue
-    return items
+    return items, successful_feeds
 
 
 # ---------------- Google CSE ----------------
@@ -386,14 +401,25 @@ def collect_recent_news(
     g_cse_id: Optional[str],
     max_items: int = 6,
     max_queries: int = 5,
-) -> List[Dict[str, Any]]:
+) -> tuple[List[Dict[str, Any]], Dict[str, List[str]]]:
+    """Collect news items and return tuple of (items, source_metadata).
+
+    source_metadata format:
+    {
+        "rss_feeds": ["https://company.com/feed", "https://blog.company.com/rss"],
+        "search_queries": ["site:company.com funding", "Company Name partnership"]
+    }
+    """
     items: List[Dict[str, Any]] = []
+    source_metadata: Dict[str, List[str]] = {"rss_feeds": [], "search_queries": []}
 
     # RSS/blog (prefer explicit blog_url; else website)
     site_for_rss = org.get("blog_url") or org.get("website")
     if site_for_rss:
         try:
-            items += try_rss_feeds(site_for_rss)
+            rss_items, successful_feeds = try_rss_feeds(site_for_rss)
+            items += rss_items
+            source_metadata["rss_feeds"].extend(successful_feeds)
         except Exception:
             pass
 
@@ -409,6 +435,10 @@ def collect_recent_news(
             tags=org.get("industry_tags"),
         )
         limit = int(os.getenv("CSE_MAX_QUERIES_PER_ORG", str(max_queries)) or max_queries)
+
+        # Track queries that will be executed
+        executed_queries = queries[:limit]
+        source_metadata["search_queries"] = executed_queries
 
         # Create API call functions for concurrent execution
         api_calls = []
@@ -435,7 +465,7 @@ def collect_recent_news(
         x for x in items if within_days(x.get("published_at", datetime.utcnow()), lookback_days)
     ]
     items = normalize_news_items(items)
-    return items[:max_items]
+    return items[:max_items], source_metadata
 
 
 # ---------------- LLM summary (optional) ----------------
@@ -685,10 +715,10 @@ def main():
         if domain_sources and os.getenv("DEBUG"):
             print(f"[DOMAIN] {cs}: {'; '.join(domain_sources)}")
 
-        items = collect_recent_news(
+        items, source_metadata = collect_recent_news(
             enhanced_org, lookback_days, g_api_key, g_cse_id, max_items=max_per_org
         )
-        return cs, items
+        return cs, {"items": items, "source_metadata": source_metadata}
 
     # Process companies in parallel
     print(f"[PARALLEL] Processing {len(roster)} companies for news collection...")
@@ -701,8 +731,16 @@ def main():
     )
 
     intel_by_cs: Dict[str, List[Dict[str, Any]]] = {}
+    source_metadata_by_cs: Dict[str, Dict[str, List[str]]] = {}
     for cs in roster.keys():
-        intel_by_cs[cs] = results.get(cs, [])
+        result = results.get(cs, {"items": [], "source_metadata": {}})
+        if isinstance(result, dict):
+            intel_by_cs[cs] = result.get("items", [])
+            source_metadata_by_cs[cs] = result.get("source_metadata", {})
+        else:
+            # Backwards compatibility: if result is just a list (old format)
+            intel_by_cs[cs] = result
+            source_metadata_by_cs[cs] = {}
 
     collection_time = PERFORMANCE_MONITOR.end_timer("intel_collection")
     print(f"[PERFORMANCE] Intel collection completed in {collection_time:.2f}s")
@@ -778,6 +816,7 @@ def main():
                         summary_max_bytes=250_000,  # ~250 KB for property
                         timeline_max_bytes=800_000,  # ~800 KB for toggle groups
                         overwrite_summary_only=True,  # important: no summary history
+                        source_metadata=source_metadata_by_cs.get(cs, {}),
                     )
                 except Exception as e:
                     print(f"WARN intel archive for {cs}: {e}")
