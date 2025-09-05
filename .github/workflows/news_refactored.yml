@@ -24,7 +24,7 @@ on:
         default: "5"
         type: string
   schedule:
-    - cron: "15 13 * * MON"  # Run 15 minutes after main workflow
+    - cron: "15 13 * * FRI"  # Run 15 minutes after main workflow
   workflow_run:
     workflows: ["Weekly Digest"]
     types: [completed]
@@ -79,8 +79,8 @@ jobs:
           INTEL_MAX_PER_ORG: ${{ inputs.max_per_org }}
 
         run: |
-          # Note: This is a placeholder for when news intelligence is implemented in the new CLI
-          # The refactored system would need a 'news' command added to app/main.py
-          echo "News intelligence workflow would run here"
-          echo "Command would be: python -m app.main news --callsigns='${{ inputs.callsigns }}' --lookback-days='${{ inputs.lookback_days }}'"
-          echo "This requires implementing the news command in the refactored CLI"
+          # Run the news intelligence analysis
+          python -m app.main news \
+            ${{ inputs.callsigns && format('--callsigns="{0}"', inputs.callsigns) || '' }} \
+            --lookback-days='${{ inputs.lookback_days }}' \
+            ${{ inputs.dry_run == 'true' && '--no-email' || '' }}
