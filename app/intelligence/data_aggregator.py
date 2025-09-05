@@ -19,6 +19,7 @@ from app.data.notion_client import EnhancedNotionClient
 from app.utils.reliability import track_performance, with_retry
 
 from .models import CompanyIntelligence, CompanyProfile, Movement, MovementType, NewsItem, NewsType
+from .news_classifier import NewsClassifier
 
 logger = structlog.get_logger(__name__)
 
@@ -41,8 +42,13 @@ class IntelligenceAggregator:
         self.notion_client = notion_client
         self.settings = settings or Settings()
         self.csv_processor = CSVProcessor(strict_validation=False)
+        self.news_classifier = NewsClassifier(self.settings)
 
-        logger.info("Intelligence aggregator initialized", notion_enabled=notion_client is not None)
+        logger.info(
+            "Intelligence aggregator initialized",
+            notion_enabled=notion_client is not None,
+            intelligent_classification=True,
+        )
 
     @track_performance("get_latest_movements")
     @with_retry(max_attempts=3)
@@ -237,7 +243,7 @@ class IntelligenceAggregator:
                             intel_date.isoformat() if intel_date else datetime.now().isoformat()
                         ),
                         summary=latest_intel,
-                        news_type=self._classify_news_type(latest_intel),
+                        news_type=NewsType.OTHER_NOTABLE,  # Will be classified later by intelligent classifier
                         relevance_score=0.8,  # High relevance since it's the latest intel
                         sentiment="neutral",  # Default to neutral
                         company_mentions=[callsign.upper()],
@@ -345,27 +351,68 @@ class IntelligenceAggregator:
             company_news = self.get_company_news(movement.callsign, days=days)
             all_news.extend(company_news)
 
+        # Classify news items using intelligent categorization
+        if all_news:
+            all_news = self.news_classifier.classify_news_items(all_news)
+
         # Sort by date (most recent first)
         all_news.sort(key=lambda x: x.published_at, reverse=True)
 
         logger.info(
-            "News stream compiled", total_items=len(all_news), days=days, companies=len(movements)
+            "News stream compiled and classified",
+            total_items=len(all_news),
+            days=days,
+            companies=len(movements),
         )
 
         return all_news
 
+    def get_companies_by_category(self, news_items: List[NewsItem]) -> Dict[NewsType, List[str]]:
+        """
+        Group companies by news category for digest generation.
+
+        Args:
+            news_items: List of classified news items
+
+        Returns:
+            Dict mapping news categories to lists of company callsigns
+        """
+        companies_by_category = {}
+
+        for item in news_items:
+            category = item.news_type
+            companies = item.company_mentions
+
+            if category not in companies_by_category:
+                companies_by_category[category] = set()
+
+            companies_by_category[category].update(companies)
+
+        # Convert sets to sorted lists
+        result = {}
+        for category, company_set in companies_by_category.items():
+            result[category] = sorted(list(company_set))
+
+        logger.debug(
+            "Companies grouped by category",
+            categories=len(result),
+            total_companies=sum(len(companies) for companies in result.values()),
+        )
+
+        return result
+
     def _classify_news_type(self, title: str) -> NewsType:
-        """Classify news type based on title keywords."""
+        """Classify news type based on title keywords (legacy fallback)."""
         title_lower = title.lower()
 
         if any(
             word in title_lower for word in ["funding", "raise", "series", "investment", "investor"]
         ):
-            return NewsType.FUNDRAISING
+            return NewsType.FUNDING
         elif any(
             word in title_lower for word in ["partnership", "partner", "collaboration", "alliance"]
         ):
-            return NewsType.PARTNERSHIP
+            return NewsType.PARTNERSHIPS
         elif any(word in title_lower for word in ["launch", "release", "product", "feature"]):
             return NewsType.PRODUCT_LAUNCH
         elif any(
@@ -375,10 +422,16 @@ class IntelligenceAggregator:
             return NewsType.LEADERSHIP
         elif any(word in title_lower for word in ["acquisition", "acquire", "merger", "bought"]):
             return NewsType.ACQUISITION
-        elif any(word in title_lower for word in ["announce", "announcement", "news"]):
-            return NewsType.ANNOUNCEMENT
+        elif any(word in title_lower for word in ["revenue", "growth", "milestone", "users"]):
+            return NewsType.GROWTH_METRICS
+        elif any(word in title_lower for word in ["legal", "regulatory", "compliance", "lawsuit"]):
+            return NewsType.LEGAL_REGULATORY
+        elif any(
+            word in title_lower for word in ["technical", "outage", "security", "infrastructure"]
+        ):
+            return NewsType.TECHNICAL
         else:
-            return NewsType.OTHER
+            return NewsType.OTHER_NOTABLE
 
     def _get_latest_intel(self, callsign: str) -> tuple[Optional[str], Optional[datetime]]:
         """Get the latest intelligence summary for a company."""

@@ -19,15 +19,17 @@ class MovementType(str, Enum):
 
 
 class NewsType(str, Enum):
-    """Categories of news items."""
+    """Categories of news items for intelligence digest."""
 
-    FUNDRAISING = "fundraising"
-    PARTNERSHIP = "partnership"
-    PRODUCT_LAUNCH = "product_launch"
-    LEADERSHIP = "leadership"
-    ACQUISITION = "acquisition"
-    ANNOUNCEMENT = "announcement"
-    OTHER = "other"
+    FUNDING = "funding"  # 💰 Funding, investment, series rounds
+    PRODUCT_LAUNCH = "product_launch"  # 🚀 New products, features, releases
+    PARTNERSHIPS = "partnerships"  # 🤝 Strategic alliances, integrations, collaborations
+    LEADERSHIP = "leadership"  # 👔 C-suite appointments, key hires, departures
+    GROWTH_METRICS = "growth_metrics"  # 📈 User milestones, revenue, expansion
+    LEGAL_REGULATORY = "legal_regulatory"  # ⚖️ Compliance, lawsuits, regulations
+    TECHNICAL = "technical"  # 🔧 Platform changes, outages, security incidents
+    ACQUISITION = "acquisition"  # 🏢 M&A, buyouts, mergers
+    OTHER_NOTABLE = "other_notable"  # 📰 Significant but uncategorized
 
 
 @dataclass
@@ -39,7 +41,7 @@ class NewsItem:
     source: str
     published_at: str  # ISO date string
     summary: Optional[str] = None
-    news_type: NewsType = NewsType.OTHER
+    news_type: NewsType = NewsType.OTHER_NOTABLE
     relevance_score: float = 0.0
     sentiment: Optional[str] = None  # "positive", "negative", "neutral"
     company_mentions: List[str] = field(default_factory=list)

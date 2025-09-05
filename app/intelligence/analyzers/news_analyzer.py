@@ -77,14 +77,14 @@ class NewsAnalyzer:
         type_counts = Counter(item.news_type for item in news_items)
 
         # Generate themes based on patterns
-        if type_counts[NewsType.FUNDRAISING] > 3:
+        if type_counts[NewsType.FUNDING] > 3:
             themes.append(
-                f"Active funding period - {type_counts[NewsType.FUNDRAISING]} fundraising events"
+                f"Active funding period - {type_counts[NewsType.FUNDING]} fundraising events"
             )
 
-        if type_counts[NewsType.PARTNERSHIP] > 2:
+        if type_counts[NewsType.PARTNERSHIPS] > 2:
             themes.append(
-                f"Partnership expansion - {type_counts[NewsType.PARTNERSHIP]} new partnerships"
+                f"Partnership expansion - {type_counts[NewsType.PARTNERSHIPS]} new partnerships"
             )
 
         if type_counts[NewsType.LEADERSHIP] > 2:
@@ -131,7 +131,7 @@ class NewsAnalyzer:
         notable.extend(high_relevance)
 
         # Funding news (always notable)
-        funding_news = [item for item in news_items if item.news_type == NewsType.FUNDRAISING]
+        funding_news = [item for item in news_items if item.news_type == NewsType.FUNDING]
         notable.extend(funding_news)
 
         # Acquisition news (always notable)
