@@ -93,7 +93,7 @@ def digest(ctx, gmail_query: Optional[str], max_messages: int, skip_validation: 
         _display_workflow_result("Weekly Digest", result)
 
         # Exit with appropriate code
-        sys.exit(0 if result.status.value == "completed" else 1)
+        sys.exit(0 if _get_status_value(result.status) == "completed" else 1)
 
     except ConfigurationError as e:
         console.print(f"[red]Configuration Error:[/red] {e}")
@@ -365,10 +365,18 @@ def test_csv(ctx, csv_path: str, top_movers: int, output: Optional[str]):
         sys.exit(1)
 
 
+def _get_status_value(status) -> str:
+    """Safely extract status value from enum or string."""
+    if hasattr(status, 'value'):
+        return status.value
+    return str(status) if status else "unknown"
+
+
 def _display_workflow_result(workflow_name: str, result) -> None:
     """Display workflow execution results."""
-
-    if result.status.value == "completed":
+    status_value = _get_status_value(result.status)
+    
+    if status_value == "completed":
         console.print(f"[green]✅ {workflow_name} completed successfully[/green]")
     else:
         console.print(f"[red]❌ {workflow_name} failed[/red]")
@@ -378,7 +386,7 @@ def _display_workflow_result(workflow_name: str, result) -> None:
     table.add_column("Metric", style="cyan")
     table.add_column("Value", style="white")
 
-    table.add_row("Status", result.status.value)
+    table.add_row("Status", status_value)
     table.add_row(
         "Duration", f"{result.duration_seconds:.2f}s" if result.duration_seconds else "N/A"
     )
