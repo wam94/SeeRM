@@ -2,7 +2,7 @@ name: Weekly Digest
 
 on:
   schedule:
-    - cron: '0 13 * * MON'   # runs Mondays 13:00 UTC (9:00 ET during DST)
+    - cron: '0 13 * * FRI'   # runs Fridays 13:00 UTC (9:00 ET during DST)
   workflow_dispatch: {}       # enables the "Run workflow" button
 
 jobs:
@@ -32,6 +32,8 @@ jobs:
           DIGEST_CC: ${{ secrets.DIGEST_CC }}
           DIGEST_BCC: ${{ secrets.DIGEST_BCC }}
           GMAIL_QUERY: ${{ vars.GMAIL_QUERY }}
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_COMPANIES_DB_ID: ${{ secrets.NOTION_COMPANIES_DB_ID }}
           ATTACHMENT_REGEX: '.*\.csv$'
           ENVIRONMENT: 'production'
           DEBUG: 'false'
