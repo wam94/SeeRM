@@ -8,10 +8,10 @@ This module provides robust email delivery capabilities with:
 - Comprehensive error handling and logging
 """
 
-import time
+import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 import structlog
 from tenacity import (
@@ -25,24 +25,23 @@ from tenacity import (
 from .gmail_client import EnhancedGmailClient, GmailError
 
 logger = structlog.get_logger(__name__)
+# Standard logger for tenacity compatibility
+retry_logger = logging.getLogger(__name__)
 
 
 class EmailDeliveryError(Exception):
     """Email delivery error."""
 
-    pass
-
 
 class RobustEmailDelivery:
-    """
-    Robust email delivery with multiple retry strategies and fallback options.
-    """
+    """Robust email delivery with multiple retry strategies and fallback options."""
 
     def __init__(
         self,
         gmail_client: Optional[EnhancedGmailClient] = None,
         fallback_directory: Optional[str] = None,
     ):
+        """Initialize robust email delivery system."""
         self.gmail_client = gmail_client
         self.fallback_directory = Path(fallback_directory or "./email_fallbacks")
         self.fallback_directory.mkdir(parents=True, exist_ok=True)
@@ -51,7 +50,7 @@ class RobustEmailDelivery:
         retry=retry_if_exception_type((GmailError, ConnectionError, OSError)),
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=4, max=10),
-        before_sleep=before_sleep_log(logger, "WARNING", exc_info=True),
+        before_sleep=before_sleep_log(retry_logger, logging.WARNING, exc_info=True),
     )
     def _attempt_email_delivery(
         self, to: str, subject: str, html: str, cc: Optional[str] = None, bcc: Optional[str] = None
