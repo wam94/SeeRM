@@ -315,9 +315,9 @@ def reset_breaker(ctx, breaker_name: str):
         success = reset_circuit_breaker(breaker_name)
 
         if success:
-            console.print(f"[green]✅ Circuit breaker '{breaker_name}' reset successfully[/green]")
+            console.print("[green]✅ Circuit breaker '{breaker_name}' reset successfully[/green]")
         else:
-            console.print(f"[red]❌ Circuit breaker '{breaker_name}' not found[/red]")
+            console.print("[red]❌ Circuit breaker '{breaker_name}' not found[/red]")
 
         sys.exit(0 if success else 1)
 

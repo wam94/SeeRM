@@ -373,7 +373,7 @@ class CSVProcessor:
             return {
                 "stats": stats.model_dump(),
                 "top_pct_gainers": [g.model_dump() for g in top_pct_gainers],
-                "top_pct_losers": [l.model_dump() for l in top_pct_losers],
+                "top_pct_losers": [loser.model_dump() for loser in top_pct_losers],
                 "product_starts": product_starts,
                 "product_stops": product_stops,
             }

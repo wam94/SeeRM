@@ -82,7 +82,7 @@ class GitHubArtifactManager:
                 zf.writestr("artifact_metadata.json", json.dumps(metadata, indent=2))
 
                 # Add README for artifact
-                readme_content = f"""# SeeRM Intelligence Reports
+                readme_content = """# SeeRM Intelligence Reports
 
 Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
 
@@ -160,24 +160,26 @@ Each file contains a complete intelligence report that can be viewed in any web 
             successful_deliveries = sum(1 for r in delivery_results if r.get("delivered"))
             failed_deliveries = len(delivery_results) - successful_deliveries
 
-            summary_content += f"## 📈 Delivery Summary\n\n"
+            summary_content += "## 📈 Delivery Summary\n\n"
             summary_content += f"- ✅ Successful deliveries: {successful_deliveries}\n"
             summary_content += f"- ⚠️ Failed deliveries (saved as files): {failed_deliveries}\n\n"
 
             # File details
             if html_files:
-                summary_content += f"## 📁 Generated Reports\n\n"
+                summary_content += "## 📁 Generated Reports\n\n"
                 for html_file in html_files:
                     if html_file.exists():
                         file_size = html_file.stat().st_size
                         size_kb = file_size / 1024
                         summary_content += f"- 📄 **{html_file.name}** ({size_kb:.1f} KB)\n"
 
-                summary_content += f"\n💡 **Download artifacts** from this workflow run to access HTML reports.\n\n"
+                summary_content += (
+                    "\n💡 **Download artifacts** from this workflow run to access HTML reports.\n\n"
+                )
 
             # Delivery details
             if delivery_results:
-                summary_content += f"## 📤 Delivery Details\n\n"
+                summary_content += "## 📤 Delivery Details\n\n"
                 for i, result in enumerate(delivery_results, 1):
                     method = result.get("method", "unknown")
                     status = "✅" if result.get("delivered") else "❌"

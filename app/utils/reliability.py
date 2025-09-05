@@ -69,7 +69,7 @@ class CircuitBreaker:
                     logger.info("Circuit breaker half-open", name=self.name)
                 else:
                     raise CircuitBreakerError(
-                        f"Circuit breaker '{self.name}' is open. "
+                        "Circuit breaker '{self.name}' is open. "
                         f"Next attempt allowed at {self.last_failure_time + self.recovery_timeout}"
                     )
 
@@ -77,7 +77,7 @@ class CircuitBreaker:
             result = func(*args, **kwargs)
             self._on_success()
             return result
-        except self.expected_exception as e:
+        except self.expected_exception as _e:
             self._on_failure()
             raise
 

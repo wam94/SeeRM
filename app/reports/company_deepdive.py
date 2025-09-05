@@ -175,7 +175,7 @@ class CompanyDeepDiveReport:
             f"<p><strong>Callsign:</strong> {company.profile.callsign}</p>",
             f'<p><strong>Generated:</strong> {datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")}</p>',
             "<hr>",
-            f"<h2>Executive Summary</h2>",
+            "<h2>Executive Summary</h2>",
             f"<p>{deepdive.executive_summary}</p>",
             "<h2>Current Metrics</h2>",
         ]
@@ -183,7 +183,7 @@ class CompanyDeepDiveReport:
         if movement:
             html_parts.extend(
                 [
-                    f"<ul>",
+                    "<ul>",
                     f"<li><strong>Current Balance:</strong> ${movement.current_balance:,.2f}</li>",
                     f'<li><strong>Change:</strong> {movement.percentage_change:+.1f}% ({movement.movement_type.value.replace("_", " ").title()})</li>',
                     f'<li><strong>Account Type:</strong> {"New Account" if movement.is_new_account else "Existing Account"}</li>',
@@ -200,7 +200,7 @@ class CompanyDeepDiveReport:
                     f"Source: {news_item.source} | Date: {news_item.published_at}<br>"
                 )
                 if news_item.url:
-                    html_parts.append(f'<a href="{news_item.url}">Read more</a>')
+                    html_parts.append('<a href="{news_item.url}">Read more</a>')
                 html_parts.append("</li>")
             html_parts.append("</ul>")
 
@@ -334,7 +334,7 @@ class CompanyDeepDiveReport:
                 date_string = date_string[:-1] + "+00:00"
             date = datetime.fromisoformat(date_string)
             return (datetime.now() - date).days <= days
-        except:
+        except Exception:
             return False
 
     def _categorize_news_for_summary(self, news_items) -> Dict[str, int]:

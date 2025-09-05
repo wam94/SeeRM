@@ -5,17 +5,15 @@ Provides robust Notion API integration with circuit breakers, retry logic, and v
 """
 
 import datetime
-import json
-import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import httpx
 import structlog
 from httpx import HTTPStatusError, TimeoutException
 
 from app.core.config import NotionConfig
-from app.core.exceptions import NotionError, ValidationError
-from app.core.models import Company, NotionPage, NotionUpdateOperation
+from app.core.exceptions import NotionError
+from app.core.models import Company, NotionPage
 from app.utils.reliability import (
     AdaptiveRateLimiter,
     default_rate_limiter,
@@ -852,7 +850,8 @@ class EnhancedNotionClient:
             )
             return None
 
-    # NOTE: This method is no longer used. We now get intel directly from the Companies database "Latest Intel" field.
+    # NOTE: This method is no longer used. We now get intel directly from the Companies database "Latest
+    # Intel" field.
     # @with_circuit_breaker(
     #     name="notion_intel_query",
     #     failure_threshold=3,

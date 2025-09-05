@@ -241,7 +241,6 @@ class DigestService:
             )
 
         except Exception as e:
-            error_msg = f"Failed to write new callsigns trigger: {e}"
             logger.error("Trigger file write failed", error=str(e), file=trigger_file)
             # Don't raise exception - this is not critical
 

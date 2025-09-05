@@ -6,13 +6,12 @@ for report generation and analysis.
 """
 
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
-import pandas as pd
 import structlog
 
 from app.core.config import Settings
-from app.core.exceptions import ValidationError, WorkflowError
+from app.core.exceptions import WorkflowError
 from app.data.csv_parser import CSVProcessor
 from app.data.gmail_client import EnhancedGmailClient
 from app.data.notion_client import EnhancedNotionClient
@@ -465,7 +464,7 @@ class IntelligenceAggregator:
         latest = news[0]  # Already sorted by date
         try:
             latest_date = datetime.fromisoformat(latest.published_at.replace("Z", "+00:00"))
-        except:
+        except Exception:
             latest_date = None
 
         return latest.summary or latest.title, latest_date

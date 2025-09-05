@@ -223,7 +223,7 @@ class DigestRenderer:
     """
 
     def __init__(self):
-        self.jinja_env = Environment(loader=BaseLoader())
+        self.jinja_env = Environment(loader=BaseLoader(), autoescape=True)
 
         # Load templates
         try:
@@ -259,7 +259,7 @@ class DigestRenderer:
                 "now_time": now.strftime("%H:%M:%S UTC"),
                 "stats": digest_data.stats.model_dump(),
                 "top_pct_gainers": [g.model_dump() for g in digest_data.top_pct_gainers],
-                "top_pct_losers": [l.model_dump() for l in digest_data.top_pct_losers],
+                "top_pct_losers": [loser.model_dump() for loser in digest_data.top_pct_losers],
                 "product_starts": digest_data.product_starts,
                 "product_stops": digest_data.product_stops,
             }

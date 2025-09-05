@@ -7,11 +7,10 @@ automatic invalidation, and performance metrics.
 
 import hashlib
 import json
-import pickle
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from functools import wraps
-from typing import Any, Callable, Dict, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import structlog
 

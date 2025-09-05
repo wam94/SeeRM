@@ -40,11 +40,15 @@ from app.performance_utils import (
 # ---------------- Notion helpers for new company detection ----------------
 
 NOTION_API = "https://api.notion.com/v1"
-NOTION_HEADERS = lambda: {
-    "Authorization": f"Bearer {os.environ['NOTION_API_KEY']}",
-    "Notion-Version": os.getenv("NOTION_VERSION", "2022-06-28"),
-    "Content-Type": "application/json",
-}
+
+
+def get_notion_headers():
+    """Get Notion API headers with current environment configuration."""
+    return {
+        "Authorization": f"Bearer {os.environ['NOTION_API_KEY']}",
+        "Notion-Version": os.getenv("NOTION_VERSION", "2022-06-28"),
+        "Content-Type": "application/json",
+    }
 
 
 def _dash32(x: str) -> str:
@@ -53,7 +57,9 @@ def _dash32(x: str) -> str:
 
 def _companies_title_prop(companies_db_id: str) -> str:
     r = requests.get(
-        f"{NOTION_API}/databases/{_dash32(companies_db_id)}", headers=NOTION_HEADERS(), timeout=30
+        f"{NOTION_API}/databases/{_dash32(companies_db_id)}",
+        headers=get_notion_headers(),
+        timeout=30,
     )
     r.raise_for_status()
     props = r.json().get("properties", {})
@@ -67,7 +73,7 @@ def _find_company_page(companies_db_id: str, title_prop: str, callsign: str) -> 
     q = {"filter": {"property": title_prop, "title": {"equals": callsign}}}
     r = requests.post(
         f"{NOTION_API}/databases/{_dash32(companies_db_id)}/query",
-        headers=NOTION_HEADERS(),
+        headers=get_notion_headers(),
         json=q,
         timeout=30,
     )
@@ -81,7 +87,7 @@ def _set_needs_dossier(page_id: str, needs: bool = True):
     props = {"Needs Dossier": {"checkbox": needs}}
     r = requests.patch(
         f"{NOTION_API}/pages/{page_id}",
-        headers=NOTION_HEADERS(),
+        headers=get_notion_headers(),
         json={"properties": props},
         timeout=30,
     )
@@ -108,7 +114,7 @@ def ensure_company_page(
     schema = (
         requests.get(
             f"{NOTION_API}/databases/{_dash32(companies_db_id)}",
-            headers=NOTION_HEADERS(),
+            headers=get_notion_headers(),
             timeout=30,
         )
         .json()
@@ -128,14 +134,14 @@ def ensure_company_page(
     if pid:
         requests.patch(
             f"{NOTION_API}/pages/{pid}",
-            headers=NOTION_HEADERS(),
+            headers=get_notion_headers(),
             json={"properties": props},
             timeout=30,
         ).raise_for_status()
     else:
         r = requests.post(
             f"{NOTION_API}/pages",
-            headers=NOTION_HEADERS(),
+            headers=get_notion_headers(),
             json={"parent": {"database_id": _dash32(companies_db_id)}, "properties": props},
             timeout=30,
         )
@@ -154,7 +160,7 @@ def fetch_csv_by_subject(service, user: str, subject: str) -> Optional[pd.DataFr
     if not subject:
         return None
     msgs = search_messages(
-        service, user, f'subject:"{subject}" has:attachment filename:csv', max_results=5
+        service, user, 'subject:"{subject}" has:attachment filename:csv', max_results=5
     )
     for m in msgs:
         msg = get_message(service, user, m["id"])
@@ -201,13 +207,13 @@ def build_queries(
             Q.append(f"site:{d} (launch OR announce OR funding OR partnership)")
     if names:
         for n in set(names):
-            Q.append(f'"{n}" (launch OR product OR partnership OR funding OR raises)')
+            Q.append('"{n}" (launch OR product OR partnership OR funding OR raises)')
     if owners:
         for p in owners[:3]:
             p = p.strip()
             if p:
                 Q.append(
-                    f'"{p}" ("{names[0]}" OR site:{domains[0] if domains else ""}) (CEO OR founder OR CTO OR CFO OR raises OR interview)'
+                    '"{p}" ("{names[0]}" OR site:{domains[0] if domains else ""}) (CEO OR founder OR CTO OR CFO OR raises OR interview)'
                 )
     return [q for q in Q if q.strip()]
 
@@ -701,14 +707,14 @@ def main():
         if notion_domains.get("domain"):
             if enhanced_org.get("domain_root") != notion_domains["domain"]:
                 domain_sources.append(
-                    f"domain: CSV '{enhanced_org.get('domain_root')}' → Notion '{notion_domains['domain']}'"
+                    "domain: CSV '{enhanced_org.get('domain_root')}' → Notion '{notion_domains['domain']}'"
                 )
             enhanced_org["domain_root"] = notion_domains["domain"]
 
         if notion_domains.get("website"):
             if enhanced_org.get("website") != notion_domains["website"]:
                 domain_sources.append(
-                    f"website: CSV '{enhanced_org.get('website')}' → Notion '{notion_domains['website']}'"
+                    "website: CSV '{enhanced_org.get('website')}' → Notion '{notion_domains['website']}'"
                 )
             enhanced_org["website"] = notion_domains["website"]
 

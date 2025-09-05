@@ -194,7 +194,7 @@ class RobustEmailDelivery:
         file_path = self.fallback_directory / filename
 
         # Create comprehensive HTML document
-        full_html = f"""<!DOCTYPE html>
+        full_html = """<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">

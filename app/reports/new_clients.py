@@ -5,7 +5,7 @@ Creates weekly summaries of new client accounts with intelligence
 and onboarding recommendations.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import structlog
@@ -92,7 +92,7 @@ class NewClientReport:
                 report_type="new_clients_weekly",
                 generated_at=start_time,
                 data_sources=["csv", "notion"],
-                parameters={"week_of": week_of, "client_count": len(client_summaries)},
+                parameters={"week_o": week_of, "client_count": len(client_summaries)},
                 duration_seconds=(datetime.utcnow() - start_time).total_seconds(),
             )
 
@@ -261,7 +261,7 @@ class NewClientReport:
             f'<p><strong>Generated:</strong> {datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")}</p>',
             "<hr>",
             "<h2>Executive Summary</h2>",
-            f"<ul>",
+            "<ul>",
             f"<li><strong>New Clients:</strong> {len(summaries)}</li>",
             f"<li><strong>Total Initial Value:</strong> ${total_value:,.2f}</li>",
             f"<li><strong>Average Value:</strong> ${total_value/len(summaries):,.2f}</li>",
@@ -273,7 +273,7 @@ class NewClientReport:
             html_parts.extend(
                 [
                     f"<h3>{summary.company_name} ({summary.callsign})</h3>",
-                    f"<ul>",
+                    "<ul>",
                     f"<li><strong>Initial Balance:</strong> ${summary.initial_balance:,.2f}</li>",
                     f'<li><strong>Products:</strong> {", ".join(summary.products) if summary.products else "None specified"}</li>',
                     f"<li><strong>Recent News:</strong> {len(summary.recent_news)} items</li>",
@@ -372,7 +372,7 @@ class NewClientReport:
                 "Total Value": total_value,
                 "Average Value": total_value / len(summaries) if summaries else 0,
                 "Duration": f"{report.metadata.duration_seconds:.1f}s",
-                "Week Of": report.metadata.parameters.get("week_of", ""),
+                "Week O": report.metadata.parameters.get("week_o", ""),
                 "Callsigns": [s.callsign for s in summaries],  # Multi-select if supported
             }
 

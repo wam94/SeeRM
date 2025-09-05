@@ -3,8 +3,8 @@ News analysis functionality for intelligence reports.
 """
 
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Dict, List
 
 import structlog
 

@@ -292,6 +292,6 @@ def prewarm_api_connections():
         logger.info("All API connections pre-warmed successfully")
     else:
         failed = [url for url, success in results.items() if not success]
-        logger.warning(f"Some connections failed to pre-warm", failed_urls=failed)
+        logger.warning("Some connections failed to pre-warm", failed_urls=failed)
 
     return results

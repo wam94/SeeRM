@@ -36,7 +36,10 @@ def _pct(series: Optional[pd.Series]) -> Optional[pd.Series]:
 def parse_csv_to_context(df: pd.DataFrame, top_n: int = 15) -> Dict[str, Any]:
     # Normalize column names (case/space-insensitive)
     cols = {c.lower().strip(): c for c in df.columns}
-    get = lambda k: df[cols[k]] if k in cols else None
+
+    def get(k):
+        """Get column data if the key exists, otherwise return None."""
+        return df[cols[k]] if k in cols else None
 
     # --- base columns ---
     callsign = get("callsign")

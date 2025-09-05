@@ -72,7 +72,7 @@ class ParallelProcessor:
                 errors.append((callsign, str(e)))
 
         logger.info(
-            f"Profile fetch completed",
+            "Profile fetch completed",
             success=len(results),
             failed=len(errors),
             total=len(callsigns),
@@ -119,7 +119,7 @@ class ParallelProcessor:
             if batch_result:
                 all_results.extend(batch_result)
 
-        logger.info(f"News classification completed", total_items=len(all_results))
+        logger.info("News classification completed", total_items=len(all_results))
         return all_results
 
     def parallel_fetch_news(
@@ -158,7 +158,7 @@ class ParallelProcessor:
 
         total_news = sum(len(items) for items in news_by_company.values())
         logger.info(
-            f"News fetch completed",
+            "News fetch completed",
             companies_with_news=len(news_by_company),
             total_news_items=total_news,
         )
@@ -202,7 +202,7 @@ class ParallelProcessor:
         # Filter out None values
         results = [r for r in ordered_results if r is not None]
 
-        logger.info(f"Notion queries completed", successful=len(results))
+        logger.info("Notion queries completed", successful=len(results))
         return results
 
     async def async_batch_process(

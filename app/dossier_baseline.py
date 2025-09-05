@@ -36,9 +36,7 @@ from app.notion_client import (
 from app.performance_utils import (
     DEFAULT_RATE_LIMITER,
     PERFORMANCE_MONITOR,
-    ConcurrentAPIClient,
     ParallelProcessor,
-    has_valid_domain,
     should_skip_processing,
 )
 
@@ -360,9 +358,9 @@ def collect_people_background(
         return results
     for person in owners:
         qs = [
-            f'"{person}" "{org.get("dba") or org.get("domain_root") or ""}" (founder OR cofounder OR CFO OR COO OR CTO OR CEO OR head)',
-            f'"{person}" (LinkedIn OR Crunchbase OR AngelList OR PitchBook)',
-            f'"{person}" (previous OR formerly OR ex-)',
+            '"{person}" "{org.get("dba") or org.get("domain_root") or ""}" (founder OR cofounder OR CFO OR COO OR CTO OR CEO OR head)',
+            '"{person}" (LinkedIn OR Crunchbase OR AngelList OR PitchBook)',
+            '"{person}" (previous OR formerly OR ex-)',
         ]
         items: List[Dict[str, Any]] = []
         for q in qs:

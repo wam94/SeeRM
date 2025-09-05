@@ -86,7 +86,7 @@ def send_test(to: str, subject: str, force_failure: bool, fallback_dir: str):
         # Force failure for testing if requested
         if force_failure and gmail_client:
             # Temporarily break the Gmail client to test fallback
-            original_method = gmail_client.send_html_email
+            _original_method = gmail_client.send_html_email
             gmail_client.send_html_email = lambda *args, **kwargs: (_ for _ in ()).throw(
                 GmailError(
                     "Forced test failure: EOF occurred in violation of protocol (_ssl.c:2437)"

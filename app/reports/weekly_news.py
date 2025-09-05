@@ -189,8 +189,8 @@ class WeeklyNewsReport:
             for item in digest.notable_items[:10]:  # Top 10
                 html_parts.extend(
                     [
-                        f'<div style="margin-bottom: 15px; padding: 10px; border-left: 3px solid #007acc;">',
-                        f'<h4><a href="{item.url}">{item.title}</a></h4>',
+                        '<div style="margin-bottom: 15px; padding: 10px; border-left: 3px solid #007acc;">',
+                        '<h4><a href="{item.url}">{item.title}</a></h4>',
                         f"<p><strong>Source:</strong> {item.source} | ",
                         f'<strong>Type:</strong> {item.news_type.value.replace("_", " ").title()} | ',
                         f'<strong>Companies:</strong> {", ".join(item.company_mentions)}</p>',
@@ -215,7 +215,7 @@ class WeeklyNewsReport:
             # Sort by relevance and show top items
             sorted_items = sorted(items, key=lambda x: x.relevance_score, reverse=True)
             for item in sorted_items[:5]:  # Top 5 per category
-                html_parts.append(f'<li><a href="{item.url}">{item.title}</a>')
+                html_parts.append('<li><a href="{item.url}">{item.title}</a>')
                 html_parts.append(
                     f'<br><small>{item.source} - {", ".join(item.company_mentions)}</small></li>'
                 )
@@ -382,7 +382,7 @@ class WeeklyNewsReport:
         category_info = classifier.get_category_display_info()
 
         parts = [
-            f"<h2>📊 Portfolio Intelligence Digest</h2>",
+            "<h2>📊 Portfolio Intelligence Digest</h2>",
             f"<p><strong>Week of {digest.week_of}</strong> • {digest.total_items} intel items analyzed</p>",
             "<hr>",
         ]
@@ -439,7 +439,7 @@ class WeeklyNewsReport:
         parts.extend(
             [
                 "<hr>",
-                f"<p><strong>📈 Activity Summary</strong><br>",
+                "<p><strong>📈 Activity Summary</strong><br>",
                 f"• {len(active_categories)} categories with activity<br>",
                 f"• {len(set().union(*companies_by_category.values()))} companies with news<br>",
                 f"• {digest.total_items} total intelligence items</p>",

@@ -3,11 +3,11 @@ Company analysis functionality for deep dive reports.
 """
 
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 import structlog
 
-from ..models import CompanyIntelligence, Movement, NewsItem
+from ..models import CompanyIntelligence
 
 logger = structlog.get_logger(__name__)
 
@@ -118,5 +118,5 @@ class CompanyAnalyzer:
             date = datetime.fromisoformat(date_string)
             cutoff = datetime.now() - timedelta(days=days)
             return date > cutoff
-        except:
+        except Exception:
             return False

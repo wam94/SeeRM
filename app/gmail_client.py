@@ -1,6 +1,6 @@
 import base64
 import re
-from typing import List, Optional, Tuple
+from typing import Optional
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build

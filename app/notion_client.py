@@ -658,7 +658,7 @@ def _append_sources_summary(page_id: str, date_iso: str, source_metadata: Dict[s
                         "rich_text": [
                             {
                                 "type": "text",
-                                "text": {"content": f'"{query}"', "link": {"url": search_url}},
+                                "text": {"content": '"{query}"', "link": {"url": search_url}},
                             }
                         ]
                     },
