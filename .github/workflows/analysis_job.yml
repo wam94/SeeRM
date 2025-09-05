@@ -1,4 +1,4 @@
-name: News Intelligence (Refactored)
+name: Analysis Job
 
 on:
   workflow_dispatch:
@@ -24,16 +24,16 @@ on:
         default: "5"
         type: string
   schedule:
-    - cron: "15 13 * * MON"  # Run 15 minutes after main workflow
+    - cron: "30 13 * * MON"  # Run 30 minutes after main workflow (15 min after news collection)
   workflow_run:
-    workflows: ["Weekly Digest"]
+    workflows: ["External Intel (News)"]
     types: [completed]
 
 permissions:
   contents: read
 
 jobs:
-  news:
+  analysis:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -48,7 +48,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run news intelligence workflow
+      - name: Run analysis workflow
         env:
           # Gmail API
           GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
@@ -76,7 +76,7 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
 
         run: |
-          # Run the news intelligence analysis
+          # Run the analysis workflow
           python -m app.main news \
             ${{ inputs.callsigns && format('--callsigns="{0}"', inputs.callsigns) || '' }} \
             --lookback-days='${{ inputs.lookback_days }}' \
