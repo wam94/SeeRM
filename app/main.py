@@ -8,7 +8,6 @@ import sys
 from typing import Optional
 
 import click
-from rich import print as rprint
 from rich.console import Console
 from rich.table import Table
 
@@ -28,8 +27,7 @@ console = Console()
 @click.option("--correlation-id", help="Set correlation ID for request tracing")
 @click.pass_context
 def main(ctx, debug: bool, dry_run: bool, correlation_id: Optional[str]):
-    """
-    SeeRM - Automated client intelligence and digest system.
+    """Automated client intelligence and digest system.
 
     Generates weekly client digests, intelligence reports, and baseline dossiers
     from Metabase data and external sources.
@@ -89,7 +87,6 @@ def news(ctx, callsigns: Optional[str], lookback_days: int, no_email: bool):
 @click.pass_context
 def digest(ctx, gmail_query: Optional[str], max_messages: int, skip_validation: bool):
     """Generate and send weekly client digest."""
-
     try:
         if not skip_validation:
             # Validate configuration
@@ -105,7 +102,7 @@ def digest(ctx, gmail_query: Optional[str], max_messages: int, skip_validation: 
         if ctx.obj["dry_run"]:
             settings.dry_run = True
 
-        console.print(f"[blue]Starting weekly digest workflow[/blue]")
+        console.print("[blue]Starting weekly digest workflow[/blue]")
         if settings.dry_run:
             console.print("[yellow]🔸 DRY RUN MODE - No actual changes will be made[/yellow]")
 
@@ -144,7 +141,6 @@ def digest(ctx, gmail_query: Optional[str], max_messages: int, skip_validation: 
 @click.pass_context
 def digest_dry_run(ctx, gmail_query: Optional[str], max_messages: int):
     """Perform dry run of weekly digest workflow."""
-
     try:
         console.print("[blue]Starting weekly digest dry run[/blue]")
 
@@ -199,7 +195,6 @@ def digest_dry_run(ctx, gmail_query: Optional[str], max_messages: int):
 @click.pass_context
 def config(ctx):
     """Display current configuration."""
-
     try:
         console.print("[blue]SeeRM Configuration[/blue]")
 
@@ -228,7 +223,6 @@ def config(ctx):
 @click.pass_context
 def health(ctx):
     """Check system health and connectivity."""
-
     try:
         from app.workflows.weekly_digest import WeeklyDigestWorkflow
 
@@ -315,7 +309,6 @@ def health(ctx):
 @click.pass_context
 def reset_breaker(ctx, breaker_name: str):
     """Reset a circuit breaker by name."""
-
     try:
         success = reset_circuit_breaker(breaker_name)
 
@@ -338,7 +331,6 @@ def reset_breaker(ctx, breaker_name: str):
 @click.pass_context
 def test_csv(ctx, csv_path: str, top_movers: int, output: Optional[str]):
     """Test CSV parsing with provided file."""
-
     try:
         from app.core.models import DigestData
         from app.data.csv_parser import parse_csv_file
@@ -349,7 +341,7 @@ def test_csv(ctx, csv_path: str, top_movers: int, output: Optional[str]):
         # Parse CSV
         companies, digest_dict = parse_csv_file(csv_path, strict_validation=False)
 
-        console.print(f"[green]✅ CSV parsed successfully[/green]")
+        console.print("[green]✅ CSV parsed successfully[/green]")
         console.print(f"Companies found: {len(companies)}")
         console.print(
             f"Changed accounts: {digest_dict.get('stats', {}).get('changed_accounts', 0)}"
