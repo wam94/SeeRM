@@ -885,7 +885,7 @@ class EnhancedNotionClient:
                                         "title": title,
                                         "url": "",  # You may need to extract this from the content
                                         "source": "Notion Intel Archive",
-                                        "published_at": start_date.isoformat(),  # Use actual date if available
+                                        "published_at": start_date.isoformat(),  # Use actual date
                                         "summary": title,  # Use title as summary for now
                                         "relevance_score": 0.8,
                                         "sentiment": "neutral",
