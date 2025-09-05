@@ -45,7 +45,7 @@ class RobustEmailDelivery:
     ):
         self.gmail_client = gmail_client
         self.fallback_directory = Path(fallback_directory or "./email_fallbacks")
-        self.fallback_directory.mkdir(exist_ok=True)
+        self.fallback_directory.mkdir(parents=True, exist_ok=True)
 
     @retry(
         retry=retry_if_exception_type((GmailError, ConnectionError, OSError)),
