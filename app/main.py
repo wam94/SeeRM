@@ -367,7 +367,7 @@ def test_csv(ctx, csv_path: str, top_movers: int, output: Optional[str]):
 
 def _get_status_value(status) -> str:
     """Safely extract status value from enum or string."""
-    if hasattr(status, 'value'):
+    if hasattr(status, "value"):
         return status.value
     return str(status) if status else "unknown"
 
@@ -375,7 +375,7 @@ def _get_status_value(status) -> str:
 def _display_workflow_result(workflow_name: str, result) -> None:
     """Display workflow execution results."""
     status_value = _get_status_value(result.status)
-    
+
     if status_value == "completed":
         console.print(f"[green]✅ {workflow_name} completed successfully[/green]")
     else:

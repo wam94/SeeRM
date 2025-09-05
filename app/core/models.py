@@ -95,7 +95,7 @@ class Company(BaseEntity):
     prev_balance: Optional[float] = Field(None)
     balance_delta: Optional[float] = Field(None)
     balance_pct_delta_pct: Optional[float] = Field(None)
-    
+
     # Product changes
     product_flips_json: Optional[str] = Field(None)
 
