@@ -391,17 +391,7 @@ def page_has_dossier(page_id: str) -> bool:
 
 def _intel_schema_hints(intel_db_id: str) -> Dict[str, Optional[str]]:
     s = get_db_schema(intel_db_id)
-    
-    # Debug schema detection
-    print(f"[DEBUG SCHEMA] Intel DB schema properties:")
-    for prop_name, prop_def in s.get("properties", {}).items():
-        prop_type = prop_def.get("type")
-        print(f"[DEBUG SCHEMA]   {prop_name}: {prop_type}")
-        if prop_type == "relation":
-            rel_db = prop_def.get("relation", {}).get("database_id")
-            print(f"[DEBUG SCHEMA]     -> Points to DB: {rel_db}")
-    
-    hints = {
+    return {
         "title": get_title_prop_name(s),  # This should be "Company" (title column)
         "callsign_rel": _first_prop_of_type(
             s, "relation", preferred="Callsign"
@@ -420,9 +410,6 @@ def _intel_schema_hints(intel_db_id: str) -> Dict[str, Optional[str]]:
             else _first_prop_of_type(s, "date")
         ),
     }
-    
-    print(f"[DEBUG SCHEMA] Detected hints: {hints}")
-    return hints
 
 
 def ensure_intel_page(
@@ -471,43 +458,16 @@ def ensure_intel_page(
     # 3) Create new Intel page
     props: Dict[str, Any] = {}
     
-    print(f"[DEBUG INTEL] Creating Intel page for callsign: {callsign}")
-    print(f"[DEBUG INTEL] Schema hints: title_prop='{title_prop}', callsign_rel='{callsign_rel}'")
-    print(f"[DEBUG INTEL] company_name='{company_name}', company_page_id='{company_page_id}'")
-    
     if title_prop:
         props[title_prop] = _title(company_name)
-        print(f"[DEBUG INTEL] Added title property: {title_prop} = '{company_name}'")
-    else:
-        print(f"[DEBUG INTEL] WARNING: No title property found!")
         
     if callsign_rel and company_page_id:
         props[callsign_rel] = {"relation": [{"id": company_page_id}]}
-        print(f"[DEBUG INTEL] Added relation property: {callsign_rel} -> {company_page_id}")
-    else:
-        print(f"[DEBUG INTEL] WARNING: Missing relation data - callsign_rel='{callsign_rel}', company_page_id='{company_page_id}'")
     
-    print(f"[DEBUG INTEL] Final properties being sent: {props}")
-    print(f"[DEBUG INTEL] Target database: {intel_db_id}")
-    
-    try:
-        res = notion_post(
-            "/pages", {"parent": {"database_id": intel_db_id}, "properties": props}
-        )
-        print(f"[DEBUG INTEL] Notion API response status: {res.status_code}")
-        
-        if res.status_code != 200:
-            print(f"[DEBUG INTEL] ERROR Response body: {res.text}")
-            raise Exception(f"Failed to create Intel page: {res.status_code} - {res.text}")
-        
-        result = res.json()
-        page_id = result["id"]
-        print(f"[DEBUG INTEL] SUCCESS: Created Intel page {page_id}")
-        return page_id
-        
-    except Exception as e:
-        print(f"[DEBUG INTEL] Exception creating Intel page: {e}")
-        raise
+    res = notion_post(
+        "/pages", {"parent": {"database_id": intel_db_id}, "properties": props}
+    )
+    return res.json()["id"]
 
 
 def _get_page_properties(page_id: str) -> Dict[str, Any]:
@@ -572,60 +532,23 @@ def _append_timeline_group(
         }
     ] + bullets
 
-    # First check if we can access the page
-    try:
-        page_check = notion_get(f"/pages/{page_id}")
-        if page_check.status_code != 200:
-            print(f"[WARN] Cannot access page {page_id}: {page_check.status_code}")
-            raise Exception(f"Cannot access page: {page_check.status_code}")
-    except Exception as e:
-        print(f"[WARN] Failed to verify page access for {page_id}: {e}")
-        raise
-    
-    # Try to append blocks
-    try:
-        print(f"[DEBUG BLOCKS] Attempting to append toggle to page {page_id}")
-        print(f"[DEBUG BLOCKS] Toggle title: {toggle_title}")
-        print(f"[DEBUG BLOCKS] Number of items: {len(items or [])}")
-        
-        # According to Notion API docs, use POST to append blocks, not PATCH
-        r = notion_post(
-            f"/blocks/{page_id}/children",
-            {
-                "children": [
-                    {
-                        "object": "block",
-                        "type": "toggle",
-                        "toggle": {
-                            "rich_text": [{"type": "text", "text": {"content": toggle_title}}],
-                            "children": children,
-                        },
-                    }
-                ]
-            },
-        )
-        
-        print(f"[DEBUG BLOCKS] Response status: {r.status_code}")
-        
-        if r.status_code == 401:
-            print(f"[ERROR] Unauthorized to append blocks to {page_id}")
-            print(f"[ERROR] Response: {r.text}")
-            # Try to get more info about the page
-            page_info = notion_get(f"/pages/{page_id}").json()
-            parent = page_info.get("parent", {})
-            print(f"[ERROR] Page parent type: {parent.get('type')}, parent ID: {parent.get('database_id') or parent.get('page_id')}")
-            raise Exception(f"Unauthorized to modify page {page_id} - API integration may need edit permissions")
-        elif r.status_code == 400:
-            print(f"[ERROR] Bad request appending blocks to {page_id}")
-            print(f"[ERROR] Response: {r.text}")
-            raise Exception(f"Bad request: {r.text}")
-        
-        r.raise_for_status()
-        print(f"[DEBUG BLOCKS] Successfully appended toggle to page {page_id}")
-        
-    except Exception as e:
-        print(f"[ERROR] Failed to append timeline group: {e}")
-        raise
+    # Append blocks using POST (not PATCH) as per Notion API
+    r = notion_post(
+        f"/blocks/{page_id}/children",
+        {
+            "children": [
+                {
+                    "object": "block",
+                    "type": "toggle",
+                    "toggle": {
+                        "rich_text": [{"type": "text", "text": {"content": toggle_title}}],
+                        "children": children,
+                    },
+                }
+            ]
+        },
+    )
+    r.raise_for_status()
 
 
 def _estimate_block_text_bytes(block: Dict[str, Any]) -> int:
