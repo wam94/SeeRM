@@ -141,6 +141,24 @@ jobs:
           INPUT_CALLSIGNS: ${{ inputs.callsigns }}
           BATCH_SIZE: ${{ inputs.batch_size }}
         run: |
+          # Debug: Test query generation first
+          echo "🔍 Testing Gmail query generation..."
+          python - <<'PY'
+          import os
+          subject = os.environ.get("PROFILE_SUBJECT") or "Org Profile — Will Mitchell"
+          print(f"Subject from env: '{subject}'")
+
+          # Show old vs new query format
+          broken_query = 'subject:"{subject}" has:attachment filename:csv'
+          fixed_query = f'subject:"{subject}" has:attachment filename:csv'
+
+          print(f"❌ OLD query would be: {broken_query}")
+          print(f"✅ NEW query should be: {fixed_query}")
+          print(f"🔧 F-string fix working: {broken_query != fixed_query}")
+          PY
+
+          echo ""
+          echo "📥 Now testing actual CSV fetch..."
           python - <<'PY'
           import os, io, json, pandas as pd
           from app.gmail_client import build_service, search_messages, get_message, extract_csv_attachments
@@ -152,8 +170,20 @@ jobs:
               refresh_token=os.environ["GMAIL_REFRESH_TOKEN"],
           )
           user = os.environ.get("GMAIL_USER")
+          subject = os.environ.get("PROFILE_SUBJECT") or "Org Profile — Will Mitchell"
+
+          print(f"🔍 About to search for emails with subject containing: '{subject}'")
+          print(f"📧 Gmail user: {user}")
+
           # load roster csv by subject (same one news_job uses)
-          df = fetch_csv_by_subject(svc, user, os.environ.get("PROFILE_SUBJECT") or "Org Profile — Will Mitchell")
+          df = fetch_csv_by_subject(svc, user, subject)
+
+          print(f"📊 CSV fetch result: {df is not None}")
+          if df is not None:
+              print(f"📈 CSV shape: {df.shape}")
+              print(f"📋 CSV columns: {list(df.columns)}")
+          else:
+              print("❌ No CSV data returned - this explains why we get 0 organizations!")
 
           calls = []
           if df is not None and "callsign" in [c.lower() for c in df.columns]:
