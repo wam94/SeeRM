@@ -639,7 +639,23 @@ def process_company_notion(
                 for it in intel_items
             ]
         )
-        summary = _openai_summarize(text_blob) or f"{len(intel_items)} new items."
+        ai_summary = _openai_summarize(text_blob) or f"{len(intel_items)} new items."
+
+        # Append source links to the summary
+        if intel_items:
+            source_links = []
+            for item in intel_items:
+                title = (item.get("title") or "").strip()[:100]  # Truncate long titles
+                url = (item.get("url") or "").strip()
+                if title and url:
+                    source_links.append(f"• [{title}]({url})")
+
+            if source_links:
+                summary = ai_summary + "\n\nSources:\n" + "\n".join(source_links)
+            else:
+                summary = ai_summary
+        else:
+            summary = ai_summary
 
         # Set Latest Intel + update Intel archive with new system
         today_iso = datetime.utcnow().date().isoformat()
