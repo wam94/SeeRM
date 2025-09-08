@@ -391,7 +391,17 @@ def page_has_dossier(page_id: str) -> bool:
 
 def _intel_schema_hints(intel_db_id: str) -> Dict[str, Optional[str]]:
     s = get_db_schema(intel_db_id)
-    return {
+    
+    # Debug schema detection
+    print(f"[DEBUG SCHEMA] Intel DB schema properties:")
+    for prop_name, prop_def in s.get("properties", {}).items():
+        prop_type = prop_def.get("type")
+        print(f"[DEBUG SCHEMA]   {prop_name}: {prop_type}")
+        if prop_type == "relation":
+            rel_db = prop_def.get("relation", {}).get("database_id")
+            print(f"[DEBUG SCHEMA]     -> Points to DB: {rel_db}")
+    
+    hints = {
         "title": get_title_prop_name(s),  # This should be "Company" (title column)
         "callsign_rel": _first_prop_of_type(
             s, "relation", preferred="Callsign"
@@ -410,6 +420,9 @@ def _intel_schema_hints(intel_db_id: str) -> Dict[str, Optional[str]]:
             else _first_prop_of_type(s, "date")
         ),
     }
+    
+    print(f"[DEBUG SCHEMA] Detected hints: {hints}")
+    return hints
 
 
 def ensure_intel_page(
@@ -457,15 +470,44 @@ def ensure_intel_page(
 
     # 3) Create new Intel page
     props: Dict[str, Any] = {}
+    
+    print(f"[DEBUG INTEL] Creating Intel page for callsign: {callsign}")
+    print(f"[DEBUG INTEL] Schema hints: title_prop='{title_prop}', callsign_rel='{callsign_rel}'")
+    print(f"[DEBUG INTEL] company_name='{company_name}', company_page_id='{company_page_id}'")
+    
     if title_prop:
         props[title_prop] = _title(company_name)
+        print(f"[DEBUG INTEL] Added title property: {title_prop} = '{company_name}'")
+    else:
+        print(f"[DEBUG INTEL] WARNING: No title property found!")
+        
     if callsign_rel and company_page_id:
         props[callsign_rel] = {"relation": [{"id": company_page_id}]}
-
-    res = notion_post(
-        "/pages", {"parent": {"database_id": intel_db_id}, "properties": props}
-    ).json()
-    return res["id"]
+        print(f"[DEBUG INTEL] Added relation property: {callsign_rel} -> {company_page_id}")
+    else:
+        print(f"[DEBUG INTEL] WARNING: Missing relation data - callsign_rel='{callsign_rel}', company_page_id='{company_page_id}'")
+    
+    print(f"[DEBUG INTEL] Final properties being sent: {props}")
+    print(f"[DEBUG INTEL] Target database: {intel_db_id}")
+    
+    try:
+        res = notion_post(
+            "/pages", {"parent": {"database_id": intel_db_id}, "properties": props}
+        )
+        print(f"[DEBUG INTEL] Notion API response status: {res.status_code}")
+        
+        if res.status_code != 200:
+            print(f"[DEBUG INTEL] ERROR Response body: {res.text}")
+            raise Exception(f"Failed to create Intel page: {res.status_code} - {res.text}")
+        
+        result = res.json()
+        page_id = result["id"]
+        print(f"[DEBUG INTEL] SUCCESS: Created Intel page {page_id}")
+        return page_id
+        
+    except Exception as e:
+        print(f"[DEBUG INTEL] Exception creating Intel page: {e}")
+        raise
 
 
 def _get_page_properties(page_id: str) -> Dict[str, Any]:
