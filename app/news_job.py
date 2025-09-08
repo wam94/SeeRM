@@ -208,13 +208,13 @@ def build_queries(
             Q.append(f"site:{d} (launch OR announce OR funding OR partnership)")
     if names:
         for n in set(names):
-            Q.append('"{n}" (launch OR product OR partnership OR funding OR raises)')
+            Q.append(f'"{n}" (launch OR product OR partnership OR funding OR raises)')
     if owners:
         for p in owners[:3]:
             p = p.strip()
             if p:
                 Q.append(
-                    '"{p}" ("{names[0]}" OR site:{domains[0] if domains else ""}) (CEO OR founder OR CTO OR CFO OR raises OR interview)'
+                    f'"{p}" ("{names[0]}" OR site:{domains[0] if domains else ""}) (CEO OR founder OR CTO OR CFO OR raises OR interview)'
                 )
     return [q for q in Q if q.strip()]
 
