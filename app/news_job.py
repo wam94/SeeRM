@@ -533,6 +533,105 @@ def build_email_digest(intel: Dict[str, List[Dict[str, Any]]]) -> str:
     return "\n".join(parts)
 
 
+# ---------------- Notion processing ----------------
+
+
+def process_company_notion(
+    cs: str,
+    org: Dict[str, Any],
+    intel_by_cs: Dict[str, List[Dict[str, Any]]],
+    source_metadata_by_cs: Dict[str, Dict[str, List[str]]],
+    companies_db: str,
+    intel_db: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Process Notion updates for a single company.
+
+    Args:
+        cs: Company callsign
+        org: Company organization data dictionary
+        intel_by_cs: Intelligence items by callsign
+        source_metadata_by_cs: Source metadata by callsign
+        companies_db: Companies database ID
+        intel_db: Intel database ID
+
+    Returns:
+        Processing result dictionary or None
+    """
+    # Skip if no new intelligence data
+    intel_items = intel_by_cs.get(cs, [])
+    if not intel_items:
+        return None
+
+    try:
+        # Ensure org is a dict (safety check)
+        if not isinstance(org, dict):
+            print(f"[ERROR] Expected dict for org data, got {type(org)}: {org}")
+            return {"status": "error", "error": f"Invalid org data type: {type(org)}"}
+
+        # Upsert company page first (without domain/website to avoid overwriting baseline job data)
+        page_id = upsert_company_page(
+            companies_db,
+            {
+                "callsign": org.get("callsign") or cs,  # Use cs as fallback
+                "company": (
+                    str(org.get("dba") or "").strip() if org.get("dba") is not None else ""
+                ),
+                "owners": org.get("owners") or [],
+                "needs_dossier": False,
+            },
+        )
+
+        # LLM summary (optional)
+        text_blob = "\n".join(
+            [
+                f"{it.get('published_at','')} — {it.get('title','')} — {it.get('source','')} {it.get('url','')}"
+                for it in intel_items
+            ]
+        )
+        summary = _openai_summarize(text_blob) or f"{len(intel_items)} new items."
+
+        # Set Latest Intel + update Intel archive with new system
+        today_iso = datetime.utcnow().date().isoformat()
+
+        # Keep slim "Latest Intel" on Companies DB
+        try:
+            DEFAULT_RATE_LIMITER.wait_if_needed()
+            set_latest_intel(
+                page_id,
+                summary_text=summary,
+                date_iso=today_iso,
+                companies_db_id=companies_db,
+            )
+        except Exception as e:
+            print(f"WARN set_latest_intel for {cs}: {e}")
+
+        # Update Intel archive: latest summary only + dated timeline bullets
+        try:
+            DEFAULT_RATE_LIMITER.wait_if_needed()
+            update_intel_archive_for_company(
+                intel_db_id=intel_db,
+                companies_db_id=companies_db,
+                company_page_id=page_id,
+                callsign=str(org.get("callsign") or cs),
+                date_iso=today_iso,
+                summary_text=summary,
+                items=intel_items,
+                summary_max_bytes=250_000,  # ~250 KB for property
+                timeline_max_bytes=800_000,  # ~800 KB for toggle groups
+                overwrite_summary_only=True,  # important: no summary history
+                source_metadata=source_metadata_by_cs.get(cs, {}),
+            )
+        except Exception as e:
+            print(f"WARN intel archive for {cs}: {e}")
+
+        return {"status": "success", "items": len(intel_items)}
+
+    except Exception as e:
+        print(f"[NOTION ERROR] Failed to process {cs}: {e}")
+        return {"status": "error", "error": str(e)}
+
+
 # ---------------- Main job ----------------
 
 
@@ -758,85 +857,21 @@ def main():
     if token and companies_db and intel_db:
         PERFORMANCE_MONITOR.start_timer("notion_updates")
 
-        def process_company_notion(cs, org):
-
-            # Skip if no new intelligence data
-            intel_items = intel_by_cs.get(cs, [])
-            if not intel_items:
-                return None
-
-            try:
-                # Ensure org is a dict (safety check)
-                if not isinstance(org, dict):
-                    print(f"[ERROR] Expected dict for org data, got {type(org)}: {org}")
-                    return {"status": "error", "error": f"Invalid org data type: {type(org)}"}
-
-                # Upsert company page first (without domain/website to avoid overwriting baseline job data)
-                page_id = upsert_company_page(
-                    companies_db,
-                    {
-                        "callsign": org.get("callsign") or cs,  # Use cs as fallback
-                        "company": (
-                            str(org.get("dba") or "").strip() if org.get("dba") is not None else ""
-                        ),
-                        "owners": org.get("owners") or [],
-                        "needs_dossier": False,
-                    },
-                )
-
-                # LLM summary (optional)
-                text_blob = "\n".join(
-                    [
-                        f"{it.get('published_at','')} — {it.get('title','')} — {it.get('source','')} {it.get('url','')}"
-                        for it in intel_items
-                    ]
-                )
-                summary = _openai_summarize(text_blob) or f"{len(intel_items)} new items."
-
-                # Set Latest Intel + update Intel archive with new system
-                today_iso = datetime.utcnow().date().isoformat()
-
-                # Keep slim "Latest Intel" on Companies DB
-                try:
-                    DEFAULT_RATE_LIMITER.wait_if_needed()
-                    set_latest_intel(
-                        page_id,
-                        summary_text=summary,
-                        date_iso=today_iso,
-                        companies_db_id=companies_db,
-                    )
-                except Exception as e:
-                    print(f"WARN set_latest_intel for {cs}: {e}")
-
-                # Update Intel archive: latest summary only + dated timeline bullets
-                try:
-                    DEFAULT_RATE_LIMITER.wait_if_needed()
-                    update_intel_archive_for_company(
-                        intel_db_id=intel_db,
-                        companies_db_id=companies_db,
-                        company_page_id=page_id,
-                        callsign=str(org.get("callsign") or cs),
-                        date_iso=today_iso,
-                        summary_text=summary,
-                        items=intel_items,
-                        summary_max_bytes=250_000,  # ~250 KB for property
-                        timeline_max_bytes=800_000,  # ~800 KB for toggle groups
-                        overwrite_summary_only=True,  # important: no summary history
-                        source_metadata=source_metadata_by_cs.get(cs, {}),
-                    )
-                except Exception as e:
-                    print(f"WARN intel archive for {cs}: {e}")
-
-                return {"status": "success", "items": len(intel_items)}
-
-            except Exception as e:
-                print(f"[NOTION ERROR] Failed to process {cs}: {e}")
-                return {"status": "error", "error": str(e)}
+        # Create wrapper function that passes all required data
+        def process_company_wrapper(cs, org):
+            return process_company_notion(
+                cs=cs,
+                org=org,
+                intel_by_cs=intel_by_cs,
+                source_metadata_by_cs=source_metadata_by_cs,
+                companies_db=companies_db,
+                intel_db=intel_db,
+            )
 
         # Process Notion updates in parallel (with lower concurrency for API limits)
         notion_results = ParallelProcessor.process_dict_batch(
             roster,
-            process_company_notion,
+            process_company_wrapper,
             max_workers=3,  # Conservative for Notion API limits
             timeout=300,
         )
