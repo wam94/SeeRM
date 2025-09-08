@@ -89,7 +89,7 @@ jobs:
           # Run the analysis workflow
           python -m app.main news \
             ${{ inputs.callsigns && format('--callsigns="{0}"', inputs.callsigns) || '' }} \
-            --lookback-days='${{ inputs.lookback_days }}' \
+            --lookback-days='${{ inputs.lookback_days || '10' }}' \
             ${{ inputs.dry_run == 'true' && '--no-email' || '' }}
 
       - name: Upload HTML reports as artifacts
