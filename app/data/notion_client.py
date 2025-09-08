@@ -887,13 +887,13 @@ class EnhancedNotionClient:
 
     def get_notion_page_url(self, page_id: Optional[str]) -> Optional[str]:
         """
-        Convert a Notion page ID to a clickable URL.
+        Convert a Notion page ID to a clickable URL with proper workspace context.
 
         Args:
             page_id: Notion page ID (with or without dashes)
 
         Returns:
-            Clickable Notion URL or None if page_id is invalid
+            Clickable Notion URL with workspace and database context, or None if page_id is invalid
 
         Raises:
             ValueError: If page_id contains invalid characters
@@ -922,12 +922,46 @@ class EnhancedNotionClient:
             return None
 
         # Format as: 8-4-4-4-12 (UUID format with dashes)
-        formatted_id = (
+        formatted_page_id = (
             f"{clean_id[:8]}-{clean_id[8:12]}-{clean_id[12:16]}-"
             f"{clean_id[16:20]}-{clean_id[20:]}"
         )
 
-        return f"https://www.notion.so/{formatted_id}"
+        # Build workspace-aware URL if we have companies database ID
+        if self.config.companies_db_id:
+            # Clean and format the database ID
+            db_clean_id = self.config.companies_db_id.replace("-", "")
+            formatted_db_id = (
+                f"{db_clean_id[:8]}-{db_clean_id[8:12]}-{db_clean_id[12:16]}-"
+                f"{db_clean_id[16:20]}-{db_clean_id[20:]}"
+            )
+
+            # Use workspace name from environment or default to "mercurytechnologies"
+            import os
+
+            workspace_name = os.getenv("NOTION_WORKSPACE_NAME", "mercurytechnologies")
+            view_id = os.getenv("NOTION_COMPANIES_VIEW_ID")  # Optional view ID
+
+            # Build full URL with workspace and database context
+            url = f"https://www.notion.so/{workspace_name}/{formatted_db_id}"
+            if view_id:
+                # Clean and format view ID if provided
+                view_clean_id = view_id.replace("-", "")
+                if len(view_clean_id) == 32:
+                    formatted_view_id = (
+                        f"{view_clean_id[:8]}-{view_clean_id[8:12]}-{view_clean_id[12:16]}-"
+                        f"{view_clean_id[16:20]}-{view_clean_id[20:]}"
+                    )
+                    url += f"?v={formatted_view_id}&p={formatted_page_id}&pm=s"
+                else:
+                    url += f"?p={formatted_page_id}&pm=s"
+            else:
+                url += f"?p={formatted_page_id}&pm=s"
+
+            return url
+
+        # Fallback to simple URL if no database ID available
+        return f"https://www.notion.so/{formatted_page_id}"
 
     # NOTE: This method is no longer used. We now get intel directly from the
     # Companies database "Latest Intel" field.
