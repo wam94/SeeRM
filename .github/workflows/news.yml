@@ -176,10 +176,10 @@ jobs:
           batch_list = list(range(num_batches))
           print(f"Roster total: {n} | batch_size={bs} -> {num_batches} batch(es)")
 
-          # Handle case where no organizations found - create dummy batch to prevent matrix failure
+          # Handle case where no organizations found - create empty batch to prevent matrix failure
           if n == 0:
               print("⚠️  No organizations found in roster CSV - workflow will skip processing")
-              batch_list = [-1]  # Dummy value to prevent empty matrix, will be handled in job
+              batch_list = []  # Empty list will skip the run job entirely
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"batch_list={json.dumps(batch_list)}\n")
@@ -190,6 +190,7 @@ jobs:
   run:
     runs-on: ubuntu-latest
     needs: prepare
+    if: ${{ needs.prepare.outputs.count != '0' }}  # Skip if no organizations found
     timeout-minutes: 30              # per-batch timeout (keeps the long run from hitting 40)
     strategy:
       max-parallel: 2               # respect Notion rate limits; bump to 3–4 if safe
@@ -198,15 +199,6 @@ jobs:
         batch: ${{ fromJSON(needs.prepare.outputs.batch_list) }}
 
     steps:
-      - name: Check if processing needed
-        run: |
-          if [[ "${{ needs.prepare.outputs.count }}" == "0" ]]; then
-            echo "⚠️ No organizations found - skipping batch processing"
-            echo "This is batch ${{ matrix.batch }} but no work to do"
-            exit 0
-          fi
-          echo "✅ Processing batch ${{ matrix.batch }} of ${{ needs.prepare.outputs.count }} organizations"
-
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.11", cache: "pip" }

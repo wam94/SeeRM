@@ -160,7 +160,7 @@ def fetch_csv_by_subject(service, user: str, subject: str) -> Optional[pd.DataFr
     if not subject:
         return None
     msgs = search_messages(
-        service, user, 'subject:"{subject}" has:attachment filename:csv', max_results=5
+        service, user, f'subject:"{subject}" has:attachment filename:csv', max_results=5
     )
     for m in msgs:
         msg = get_message(service, user, m["id"])
