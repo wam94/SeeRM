@@ -887,12 +887,27 @@ def main():
     source_metadata_by_cs: Dict[str, Dict[str, List[str]]] = {}
     for cs in roster.keys():
         result = results.get(cs, {"items": [], "source_metadata": {}})
-        if isinstance(result, dict):
+        print(f"[DEBUG PROCESSING] cs={cs}, result type: {type(result)}, result: {result}")
+
+        if isinstance(result, tuple) and len(result) == 2:
+            # Handle tuple return format (cs, data)
+            returned_cs, data = result
+            print(
+                f"[DEBUG PROCESSING] Tuple format: returned_cs={returned_cs}, data type: {type(data)}"
+            )
+            if isinstance(data, dict):
+                intel_by_cs[cs] = data.get("items", [])
+                source_metadata_by_cs[cs] = data.get("source_metadata", {})
+            else:
+                # Data is a list (old cached format)
+                intel_by_cs[cs] = data if isinstance(data, list) else []
+                source_metadata_by_cs[cs] = {}
+        elif isinstance(result, dict):
             intel_by_cs[cs] = result.get("items", [])
             source_metadata_by_cs[cs] = result.get("source_metadata", {})
         else:
             # Backwards compatibility: if result is just a list (old format)
-            intel_by_cs[cs] = result
+            intel_by_cs[cs] = result if isinstance(result, list) else []
             source_metadata_by_cs[cs] = {}
 
     collection_time = PERFORMANCE_MONITOR.end_timer("intel_collection")
