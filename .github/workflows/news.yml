@@ -352,3 +352,35 @@ jobs:
           NOTION_COMPANIES_DB_ID: ${{ secrets.NOTION_COMPANIES_DB_ID }}
         run: |
           python -m app.dossier_baseline
+
+  # 3) Summary job that always runs to ensure workflow success
+  summary:
+    runs-on: ubuntu-latest
+    needs: [prepare, run]
+    if: always()  # Always run regardless of other job status
+    steps:
+      - name: Workflow Summary
+        run: |
+          echo "## 📊 News Workflow Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ needs.prepare.outputs.count }}" == "0" ]]; then
+            echo "⚠️ **No organizations found in roster CSV**" >> $GITHUB_STEP_SUMMARY
+            echo "- Roster fetch completed successfully but returned 0 organizations" >> $GITHUB_STEP_SUMMARY
+            echo "- Check Gmail CSV with subject: '${{ vars.NEWS_PROFILE_SUBJECT || 'Org Profile — Will Mitchell' }}'" >> $GITHUB_STEP_SUMMARY
+            echo "- Verify CSV contains 'callsign' column with valid data" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **Workflow completed successfully** (no processing needed)" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ needs.run.result }}" == "success" ]]; then
+            echo "✅ **Processing completed successfully**" >> $GITHUB_STEP_SUMMARY
+            echo "- Processed ${{ needs.prepare.outputs.count }} organizations" >> $GITHUB_STEP_SUMMARY
+            echo "- News intelligence workflow completed" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ needs.run.result }}" == "skipped" ]]; then
+            echo "⚠️ **Processing was skipped**" >> $GITHUB_STEP_SUMMARY
+            echo "- No organizations found to process" >> $GITHUB_STEP_SUMMARY
+            echo "- Workflow completed successfully" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Processing failed**" >> $GITHUB_STEP_SUMMARY
+            echo "- Check the run job logs for details" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
