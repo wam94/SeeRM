@@ -1,6 +1,7 @@
 # app/news_job.py
 from __future__ import annotations
 
+import functools
 import io
 import json
 import math
@@ -536,6 +537,37 @@ def build_email_digest(intel: Dict[str, List[Dict[str, Any]]]) -> str:
 # ---------------- Notion processing ----------------
 
 
+def process_company_notion_with_data(
+    intel_by_cs: Dict[str, List[Dict[str, Any]]],
+    source_metadata_by_cs: Dict[str, Dict[str, List[str]]],
+    companies_db: str,
+    intel_db: str,
+    cs: str,
+    org: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """
+    Process Notion updates for a single company with data bound first.
+
+    This function signature is designed to work with functools.partial
+    where the data parameters are bound first, and cs/org are passed
+    by the parallel processor.
+    """
+    print(f"[DEBUG BOUND] process_company_notion_with_data called with:")
+    print(f"  cs: {type(cs)} = {cs}")
+    print(f"  org: {type(org)} = {org}")
+    print(f"  intel_by_cs: {type(intel_by_cs)}")
+    print(f"  companies_db: {type(companies_db)} = {companies_db}")
+
+    return process_company_notion(
+        cs=cs,
+        org=org,
+        intel_by_cs=intel_by_cs,
+        source_metadata_by_cs=source_metadata_by_cs,
+        companies_db=companies_db,
+        intel_db=intel_db,
+    )
+
+
 def process_company_notion(
     cs: str,
     org: Dict[str, Any],
@@ -558,8 +590,24 @@ def process_company_notion(
     Returns:
         Processing result dictionary or None
     """
+    # DEBUG: Log all parameter types and values
+    print(f"[DEBUG] process_company_notion called with:")
+    print(f"  cs: {type(cs)} = {cs}")
+    print(f"  org: {type(org)} = {org}")
+    print(f"  intel_by_cs: {type(intel_by_cs)}")
+    print(f"  source_metadata_by_cs: {type(source_metadata_by_cs)}")
+    print(f"  companies_db: {type(companies_db)} = {companies_db}")
+    print(f"  intel_db: {type(intel_db)} = {intel_db}")
+
     # Skip if no new intelligence data
-    intel_items = intel_by_cs.get(cs, [])
+    try:
+        print(f"[DEBUG] About to call intel_by_cs.get(cs={cs}, [])")
+        intel_items = intel_by_cs.get(cs, [])
+        print(f"[DEBUG] intel_items: {type(intel_items)} with {len(intel_items)} items")
+    except Exception as e:
+        print(f"[DEBUG ERROR] Failed at intel_by_cs.get(): {e}")
+        print(f"[DEBUG ERROR] intel_by_cs type: {type(intel_by_cs)}, value: {intel_by_cs}")
+        raise
     if not intel_items:
         return None
 
@@ -857,21 +905,24 @@ def main():
     if token and companies_db and intel_db:
         PERFORMANCE_MONITOR.start_timer("notion_updates")
 
-        # Create wrapper function that passes all required data
-        def process_company_wrapper(cs, org):
-            return process_company_notion(
-                cs=cs,
-                org=org,
-                intel_by_cs=intel_by_cs,
-                source_metadata_by_cs=source_metadata_by_cs,
-                companies_db=companies_db,
-                intel_db=intel_db,
-            )
+        # Create bound function with all data - NO nested functions!
+        print(f"[DEBUG MAIN] Creating bound function with:")
+        print(f"  intel_by_cs: {type(intel_by_cs)} with {len(intel_by_cs)} companies")
+        print(f"  companies_db: {type(companies_db)} = {companies_db}")
+        print(f"  intel_db: {type(intel_db)} = {intel_db}")
+
+        bound_processor = functools.partial(
+            process_company_notion_with_data,
+            intel_by_cs,
+            source_metadata_by_cs,
+            companies_db,
+            intel_db,
+        )
 
         # Process Notion updates in parallel (with lower concurrency for API limits)
         notion_results = ParallelProcessor.process_dict_batch(
             roster,
-            process_company_wrapper,
+            bound_processor,
             max_workers=3,  # Conservative for Notion API limits
             timeout=300,
         )
