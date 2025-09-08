@@ -572,22 +572,60 @@ def _append_timeline_group(
         }
     ] + bullets
 
-    r = notion_patch(
-        f"/blocks/{page_id}/children",
-        {
-            "children": [
-                {
-                    "object": "block",
-                    "type": "toggle",
-                    "toggle": {
-                        "rich_text": [{"type": "text", "text": {"content": toggle_title}}],
-                        "children": children,
-                    },
-                }
-            ]
-        },
-    )
-    r.raise_for_status()
+    # First check if we can access the page
+    try:
+        page_check = notion_get(f"/pages/{page_id}")
+        if page_check.status_code != 200:
+            print(f"[WARN] Cannot access page {page_id}: {page_check.status_code}")
+            raise Exception(f"Cannot access page: {page_check.status_code}")
+    except Exception as e:
+        print(f"[WARN] Failed to verify page access for {page_id}: {e}")
+        raise
+    
+    # Try to append blocks
+    try:
+        print(f"[DEBUG BLOCKS] Attempting to append toggle to page {page_id}")
+        print(f"[DEBUG BLOCKS] Toggle title: {toggle_title}")
+        print(f"[DEBUG BLOCKS] Number of items: {len(items or [])}")
+        
+        # According to Notion API docs, use POST to append blocks, not PATCH
+        r = notion_post(
+            f"/blocks/{page_id}/children",
+            {
+                "children": [
+                    {
+                        "object": "block",
+                        "type": "toggle",
+                        "toggle": {
+                            "rich_text": [{"type": "text", "text": {"content": toggle_title}}],
+                            "children": children,
+                        },
+                    }
+                ]
+            },
+        )
+        
+        print(f"[DEBUG BLOCKS] Response status: {r.status_code}")
+        
+        if r.status_code == 401:
+            print(f"[ERROR] Unauthorized to append blocks to {page_id}")
+            print(f"[ERROR] Response: {r.text}")
+            # Try to get more info about the page
+            page_info = notion_get(f"/pages/{page_id}").json()
+            parent = page_info.get("parent", {})
+            print(f"[ERROR] Page parent type: {parent.get('type')}, parent ID: {parent.get('database_id') or parent.get('page_id')}")
+            raise Exception(f"Unauthorized to modify page {page_id} - API integration may need edit permissions")
+        elif r.status_code == 400:
+            print(f"[ERROR] Bad request appending blocks to {page_id}")
+            print(f"[ERROR] Response: {r.text}")
+            raise Exception(f"Bad request: {r.text}")
+        
+        r.raise_for_status()
+        print(f"[DEBUG BLOCKS] Successfully appended toggle to page {page_id}")
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to append timeline group: {e}")
+        raise
 
 
 def _estimate_block_text_bytes(block: Dict[str, Any]) -> int:
