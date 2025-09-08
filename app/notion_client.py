@@ -432,29 +432,25 @@ def ensure_intel_page(
         except requests.HTTPError:
             pass
 
-    # 2) Get company name for the title
+    # 2) Get company name for the title from SeeRM's "Company" rich_text property
     company_name = f"Intel — {callsign}"  # Fallback
     if company_page_id:
         try:
             company_props = _get_page_properties(company_page_id)
-            # Try to get company name from various possible properties
-            for prop_name in ["Company", "Name", "DBA"]:
-                if prop_name in company_props:
-                    prop_data = company_props[prop_name]
-                    if prop_data.get("type") == "title":
-                        title_parts = prop_data.get("title", [])
-                        if title_parts:
-                            company_name = "".join(
-                                part.get("text", {}).get("content", "") for part in title_parts
-                            )
-                            break
-                    elif prop_data.get("type") == "rich_text":
-                        text_parts = prop_data.get("rich_text", [])
-                        if text_parts:
-                            company_name = "".join(
-                                part.get("text", {}).get("content", "") for part in text_parts
-                            )
-                            break
+            # In SeeRM: Callsign=title, Company=rich_text
+            # We want the Company rich_text value for Intel Archive title
+            if "Company" in company_props:
+                prop_data = company_props["Company"]
+                if prop_data.get("type") == "rich_text":
+                    text_parts = prop_data.get("rich_text", [])
+                    if text_parts:
+                        company_name = "".join(
+                            part.get("text", {}).get("content", "") for part in text_parts
+                        ).strip()
+                        if company_name:  # Only use if non-empty
+                            pass
+                        else:
+                            company_name = f"Intel — {callsign}"  # Fallback for empty company
         except Exception:
             # If we can't get company name, use fallback
             pass
