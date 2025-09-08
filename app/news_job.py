@@ -213,9 +213,11 @@ def build_queries(
         for p in owners[:3]:
             p = p.strip()
             if p:
-                Q.append(
-                    f'"{p}" ("{names[0]}" OR site:{domains[0] if domains else ""}) (CEO OR founder OR CTO OR CFO OR raises OR interview)'
+                query = (
+                    f'"{p}" ("{names[0]}" OR site:{domains[0] if domains else ""}) '
+                    f"(CEO OR founder OR CTO OR CFO OR raises OR interview)"
                 )
+                Q.append(query)
     return [q for q in Q if q.strip()]
 
 
