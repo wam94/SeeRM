@@ -392,13 +392,12 @@ def page_has_dossier(page_id: str) -> bool:
 def _intel_schema_hints(intel_db_id: str) -> Dict[str, Optional[str]]:
     s = get_db_schema(intel_db_id)
     return {
-        "title": get_title_prop_name(s),
-        "company_rel": _first_prop_of_type(s, "relation", preferred="Company"),
-        "callsign_prop": (
-            "Callsign"
-            if "Callsign" in (s.get("properties") or {})
-            else _first_prop_of_type(s, "rich_text")
-        ),
+        "title": get_title_prop_name(s),  # This should be "Company" (title column)
+        "callsign_rel": _first_prop_of_type(
+            s, "relation", preferred="Callsign"
+        ),  # Callsign = relation
+        "company_rel": None,  # No separate company relation - company name is the title
+        "callsign_prop": None,  # No separate callsign text property - callsign is the relation
         "date_prop": "Date" if prop_exists(s, "Date", "date") else _first_prop_of_type(s, "date"),
         "summary_prop": (
             "Summary"
@@ -417,16 +416,15 @@ def ensure_intel_page(
     intel_db_id: str, companies_db_id: Optional[str], company_page_id: Optional[str], callsign: str
 ) -> str:
     hints = _intel_schema_hints(intel_db_id)
-    title_prop = hints["title"]
-    callsign_prop = hints["callsign_prop"]
-    company_rel = hints["company_rel"]
+    title_prop = hints["title"]  # "Company" column (title)
+    callsign_rel = hints["callsign_rel"]  # "Callsign" column (relation to Companies DB)
 
-    # 1) Try query by callsign if we have a usable property
-    if callsign_prop:
+    # 1) Try query by callsign relation (if we have both callsign relation and company_page_id)
+    if callsign_rel and company_page_id:
         try:
             data = notion_query_db(
                 intel_db_id,
-                {"filter": {"property": callsign_prop, "rich_text": {"equals": callsign}}},
+                {"filter": {"property": callsign_rel, "relation": {"contains": company_page_id}}},
             )
             res = data.get("results", [])
             if res:
@@ -434,27 +432,39 @@ def ensure_intel_page(
         except requests.HTTPError:
             pass
 
-    # 2) Try by Company relation (if we have both)
-    if company_rel and company_page_id:
+    # 2) Get company name for the title
+    company_name = f"Intel — {callsign}"  # Fallback
+    if company_page_id:
         try:
-            data = notion_query_db(
-                intel_db_id,
-                {"filter": {"property": company_rel, "relation": {"contains": company_page_id}}},
-            )
-            res = data.get("results", [])
-            if res:
-                return res[0]["id"]
-        except requests.HTTPError:
+            company_props = _get_page_properties(company_page_id)
+            # Try to get company name from various possible properties
+            for prop_name in ["Company", "Name", "DBA"]:
+                if prop_name in company_props:
+                    prop_data = company_props[prop_name]
+                    if prop_data.get("type") == "title":
+                        title_parts = prop_data.get("title", [])
+                        if title_parts:
+                            company_name = "".join(
+                                part.get("text", {}).get("content", "") for part in title_parts
+                            )
+                            break
+                    elif prop_data.get("type") == "rich_text":
+                        text_parts = prop_data.get("rich_text", [])
+                        if text_parts:
+                            company_name = "".join(
+                                part.get("text", {}).get("content", "") for part in text_parts
+                            )
+                            break
+        except Exception:
+            # If we can't get company name, use fallback
             pass
 
-    # 3) Create new
+    # 3) Create new Intel page
     props: Dict[str, Any] = {}
     if title_prop:
-        props[title_prop] = _title(f"Intel — {callsign}")
-    if company_rel and company_page_id:
-        props[company_rel] = {"relation": [{"id": company_page_id}]}
-    if callsign_prop:
-        props[callsign_prop] = _rt_segments(callsign)
+        props[title_prop] = _title(company_name)
+    if callsign_rel and company_page_id:
+        props[callsign_rel] = {"relation": [{"id": company_page_id}]}
 
     res = notion_post(
         "/pages", {"parent": {"database_id": intel_db_id}, "properties": props}
