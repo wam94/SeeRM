@@ -1025,7 +1025,7 @@ class EnhancedNotionClient:
     #                             intel_items.append(
     #                                 {
     #                                     "title": title,
-    #                                     "url": "",  # You may need to extract this from the content
+    #                                     "url": "",  # Extract from content
     #                                     "source": "Notion Intel Archive",
     #                                     "published_at": start_date.isoformat(),  # Use actual date
     #                                     "summary": title,  # Use title as summary for now
