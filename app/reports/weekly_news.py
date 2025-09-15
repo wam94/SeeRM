@@ -200,7 +200,7 @@ class WeeklyNewsReport:
                 html_parts.extend(
                     [
                         '<div style="margin-bottom: 15px; padding: 10px; border-left: 3px solid #007acc;">',
-                        '<h4><a href="{item.url}">{item.title}</a></h4>',
+                        f'<h4><a href="{item.url}">{item.title}</a></h4>',
                         f"<p><strong>Source:</strong> {item.source} | ",
                         f'<strong>Type:</strong> {item.news_type.value.replace("_", " ").title()} | ',
                         f'<strong>Companies:</strong> {", ".join(item.company_mentions)}</p>',
@@ -225,7 +225,7 @@ class WeeklyNewsReport:
             # Sort by relevance and show top items
             sorted_items = sorted(items, key=lambda x: x.relevance_score, reverse=True)
             for item in sorted_items[:5]:  # Top 5 per category
-                html_parts.append('<li><a href="{item.url}">{item.title}</a>')
+                html_parts.append(f'<li><a href="{item.url}">{item.title}</a>')
                 html_parts.append(
                     f'<br><small>{item.source} - {", ".join(item.company_mentions)}</small></li>'
                 )

@@ -134,13 +134,25 @@ class RobustEmailDelivery:
             return result
 
         except Exception as e:
+            # Preserve root cause if wrapped by retry logic
+            root_error = e
+            try:
+                from tenacity import RetryError
+
+                if isinstance(e, RetryError) and e.last_attempt and e.last_attempt.failed:
+                    root_exc = e.last_attempt.exception()
+                    if root_exc:
+                        root_error = root_exc
+            except Exception:
+                pass
+
             logger.warning(
                 "Email delivery failed after retries",
-                error=str(e),
-                error_type=type(e).__name__,
+                error=str(root_error),
+                error_type=type(root_error).__name__,
                 to=to,
             )
-            result["error"] = str(e)
+            result["error"] = str(root_error)
             result["attempts"] = 3  # Max retries attempted
 
             # Attempt 2: Fallback to HTML file
@@ -154,7 +166,7 @@ class RobustEmailDelivery:
                     logger.info(
                         "Email saved as HTML file fallback",
                         file_path=str(fallback_file),
-                        original_error=str(e),
+                        original_error=str(result["error"] or str(e)),
                     )
                     return result
 
@@ -194,7 +206,7 @@ class RobustEmailDelivery:
         file_path = self.fallback_directory / filename
 
         # Create comprehensive HTML document
-        full_html = """<!DOCTYPE html>
+        full_html = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">

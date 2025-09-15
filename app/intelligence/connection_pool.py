@@ -203,21 +203,53 @@ class ConnectionPool:
             "hosts": list(self._sessions.keys()),
         }
 
-        # Get adapter stats for each session
+        # Best-effort adapter stats (optional; avoid thread-unsafe iteration)
         for host, session in self._sessions.items():
             for prefix, adapter in session.adapters.items():
-                if isinstance(adapter, HTTPAdapter):
-                    # Get pool manager stats
-                    if hasattr(adapter, "poolmanager") and adapter.poolmanager:
-                        pool_stats = {"num_pools": len(adapter.poolmanager.pools), "pools": {}}
+                if not isinstance(adapter, HTTPAdapter):
+                    continue
+                try:
+                    pm = getattr(adapter, "poolmanager", None)
+                    if not pm:
+                        continue
 
-                        for key, pool in adapter.poolmanager.pools.items():
-                            pool_stats["pools"][str(key)] = {
-                                "num_connections": pool.num_connections,
-                                "num_requests": pool.num_requests,
-                            }
+                    # Getting number of pools is safe; iterating pools may not be
+                    pool_stats = {"num_pools": getattr(pm, "num_pools", len(getattr(pm, "pools", {})))}
 
-                        stats[f"{host}_{prefix}"] = pool_stats
+                    # Try to collect per-pool stats, but guard against NotImplementedError
+                    pools = getattr(pm, "pools", None)
+                    if pools is not None:
+                        per_pools = {}
+                        iterator = None
+                        try:
+                            # Some containers block direct iteration; try keys() access
+                            keys = list(pools.keys())
+                            iterator = ((k, pools[k]) for k in keys)
+                        except Exception:
+                            # Fallback to internal container if available
+                            internal = getattr(pools, "_container", None)
+                            if isinstance(internal, dict):
+                                iterator = internal.items()
+
+                        if iterator is not None:
+                            for key, pool in iterator:
+                                try:
+                                    per_pools[str(key)] = {
+                                        "num_connections": getattr(pool, "num_connections", None),
+                                        "num_requests": getattr(pool, "num_requests", None),
+                                    }
+                                except Exception:
+                                    # Skip if pool stats not accessible
+                                    continue
+
+                        if per_pools:
+                            pool_stats["pools"] = per_pools
+
+                    stats[f"{host}_{prefix}"] = pool_stats
+
+                except Exception:
+                    # Never let stats collection break callers
+                    continue
 
         return stats
 
