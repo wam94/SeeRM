@@ -91,8 +91,8 @@ def digest(ctx, gmail_query: Optional[str], max_messages: int, skip_validation: 
     """Generate and send weekly client digest."""
     try:
         if not skip_validation:
-            # Validate configuration
-            missing = validate_required_settings()
+            # Validate configuration (minimal to allow optional Notion)
+            missing = validate_required_settings(for_workflow="minimal")
             if missing:
                 console.print("[red]Configuration Error:[/red]")
                 for item in missing:
@@ -312,12 +312,20 @@ def health(ctx):
 def reset_breaker(ctx, breaker_name: str):
     """Reset a circuit breaker by name."""
     try:
-        success = reset_circuit_breaker(breaker_name)
+        # Support resetting all breakers at once
+        if breaker_name.lower() == "all":
+            status = get_circuit_breaker_status() or {}
+            any_reset = False
+            for name in list(status.keys()):
+                any_reset = reset_circuit_breaker(name) or any_reset
+            success = any_reset
+        else:
+            success = reset_circuit_breaker(breaker_name)
 
         if success:
-            console.print("[green]✅ Circuit breaker '{breaker_name}' reset successfully[/green]")
+            console.print(f"[green]✅ Circuit breaker '{breaker_name}' reset successfully[/green]")
         else:
-            console.print("[red]❌ Circuit breaker '{breaker_name}' not found[/red]")
+            console.print(f"[red]❌ Circuit breaker '{breaker_name}' not found[/red]")
 
         sys.exit(0 if success else 1)
 

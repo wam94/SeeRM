@@ -101,7 +101,7 @@ class NewsCollector:
 
         # Name-based queries
         for n in set(names):
-            queries.append('"{n}" (launch OR product OR partnership OR funding OR raises)')
+            queries.append(f'"{n}" (launch OR product OR partnership OR funding OR raises)')
 
         # Owner-based queries (limited to first 3)
         if company.beneficial_owners:
@@ -109,7 +109,7 @@ class NewsCollector:
                 owner = owner.strip()
                 if owner and names and domains:
                     queries.append(
-                        '"{owner}" ("{names[0]}" OR site:{domains[0]}) (CEO OR founder OR CTO OR CFO OR raises OR interview)'
+                        f'"{owner}" ("{names[0]}" OR site:{domains[0]}) (CEO OR founder OR CTO OR CFO OR raises OR interview)'
                     )
 
         return [q for q in queries if q.strip()]
