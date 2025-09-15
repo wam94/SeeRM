@@ -309,21 +309,67 @@ jobs:
           echo "FILTER_CALLSIGNS for this batch: ${FILTER_CALLSIGNS}"
           python -m app.news_job
 
-      # Optional: generate baselines only once (batch 0) for *new* callsigns
-      - name: Read new callsigns (if any)
-        if: ${{ matrix.batch == 0 }}
-        id: newcs
+      # Upload new callsigns file as artifact if it exists
+      - name: Upload new callsigns artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: new-callsigns-batch-${{ matrix.batch }}
+          path: /tmp/new_callsigns.txt
+          if-no-files-found: ignore
+          retention-days: 1
+
+  # 3) Generate baselines for all new accounts found across all batches
+  baseline:
+    runs-on: ubuntu-latest
+    needs: [prepare, run]
+    if: ${{ always() && needs.prepare.outputs.count != '0' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: "pip" }
+      - name: Install deps
         run: |
-          if [ -f /tmp/new_callsigns.txt ]; then
-            CS=$(cat /tmp/new_callsigns.txt)
-            echo "callsigns=$CS" >> $GITHUB_OUTPUT
-            echo "New callsigns: $CS"
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download all new callsigns artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: new-callsigns-batch-*
+          path: ./artifacts/
+          merge-multiple: false
+
+      - name: Collect all new callsigns
+        id: collect
+        run: |
+          NEW_CALLSIGNS=""
+          if [ -d "./artifacts/" ]; then
+            for dir in ./artifacts/new-callsigns-batch-*; do
+              if [ -d "$dir" ] && [ -f "$dir/new_callsigns.txt" ]; then
+                echo "Found new callsigns in $dir:"
+                cat "$dir/new_callsigns.txt"
+                if [ -z "$NEW_CALLSIGNS" ]; then
+                  NEW_CALLSIGNS="$(cat "$dir/new_callsigns.txt")"
+                else
+                  NEW_CALLSIGNS="$NEW_CALLSIGNS,$(cat "$dir/new_callsigns.txt")"
+                fi
+              fi
+            done
+          fi
+
+          # Remove duplicates and clean up
+          if [ -n "$NEW_CALLSIGNS" ]; then
+            NEW_CALLSIGNS=$(echo "$NEW_CALLSIGNS" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
+            echo "All new callsigns: $NEW_CALLSIGNS"
+            echo "callsigns=$NEW_CALLSIGNS" >> $GITHUB_OUTPUT
           else
-            echo "No new callsigns file found."
+            echo "No new callsigns found across all batches"
+            echo "callsigns=" >> $GITHUB_OUTPUT
           fi
 
       - name: Generate baselines for new accounts
-        if: ${{ matrix.batch == 0 && steps.newcs.outputs.callsigns != '' }}
+        if: ${{ steps.collect.outputs.callsigns != '' }}
         env:
           PYTHONPATH: ${{ github.workspace }}
 
@@ -333,7 +379,7 @@ jobs:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
 
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_CHAT_MODEL: ${{ vars.OPENAI_CHAT_MODEL || 'gpt-5-mini' }}
+          OPENAI_CHAT_MODEL: ${{ vars.OPENAI_CHAT_MODEL || 'gpt-4o-mini' }}
           OPENAI_TEMPERATURE: ${{ vars.OPENAI_TEMPERATURE || '0.2' }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
@@ -342,19 +388,20 @@ jobs:
           NEWS_PROFILE_SUBJECT: ${{ vars.BASELINE_PROFILE_SUBJECT || vars.NEWS_PROFILE_SUBJECT }}
           ATTACHMENT_REGEX: '.*\.csv$'
 
-          BASELINE_CALLSIGNS: ${{ steps.newcs.outputs.callsigns }}
+          BASELINE_CALLSIGNS: ${{ steps.collect.outputs.callsigns }}
           PREVIEW_ONLY: 'false'
           BASELINE_LOOKBACK_DAYS: ${{ vars.BASELINE_LOOKBACK_DAYS || '180' }}
 
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_COMPANIES_DB_ID: ${{ secrets.NOTION_COMPANIES_DB_ID }}
         run: |
+          echo "Generating baselines for new callsigns: $BASELINE_CALLSIGNS"
           python -m app.dossier_baseline
 
-  # 3) Summary job that always runs to ensure workflow success
+  # 4) Summary job that always runs to ensure workflow success
   summary:
     runs-on: ubuntu-latest
-    needs: prepare
+    needs: [prepare, baseline]
     if: always()
     steps:
       - name: Workflow Summary
