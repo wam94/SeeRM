@@ -164,11 +164,12 @@ class IntelligenceAggregator:
                 self.settings.notion.companies_db_id, callsigns=[callsign]
             )
 
-            if not companies_data or callsign not in companies_data:
+            key = callsign.lower()
+            if not companies_data or key not in companies_data:
                 logger.debug("Company not found in Notion", callsign=callsign)
                 return None
 
-            company_data = companies_data[callsign]
+            company_data = companies_data[key]
 
             profile = CompanyProfile(
                 callsign=callsign,
