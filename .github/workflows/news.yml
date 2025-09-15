@@ -32,8 +32,6 @@ on:
         required: false
         default: "40"
         type: string
-  schedule:
-    - cron: "15 13 * * MON"  # Run 15 minutes after main workflow
   workflow_run:
     workflows: ["Weekly Digest"]
     types: [completed]
@@ -290,7 +288,7 @@ jobs:
           NEWS_GMAIL_QUERY: ${{ vars.NEWS_GMAIL_QUERY }}
           NEWS_PROFILE_SUBJECT: ${{ vars.NEWS_PROFILE_SUBJECT }}
           ATTACHMENT_REGEX: '.*\.csv$'
-          PREVIEW_ONLY: ${{ inputs.preview_only }}
+          PREVIEW_ONLY: ${{ inputs.preview_only || 'true' }}
           INTEL_LOOKBACK_DAYS: ${{ inputs.lookback_days }}
           INTEL_MAX_PER_ORG: ${{ inputs.max_per_org }}
           DIGEST_TO: ${{ inputs.send_to || secrets.DIGEST_TO }}

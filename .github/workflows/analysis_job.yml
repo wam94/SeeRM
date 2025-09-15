@@ -23,8 +23,6 @@ on:
         required: false
         default: "5"
         type: string
-  schedule:
-    - cron: "15 14 * * MON"  # Run at 14:15 UTC (avoid peak 13:xx time) - 75 min after main workflow
   workflow_run:
     workflows: ["External Intel (News)"]
     types: [completed]
