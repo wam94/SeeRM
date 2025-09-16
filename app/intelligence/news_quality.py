@@ -10,7 +10,8 @@ import tldextract
 from dateutil import parser as date_parser
 
 from app.core.config import IntelligenceConfig
-from app.intelligence.models import Company, NewsItem
+from app.core.models import Company
+from app.intelligence.models import NewsItem
 
 # Baseline domain preferences. These can be extended via environment configuration.
 DEFAULT_TRUSTED_DOMAINS: Dict[str, float] = {
