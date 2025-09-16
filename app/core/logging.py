@@ -37,14 +37,7 @@ def add_correlation_id(logger, method_name, event_dict):
 
 
 def setup_logging(debug: bool = False, rich_output: bool = True) -> None:
-    """
-    Configure structured logging for the application.
-
-    Args:
-        debug: Enable debug level logging
-        rich_output: Use rich formatting for console output
-    """
-
+    """Configure structured logging for the application."""
     # Configure structlog
     processors = [
         structlog.contextvars.merge_contextvars,
@@ -75,7 +68,9 @@ def setup_logging(debug: bool = False, rich_output: bool = True) -> None:
         processors.append(structlog.processors.JSONRenderer())
 
         logging.basicConfig(
-            level=logging.DEBUG if debug else logging.INFO, format="%(message)s", stream=sys.stdout
+            level=logging.DEBUG if debug else logging.INFO,
+            format="%(message)s",
+            stream=sys.stdout,
         )
 
     structlog.configure(

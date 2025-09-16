@@ -18,11 +18,10 @@ logger = structlog.get_logger(__name__)
 
 
 class CSVProcessor:
-    """
-    Centralized CSV processing with validation and normalization.
-    """
+    """Centralized CSV processing with validation and normalization."""
 
     def __init__(self, strict_validation: bool = True):
+        """Initialise the processor with optional strict validation."""
         self.strict_validation = strict_validation
 
     def normalize_column_names(self, df: pd.DataFrame) -> Dict[str, str]:
@@ -257,7 +256,11 @@ class CSVProcessor:
                         logger.warning("Skipping invalid row", row_index=index, error=str(e))
                         continue
 
-            logger.info("CSV parsing completed", total_rows=len(df), valid_companies=len(companies))
+            logger.info(
+                "CSV parsing completed",
+                total_rows=len(df),
+                valid_companies=len(companies),
+            )
 
             return companies
 
@@ -352,14 +355,25 @@ class CSVProcessor:
                                 if from_status == 0 and to_status == 1:
                                     # Started using product
                                     product_starts.append(
-                                        {"callsign": company.callsign, "product": product_name}
+                                        {
+                                            "callsign": company.callsign,
+                                            "product": product_name,
+                                        }
                                     )
                                 elif from_status == 1 and to_status == 0:
                                     # Stopped using product
                                     product_stops.append(
-                                        {"callsign": company.callsign, "product": product_name}
+                                        {
+                                            "callsign": company.callsign,
+                                            "product": product_name,
+                                        }
                                     )
-                    except (json.JSONDecodeError, AttributeError, KeyError, TypeError) as e:
+                    except (
+                        json.JSONDecodeError,
+                        AttributeError,
+                        KeyError,
+                        TypeError,
+                    ) as e:
                         logger.debug(
                             "Failed to parse product flips for company",
                             callsign=getattr(company, "callsign", "unknown"),

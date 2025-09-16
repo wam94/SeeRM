@@ -1,10 +1,12 @@
+"""Render digest HTML using Jinja templates."""
+
 from __future__ import annotations
 
 from datetime import datetime
 
 from jinja2 import Template
 
-TEMPLATE = Template(
+TEMPLATE = Template(  # noqa: E501
     """
 <!doctype html>
 <html>
@@ -13,15 +15,28 @@ TEMPLATE = Template(
     <meta name="viewport" content="width=device-width">
     <title>{{ subject }}</title>
     <style>
-      body { font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; line-height: 1.45; color: #111; }
+      body {
+        font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+        line-height: 1.45;
+        color: #111;
+      }
       .h1 { font-size: 20px; font-weight: 700; margin: 0 0 8px; }
       .muted { color: #555; }
       table { border-collapse: collapse; width: 100%; }
       th, td { padding: 6px 8px; border-bottom: 1px solid #eee; text-align: left; }
-      .badge { display: inline-block; padding: 2px 6px; border-radius: 8px; background: #f0f0f0; font-size: 12px; }
+      .badge {
+        display: inline-block;
+        padding: 2px 6px;
+        border-radius: 8px;
+        background: #f0f0f0;
+        font-size: 12px;
+      }
       .good { background: #e6ffed; }
       .bad  { background: #ffeaea; }
-      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco,
+          Consolas, "Liberation Mono", monospace;
+      }
       .section { margin: 16px 0 24px; }
     </style>
   </head>
@@ -124,6 +139,7 @@ TEMPLATE = Template(
 
 
 def render_digest(context: dict) -> str:
+    """Render the digest HTML given a context dictionary."""
     now_date = datetime.utcnow().strftime("%Y-%m-%d")
     subject = context.get("subject", f"Client Weekly Digest — {now_date}")
     return TEMPLATE.render(now_date=now_date, subject=subject, **context)

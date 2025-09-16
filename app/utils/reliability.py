@@ -4,14 +4,13 @@ Reliability patterns for SeeRM application.
 Provides circuit breakers, retry logic, rate limiting, and other resilience patterns.
 """
 
-import asyncio
 import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import Enum
 from functools import wraps
-from typing import Any, Callable, Dict, Optional, Type, Union
+from typing import Any, Callable, Dict, Optional, Type
 
 import structlog
 from tenacity import (
@@ -22,7 +21,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from app.core.exceptions import CircuitBreakerError, ExternalServiceError, RateLimitError
+from app.core.exceptions import CircuitBreakerError, RateLimitError
 from app.core.exceptions import TimeoutError as SeeRMTimeoutError
 
 logger = structlog.get_logger(__name__)
@@ -50,6 +49,7 @@ class CircuitBreaker:
         recovery_timeout: float = 60.0,
         expected_exception: Type[Exception] = Exception,
     ):
+        """Initialise the circuit breaker with thresholds and expected exception."""
         self.name = name
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
@@ -77,7 +77,7 @@ class CircuitBreaker:
             result = func(*args, **kwargs)
             self._on_success()
             return result
-        except self.expected_exception as _e:
+        except self.expected_exception:
             self._on_failure()
             raise
 
@@ -133,6 +133,7 @@ class AdaptiveRateLimiter:
     """
 
     def __init__(self, calls_per_second: float = 2.0, burst_size: int = 5, adaptive: bool = True):
+        """Initialise rate limiter with base rate, burst size, and adaptive behaviour."""
         self.base_calls_per_second = calls_per_second
         self.current_calls_per_second = calls_per_second
         self.burst_size = burst_size
@@ -178,7 +179,7 @@ class AdaptiveRateLimiter:
         self.last_refill = now
 
     def on_success(self):
-        """Called after successful operation to potentially increase rate."""
+        """Handle a successful operation and potentially increase the rate."""
         if not self.adaptive:
             return
 
@@ -193,7 +194,7 @@ class AdaptiveRateLimiter:
             self.consecutive_successes = 0
 
     def on_error(self):
-        """Called after error to potentially decrease rate."""
+        """Handle an error and potentially decrease the rate."""
         if not self.adaptive:
             return
 
@@ -225,8 +226,7 @@ def with_circuit_breaker(
     recovery_timeout: float = 60.0,
     expected_exception: Type[Exception] = Exception,
 ):
-    """Decorator to add circuit breaker protection to functions."""
-
+    """Add circuit breaker protection to a function."""
     # Global circuit breaker registry
     if not hasattr(with_circuit_breaker, "_breakers"):
         with_circuit_breaker._breakers = {}
@@ -255,7 +255,7 @@ def with_retry(
     backoff_max: float = 60.0,
     retry_exceptions: tuple = (Exception,),
 ):
-    """Decorator to add retry logic with exponential backoff."""
+    """Add retry logic with exponential backoff."""
 
     def decorator(func: Callable) -> Callable:
         @retry(
@@ -283,7 +283,7 @@ def with_retry(
 
 
 def with_timeout(timeout_seconds: float):
-    """Decorator to add timeout protection to functions."""
+    """Add timeout protection to a function."""
 
     def decorator(func: Callable) -> Callable:
         @wraps(func)
@@ -321,6 +321,7 @@ class ParallelProcessor:
         rate_limiter: Optional[AdaptiveRateLimiter] = None,
         circuit_breaker: Optional[CircuitBreaker] = None,
     ):
+        """Initialise processor with worker count and reliability helpers."""
         self.max_workers = max_workers
         self.rate_limiter = rate_limiter
         self.circuit_breaker = circuit_breaker
@@ -379,6 +380,7 @@ class HealthChecker:
     """Health checking for external services."""
 
     def __init__(self):
+        """Initialise storage for registered health checks."""
         self.checks: Dict[str, Callable] = {}
         self.last_results: Dict[str, Dict[str, Any]] = {}
 
@@ -448,12 +450,7 @@ def reset_circuit_breaker(name: str) -> bool:
 
 
 def track_performance(operation_name: str):
-    """
-    Decorator to track performance metrics for operations.
-
-    Args:
-        operation_name: Name of the operation for logging
-    """
+    """Track performance metrics for the decorated operation."""
 
     def decorator(func: Callable) -> Callable:
         @wraps(func)
@@ -462,7 +459,9 @@ def track_performance(operation_name: str):
             operation_id = f"{operation_name}_{int(start_time)}"
 
             logger.info(
-                "Performance tracking started", operation=operation_name, operation_id=operation_id
+                "Performance tracking started",
+                operation=operation_name,
+                operation_id=operation_id,
             )
 
             try:

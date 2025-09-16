@@ -102,11 +102,13 @@ class Company(BaseEntity):
     @field_validator("callsign")
     @classmethod
     def validate_callsign(cls, v):
+        """Normalize callsign values."""
         return v.strip().lower()
 
     @field_validator("beneficial_owners", mode="before")
     @classmethod
     def parse_owners(cls, v):
+        """Parse lists of beneficial owners from strings."""
         if isinstance(v, str):
             try:
                 import json
@@ -119,6 +121,7 @@ class Company(BaseEntity):
 
     @model_validator(mode="after")
     def calculate_balance_delta(self):
+        """Populate balance delta from current/previous balances."""
         if (
             self.balance_delta is None
             and self.curr_balance is not None
@@ -137,7 +140,11 @@ class AccountMovement(BaseEntity):
 
     model_config = ConfigDict(
         json_schema_extra={
-            "example": {"callsign": "97labs", "percentage_change": 15.5, "balance_delta": 50000.0}
+            "example": {
+                "callsign": "97labs",
+                "percentage_change": 15.5,
+                "balance_delta": 50000.0,
+            }
         }
     )
 
@@ -160,6 +167,7 @@ class NewsItem(BaseEntity):
     @field_validator("published_at", mode="before")
     @classmethod
     def parse_published_at(cls, v):
+        """Normalize published dates to ISO strings."""
         if v is None or v == "":
             return None
         if isinstance(v, datetime):
@@ -169,6 +177,7 @@ class NewsItem(BaseEntity):
     @field_validator("url")
     @classmethod
     def validate_url(cls, v):
+        """Ensure URLs include a scheme."""
         if not v.startswith(("http://", "https://")):
             return f"https://{v}"
         return v
@@ -197,6 +206,7 @@ class CompanyIntelligence(BaseEntity):
     @field_validator("news_items", mode="before")
     @classmethod
     def validate_news_items(cls, v):
+        """Coerce dictionaries into NewsItem instances."""
         if isinstance(v, list):
             return [NewsItem(**item) if isinstance(item, dict) else item for item in v]
         return v or []
@@ -286,6 +296,7 @@ class BatchProcessingResult(BaseEntity):
 
     @model_validator(mode="after")
     def calculate_summary_stats(self):
+        """Aggregate summary statistics from individual results."""
         if self.results:
             self.total_items = sum(r.items_processed for r in self.results)
             self.successful_items = sum(r.items_successful for r in self.results)

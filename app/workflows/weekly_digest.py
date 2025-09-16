@@ -6,27 +6,23 @@ digest rendering, and email delivery.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
-
-import structlog
+from typing import Any, Dict, Optional
 
 from app.core.config import Settings, get_settings
-from app.core.exceptions import ConfigurationError, WorkflowError
+from app.core.exceptions import ConfigurationError
 from app.core.logging import get_logger, set_correlation_id
 from app.core.models import ProcessingResult, ProcessingStatus, WorkflowType
 from app.data.gmail_client import create_gmail_client
 from app.services.digest_service import create_digest_service
-from app.utils.reliability import health_checker
 
 logger = get_logger(__name__)
 
 
 class WeeklyDigestWorkflow:
-    """
-    Orchestrates the weekly digest generation workflow.
-    """
+    """Orchestrate the weekly digest generation workflow."""
 
     def __init__(self, settings: Optional[Settings] = None, correlation_id: Optional[str] = None):
+        """Initialise the workflow with settings and optional correlation ID."""
         self.settings = settings or get_settings()
         self.correlation_id = set_correlation_id(correlation_id)
 
@@ -84,7 +80,7 @@ class WeeklyDigestWorkflow:
                     logger.info("Notion integration configured with companies database")
                 else:
                     logger.warning(
-                        "Notion API key provided but companies_db_id not set - Notion sync will be skipped"
+                        "Notion API key provided but companies database not set; skipping sync"
                     )
 
             logger.info("Configuration validation passed")
@@ -120,13 +116,20 @@ class WeeklyDigestWorkflow:
                 ),
             }
 
-            logger.info("Health checks completed", overall_status=health_results["overall_status"])
+            logger.info(
+                "Health checks completed",
+                overall_status=health_results["overall_status"],
+            )
 
             return health_results
 
         except Exception as e:
             logger.error("Health checks failed", error=str(e))
-            return {"overall_status": "unhealthy", "error": str(e), "error_type": type(e).__name__}
+            return {
+                "overall_status": "unhealthy",
+                "error": str(e),
+                "error_type": type(e).__name__,
+            }
 
     def run(
         self,
@@ -188,7 +191,7 @@ class WeeklyDigestWorkflow:
                     correlation_id=self.correlation_id,
                     companies_processed=result.items_processed,
                     duration_seconds=result.duration_seconds,
-                    new_accounts=result.data.get("new_callsigns", []) if result.data else [],
+                    new_accounts=(result.data.get("new_callsigns", []) if result.data else []),
                 )
             else:
                 logger.error(
@@ -242,7 +245,9 @@ class WeeklyDigestWorkflow:
 
         try:
             result = self.run(
-                gmail_query=gmail_query, max_messages=max_messages, skip_health_checks=True
+                gmail_query=gmail_query,
+                max_messages=max_messages,
+                skip_health_checks=True,
             )
 
             dry_run_results = {
@@ -321,7 +326,9 @@ def run_weekly_digest_workflow(
 
 
 def dry_run_weekly_digest_workflow(
-    gmail_query: Optional[str] = None, max_messages: int = 5, correlation_id: Optional[str] = None
+    gmail_query: Optional[str] = None,
+    max_messages: int = 5,
+    correlation_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Perform a dry run of the weekly digest workflow.
