@@ -1,37 +1,23 @@
-"""
-Performance tests for intelligence reports optimizations.
+"""Performance tests for intelligence reports optimizations."""
 
-Tests caching, parallel processing, memory optimization, and connection pooling.
-"""
-
-import sys
 import time
-from typing import Any, Dict, List
-from unittest.mock import MagicMock, Mock, patch
+from typing import Dict, List
+from unittest.mock import Mock, patch
 
 import pytest
 
-# Add parent directory to path for imports
-sys.path.insert(0, "../")
-
 from app.intelligence.cache import IntelligenceCache, get_cache
-from app.intelligence.connection_pool import ConnectionPool, prewarm_api_connections
-from app.intelligence.models import Movement, MovementType, NewsItem, NewsType
-from app.intelligence.optimized_models import (
-    OptimizedMovement,
-    OptimizedNewsItem,
-    convert_to_optimized_news_item,
-    convert_to_optimized_movement,
-    get_memory_usage,
-)
+from app.intelligence.connection_pool import ConnectionPool
+from app.intelligence.models import Movement, MovementType, NewsType
+from app.intelligence.optimized_models import OptimizedNewsItem, convert_to_optimized_movement
 from app.intelligence.parallel_processor import ParallelProcessor
 
 
 class TestCachePerformance:
-    """Test caching layer performance."""
+    """Exercise caching layer performance."""
 
     def test_cache_hit_performance(self):
-        """Test that cache hits are significantly faster than misses."""
+        """Ensure cache hits are significantly faster than misses."""
         cache = IntelligenceCache(max_size=100)
 
         # Simulate expensive operation
@@ -59,7 +45,7 @@ class TestCachePerformance:
         assert stats["misses"] == 0
 
     def test_cache_eviction(self):
-        """Test LRU eviction when cache is full."""
+        """Ensure LRU eviction happens when the cache is full."""
         cache = IntelligenceCache(max_size=3)
 
         # Fill cache
@@ -84,10 +70,10 @@ class TestCachePerformance:
 
 
 class TestParallelProcessing:
-    """Test parallel processing performance."""
+    """Exercise parallel processing performance."""
 
     def test_parallel_fetch_performance(self):
-        """Test that parallel fetching is faster than sequential."""
+        """Ensure parallel fetching outpaces sequential fetching."""
         processor = ParallelProcessor(max_workers=5)
 
         # Mock fetch function with delay
@@ -119,7 +105,7 @@ class TestParallelProcessing:
         processor.shutdown()
 
     def test_batch_classification(self):
-        """Test batch classification with parallel processing."""
+        """Validate batch classification using parallel processing."""
         processor = ParallelProcessor(max_workers=3)
 
         # Create mock news items
@@ -149,10 +135,10 @@ class TestParallelProcessing:
 
 
 class TestMemoryOptimization:
-    """Test memory-optimized models."""
+    """Validate memory-optimized models."""
 
     def test_slots_memory_efficiency(self):
-        """Test that slotted classes use less memory."""
+        """Ensure slotted classes use less memory."""
         # Create optimized news item
         optimized_item = OptimizedNewsItem(
             title="Test News",
@@ -179,10 +165,8 @@ class TestMemoryOptimization:
         with pytest.raises(AttributeError):
             optimized_item.new_attribute = "should fail"
 
-        print(f"✓ Optimized model uses __slots__ for memory efficiency")
-
     def test_conversion_utilities(self):
-        """Test conversion between standard and optimized models."""
+        """Confirm conversion between standard and optimized models."""
         # Create standard movement
         standard = Movement(
             callsign="TEST",
@@ -210,10 +194,10 @@ class TestMemoryOptimization:
 
 
 class TestConnectionPooling:
-    """Test connection pooling and pre-warming."""
+    """Validate connection pooling and pre-warming."""
 
     def test_session_reuse(self):
-        """Test that sessions are reused for the same host."""
+        """Ensure sessions are reused for the same host."""
         pool = ConnectionPool()
 
         # Get session for same host twice
@@ -263,14 +247,14 @@ class TestConnectionPooling:
 
 
 class TestIntegrationPerformance:
-    """Integration tests for overall performance improvements."""
+    """Validate overall performance improvements."""
 
     @patch("app.intelligence.data_aggregator.EnhancedNotionClient")
     @patch("app.intelligence.data_aggregator.EnhancedGmailClient")
     def test_cached_aggregator_performance(self, mock_gmail, mock_notion):
         """Test that cached data aggregator is faster on repeated calls."""
-        from app.intelligence.data_aggregator import IntelligenceAggregator
         from app.core.config import Settings
+        from app.intelligence.data_aggregator import IntelligenceAggregator
 
         # Setup mocks
         mock_notion_instance = Mock()
@@ -297,14 +281,15 @@ class TestIntegrationPerformance:
 
         # First call - should hit API
         start = time.time()
-        profile1 = aggregator.get_company_profile("TEST")
+        aggregator.get_company_profile("TEST")
         first_call_time = time.time() - start
 
         # Second call - should hit cache
         start = time.time()
-        profile2 = aggregator.get_company_profile("TEST")
+        cached_result = aggregator.get_company_profile("TEST")
         second_call_time = time.time() - start
 
+        assert cached_result is not None
         # Cache hit should be faster (use a conservative, stable threshold)
         assert second_call_time < first_call_time
 
@@ -314,7 +299,7 @@ class TestIntegrationPerformance:
 
 @pytest.fixture(autouse=True)
 def cleanup():
-    """Cleanup after each test."""
+    """Clean up cache and connection pool after each test."""
     yield
     # Clear cache
     cache = get_cache()
@@ -323,38 +308,3 @@ def cleanup():
     # Close connection pool
     pool = ConnectionPool()
     pool.close_all()
-
-
-if __name__ == "__main__":
-    # Run performance benchmarks
-    print("Running performance tests...")
-
-    # Test cache performance
-    print("\n=== Cache Performance ===")
-    cache_test = TestCachePerformance()
-    cache_test.test_cache_hit_performance()
-    print("✓ Cache hits are 100x+ faster than misses")
-
-    # Test parallel processing
-    print("\n=== Parallel Processing ===")
-    parallel_test = TestParallelProcessing()
-    parallel_test.test_parallel_fetch_performance()
-    print("✓ Parallel fetching is 2x+ faster than sequential")
-
-    # Test memory optimization
-    print("\n=== Memory Optimization ===")
-    memory_test = TestMemoryOptimization()
-    memory_test.test_slots_memory_efficiency()
-    print("✓ Optimized models save 20%+ memory")
-
-    # Test connection pooling
-    print("\n=== Connection Pooling ===")
-    connection_test = TestConnectionPooling()
-    connection_test.test_session_reuse()
-    print("✓ Sessions are properly reused")
-
-    # Cleanup
-    pool = ConnectionPool()
-    pool.close_all()
-
-    print("\n✅ All performance tests passed!")
