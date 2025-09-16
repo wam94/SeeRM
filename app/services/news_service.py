@@ -34,11 +34,10 @@ logger = structlog.get_logger(__name__)
 
 
 class NewsCollector:
-    """
-    Collects news from multiple sources with reliability patterns.
-    """
+    """Collect news from multiple sources with reliability patterns."""
 
     def __init__(self, config: IntelligenceConfig):
+        """Initialise collector with configuration and quality scorer."""
         self.config = config
         self.http_client = httpx.Client(timeout=25.0, follow_redirects=True)
         self.quality_scorer = NewsQualityScorer(config)
@@ -442,9 +441,7 @@ class NewsCollector:
 
 
 class NewsService:
-    """
-    Main service for news intelligence processing.
-    """
+    """Coordinate the end-to-end news intelligence workflow."""
 
     def __init__(
         self,
@@ -452,6 +449,7 @@ class NewsService:
         notion_client: Optional[EnhancedNotionClient],
         config: IntelligenceConfig,
     ):
+        """Create the service with required dependencies."""
         self.gmail_client = gmail_client
         self.notion_client = notion_client
         self.config = config
@@ -802,15 +800,5 @@ def create_news_service(
     notion_client: Optional[EnhancedNotionClient],
     config: IntelligenceConfig,
 ) -> NewsService:
-    """
-    Factory function to create news service.
-
-    Args:
-        gmail_client: Gmail client instance
-        notion_client: Optional Notion client instance
-        config: Intelligence configuration
-
-    Returns:
-        Configured NewsService
-    """
+    """Create a `NewsService` configured with required dependencies."""
     return NewsService(gmail_client, notion_client, config)
