@@ -1,5 +1,5 @@
 """
-Weekly News Digest Report Generator
+Weekly News Digest Report Generator.
 
 Creates weekly bulletized news summaries categorized by type
 and organized by company for portfolio intelligence.
@@ -36,6 +36,7 @@ class WeeklyNewsReport:
         notion_client: Optional[EnhancedNotionClient] = None,
         settings: Optional[Settings] = None,
     ):
+        """Initialize the weekly news report generator."""
         self.aggregator = aggregator
         self.notion_client = notion_client
         self.settings = settings or Settings()
@@ -197,13 +198,18 @@ class WeeklyNewsReport:
             )
 
             for item in digest.notable_items[:10]:  # Top 10
+                news_type_label = item.news_type.value.replace("_", " ").title()
+                companies_str = ", ".join(item.company_mentions)
                 html_parts.extend(
                     [
-                        '<div style="margin-bottom: 15px; padding: 10px; border-left: 3px solid #007acc;">',
+                        (
+                            '<div style="margin-bottom: 15px; padding: 10px; '
+                            'border-left: 3px solid #007acc;">'
+                        ),
                         f'<h4><a href="{item.url}">{item.title}</a></h4>',
                         f"<p><strong>Source:</strong> {item.source} | ",
-                        f'<strong>Type:</strong> {item.news_type.value.replace("_", " ").title()} | ',
-                        f'<strong>Companies:</strong> {", ".join(item.company_mentions)}</p>',
+                        f"<strong>Type:</strong> {news_type_label} | ",
+                        f"<strong>Companies:</strong> {companies_str}</p>",
                         "</div>",
                     ]
                 )
@@ -275,11 +281,12 @@ class WeeklyNewsReport:
             md_parts.extend(["## Notable Items", ""])
 
             for item in digest.notable_items[:10]:
+                news_type_label = item.news_type.value.replace("_", " ").title()
                 md_parts.extend(
                     [
                         f"### [{item.title}]({item.url})",
-                        f'**Source:** {item.source} | **Type:** {item.news_type.value.replace("_", " ").title()}',
-                        f'**Companies:** {", ".join(item.company_mentions)}',
+                        f"**Source:** {item.source} | **Type:** {news_type_label}",
+                        f"**Companies:** {', '.join(item.company_mentions)}",
                         "",
                     ]
                 )
@@ -340,9 +347,18 @@ class WeeklyNewsReport:
                 subject=subject,
             )
 
+            # Resolve recipients: prefer digest settings, fallback to Gmail user
+            to_recipient = self.settings.digest.to or self.settings.gmail.user
+            cc_recipients = self.settings.digest.cc
+            bcc_recipients = self.settings.digest.bcc
+
             # Attempt delivery with automatic retry and fallback
             delivery_result = email_delivery.send_with_fallback(
-                to=self.settings.gmail.user, subject=subject, html=email_content
+                to=to_recipient,
+                subject=subject,
+                html=email_content,
+                cc=cc_recipients,
+                bcc=bcc_recipients,
             )
 
             # Update report based on delivery method
@@ -438,7 +454,6 @@ class WeeklyNewsReport:
 
     def _create_email_bulletin(self, digest: WeeklyNewsDigest) -> str:
         """Create scannable intelligence digest optimized for executive review."""
-
         # Get category display information
         from app.intelligence.news_classifier import create_news_classifier
 
@@ -487,7 +502,8 @@ class WeeklyNewsReport:
                 info = category_info.get(category, {"emoji": "📰", "title": category.value.title()})
                 companies = companies_by_category[category]
 
-                # Create company links (HTML links for companies with page URLs, plain text for others)
+                # Create company links
+                # (HTML links for companies with page URLs, plain text for others)
                 company_links = []
                 for company in companies:
                     page_url = company_urls.get(company)
@@ -505,11 +521,12 @@ class WeeklyNewsReport:
                     else:
                         company_links.append(html.escape(company))
 
+                companies_str = ", ".join(company_links)
                 parts.append(
                     (
                         f"<p><strong>{info['emoji']} {info['title'].upper()} "
                         f"({len(companies)} companies)</strong><br>"
-                        f"• {', '.join(company_links)}</p>"
+                        f"• {companies_str}</p>"
                     )
                 )
                 active_categories.append(category)
@@ -538,7 +555,10 @@ class WeeklyNewsReport:
                 f"• {len(set().union(*companies_by_category.values()))} companies with news<br>",
                 f"• {digest.total_items} total intelligence items</p>",
                 "",
-                "<p><small>Full details available in Notion • Generated by SeeRM Intelligence Reports</small></p>",
+                (
+                    "<p><small>Full details available in Notion • "
+                    "Generated by SeeRM Intelligence Reports</small></p>"
+                ),
             ]
         )
 

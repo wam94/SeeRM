@@ -33,6 +33,7 @@ SeeRM is an enterprise-grade client intelligence platform that automates portfol
 - [Testing](#-testing)
 - [Deployment](#-deployment)
 - [Contributing](#-contributing)
+ - [Releases](#-releases)
 
 ## 🏗️ System Overview
 
@@ -504,6 +505,24 @@ pytest tests/test_digest_service.py::TestPerformanceBenchmarks -v
 - **[Archive Documentation](./archive/)** - Legacy system references
 - **[Test Documentation](./tests/)** - Testing guide and examples
 - **API Documentation** - Generated from docstrings (run `pydoc app`)
+
+## 🏷️ Releases
+
+We publish wheels to GitHub Releases. Two options:
+
+- Tag-driven release (recommended):
+  1. Bump `version` in `pyproject.toml`.
+  2. Create a tag: `git tag v0.1.0 && git push origin v0.1.0`.
+  3. GitHub Actions builds the wheel/sdist and attaches them to the new Release.
+
+- Manual release via workflow_dispatch:
+  1. Open GitHub → Actions → `Release` workflow → `Run workflow`.
+  2. Provide the `tag` (e.g., `v0.1.0`) and optionally mark as prerelease.
+  3. The workflow builds artifacts and creates/updates the Release.
+
+Artifacts:
+- Wheel and sdist appear under the Release assets.
+- Consumers can install with `pipx install https://github.com/<org>/<repo>/releases/download/vX.Y.Z/seerm-X.Y.Z-py3-none-any.whl`.
 
 ## 🔐 Security & Privacy
 
