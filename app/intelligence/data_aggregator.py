@@ -40,6 +40,7 @@ class IntelligenceAggregator:
         notion_client: Optional[EnhancedNotionClient] = None,
         settings: Optional[Settings] = None,
     ):
+        """Create the aggregator and prepare shared services."""
         self.gmail_client = gmail_client
         self.notion_client = notion_client
         self.settings = settings or Settings()

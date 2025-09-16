@@ -27,7 +27,7 @@ from app.utils.reliability import (
 
 logger = structlog.get_logger(__name__)
 
-TOKEN_URI = "https://oauth2.googleapis.com/token"
+TOKEN_URI = "https://oauth2.googleapis.com/token"  # nosec B105
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.send",
@@ -35,9 +35,7 @@ SCOPES = [
 
 
 class EnhancedGmailClient:
-    """
-    Enhanced Gmail client with reliability patterns and structured error handling.
-    """
+    """Enhanced Gmail client with reliability patterns and structured error handling."""
 
     def __init__(
         self,
@@ -45,6 +43,7 @@ class EnhancedGmailClient:
         rate_limiter: Optional[AdaptiveRateLimiter] = None,
         dry_run: bool = False,
     ):
+        """Initialise the client with configuration and optional rate limiter."""
         self.config = config
         self.rate_limiter = rate_limiter or default_rate_limiter
         self.dry_run = dry_run
@@ -141,7 +140,11 @@ class EnhancedGmailClient:
 
             messages = response.get("messages", [])
 
-            logger.info("Gmail search completed", messages_found=len(messages), query=search_query)
+            logger.info(
+                "Gmail search completed",
+                messages_found=len(messages),
+                query=search_query,
+            )
 
             self.rate_limiter.on_success()
             return messages
@@ -149,7 +152,10 @@ class EnhancedGmailClient:
         except HttpError as e:
             error_msg = f"Gmail API error during search: {e}"
             logger.error(
-                "Gmail search failed", error=str(e), status_code=e.resp.status, query=search_query
+                "Gmail search failed",
+                error=str(e),
+                status_code=e.resp.status,
+                query=search_query,
             )
             self.rate_limiter.on_error()
             raise GmailError(error_msg, details={"status_code": e.resp.status})
@@ -195,7 +201,10 @@ class EnhancedGmailClient:
                         {
                             "filename": "mock_data.csv",
                             "mimeType": "text/csv",
-                            "body": {"attachmentId": f"attachment_{message_id}", "size": 1000},
+                            "body": {
+                                "attachmentId": f"attachment_{message_id}",
+                                "size": 1000,
+                            },
                         }
                     ]
                 },
@@ -229,7 +238,8 @@ class EnhancedGmailClient:
             )
             self.rate_limiter.on_error()
             raise GmailError(
-                error_msg, details={"message_id": message_id, "status_code": e.resp.status}
+                error_msg,
+                details={"message_id": message_id, "status_code": e.resp.status},
             )
 
         except Exception as e:
@@ -286,7 +296,11 @@ class EnhancedGmailClient:
                     "CALLSIGN": ["test1", "test2", "newco"],
                     "DBA": ["Test Company 1", "Test Company 2", "New Company"],
                     "DOMAIN_ROOT": ["test1.com", "test2.com", "newco.com"],
-                    "BENEFICIAL_OWNERS": ['["John Doe"]', '["Jane Smith"]', '["Bob Wilson"]'],
+                    "BENEFICIAL_OWNERS": [
+                        '["John Doe"]',
+                        '["Jane Smith"]',
+                        '["Bob Wilson"]',
+                    ],
                     "CURR_BALANCE": [100000, 80000, 50000],
                     "PREV_BALANCE": [90000, 100000, 0],
                     "BALANCE_PCT_DELTA_PCT": [11.11, -20.0, 0.0],
@@ -325,7 +339,11 @@ class EnhancedGmailClient:
                         self.service.users()
                         .messages()
                         .attachments()
-                        .get(userId=self.config.user, messageId=message["id"], id=attach_id)
+                        .get(
+                            userId=self.config.user,
+                            messageId=message["id"],
+                            id=attach_id,
+                        )
                         .execute()
                     )
 
@@ -346,7 +364,9 @@ class EnhancedGmailClient:
                 continue
             except Exception as e:
                 logger.error(
-                    "Unexpected error downloading attachment", filename=filename, error=str(e)
+                    "Unexpected error downloading attachment",
+                    filename=filename,
+                    error=str(e),
                 )
                 continue
 
@@ -384,13 +404,22 @@ class EnhancedGmailClient:
             raise ValidationError(error_msg)
 
     @with_circuit_breaker(
-        name="gmail_send", failure_threshold=3, recovery_timeout=60.0, expected_exception=GmailError
+        name="gmail_send",
+        failure_threshold=3,
+        recovery_timeout=60.0,
+        expected_exception=GmailError,
     )
     @with_retry(
-        max_attempts=2, retry_exceptions=(HttpError,)  # Be more conservative with sending emails
+        max_attempts=2,
+        retry_exceptions=(HttpError,),  # Be more conservative with sending emails
     )
     def send_html_email(
-        self, to: str, subject: str, html: str, cc: Optional[str] = None, bcc: Optional[str] = None
+        self,
+        to: str,
+        subject: str,
+        html: str,
+        cc: Optional[str] = None,
+        bcc: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Send HTML email via Gmail API.
@@ -508,7 +537,11 @@ class EnhancedGmailClient:
             }
 
         except Exception as e:
-            return {"status": "unhealthy", "error": str(e), "error_type": type(e).__name__}
+            return {
+                "status": "unhealthy",
+                "error": str(e),
+                "error_type": type(e).__name__,
+            }
 
     def get_latest_csv_from_query(
         self, query: Optional[str] = None, max_messages: int = 5
@@ -555,7 +588,9 @@ class EnhancedGmailClient:
 
                 except Exception as e:
                     logger.warning(
-                        "Failed to process message for CSV", message_id=msg_info["id"], error=str(e)
+                        "Failed to process message for CSV",
+                        message_id=msg_info["id"],
+                        error=str(e),
                     )
                     continue
 
@@ -568,17 +603,9 @@ class EnhancedGmailClient:
 
 
 def create_gmail_client(
-    config: GmailConfig, rate_limiter: Optional[AdaptiveRateLimiter] = None, dry_run: bool = False
+    config: GmailConfig,
+    rate_limiter: Optional[AdaptiveRateLimiter] = None,
+    dry_run: bool = False,
 ) -> EnhancedGmailClient:
-    """
-    Factory function to create Gmail client.
-
-    Args:
-        config: Gmail configuration
-        rate_limiter: Optional rate limiter instance
-        dry_run: Whether to run in dry-run mode
-
-    Returns:
-        Configured Gmail client
-    """
+    """Create an `EnhancedGmailClient` configured from environment settings."""
     return EnhancedGmailClient(config, rate_limiter, dry_run)

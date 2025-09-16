@@ -143,8 +143,11 @@ class RobustEmailDelivery:
                     root_exc = e.last_attempt.exception()
                     if root_exc:
                         root_error = root_exc
-            except Exception:
-                pass
+            except Exception as fallback_exc:  # noqa: BLE001
+                logger.debug(
+                    "Failed to unwrap RetryError",
+                    error=str(fallback_exc),
+                )
 
             logger.warning(
                 "Email delivery failed after retries",

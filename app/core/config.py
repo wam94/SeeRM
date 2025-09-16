@@ -86,6 +86,13 @@ class IntelligenceConfig(BaseSettings):
     openai_model: str = Field(default="gpt-4o-mini", alias="OPENAI_CHAT_MODEL")
     openai_temperature: Optional[float] = Field(default=0.2, alias="OPENAI_TEMPERATURE")
 
+    # News quality tuning
+    trusted_domains: List[str] = Field(default_factory=list, alias="NEWS_TRUSTED_DOMAINS")
+    blocked_domains: List[str] = Field(default_factory=list, alias="NEWS_BLOCKED_DOMAINS")
+    demoted_domains: List[str] = Field(default_factory=list, alias="NEWS_DEMOTED_DOMAINS")
+    positive_keywords: List[str] = Field(default_factory=list, alias="NEWS_POSITIVE_KEYWORDS")
+    negative_keywords: List[str] = Field(default_factory=list, alias="NEWS_NEGATIVE_KEYWORDS")
+
     # Intelligence Reports configuration
     reports_enabled: bool = Field(default=True, alias="INTELLIGENCE_REPORTS_ENABLED")
     default_report_days: int = Field(default=7, alias="INTELLIGENCE_DEFAULT_REPORT_DAYS")
@@ -114,6 +121,20 @@ class IntelligenceConfig(BaseSettings):
         if isinstance(v, str):
             return v.lower() in ("1", "true", "yes")
         return bool(v)
+
+    @field_validator(
+        "trusted_domains",
+        "blocked_domains",
+        "demoted_domains",
+        "positive_keywords",
+        "negative_keywords",
+        mode="before",
+    )
+    @classmethod
+    def parse_quality_lists(cls, v):  # noqa: D102
+        if isinstance(v, str):
+            return [item.strip().lower() for item in v.split(",") if item.strip()]
+        return v or []
 
     model_config = SettingsConfigDict(env_prefix="", extra="ignore")
 

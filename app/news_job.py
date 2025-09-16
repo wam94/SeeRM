@@ -1,11 +1,16 @@
 # app/news_job.py
+"""Legacy news collection CLI and workflow entry-point."""
+
 from __future__ import annotations
 
 import functools
 import io
+import logging
 import os
 import re
+import tempfile
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 import feedparser
@@ -13,7 +18,8 @@ import pandas as pd
 import requests
 import tldextract
 
-from app.core.config import NotionConfig
+from app.core.config import IntelligenceConfig, NotionConfig
+from app.core.models import Company
 from app.data.notion_client import EnhancedNotionClient
 from app.gmail_client import (
     build_service,
@@ -23,6 +29,7 @@ from app.gmail_client import (
     send_html_email,
 )
 from app.intelligence.models import NewsItem, NewsType
+from app.intelligence.news_quality import NewsQualityScorer
 from app.intelligence.seen_store import NotionNewsSeenStore
 from app.notion_client import get_all_companies_domain_data, set_latest_intel, upsert_company_page
 from app.performance_utils import (
@@ -36,6 +43,13 @@ from app.performance_utils import (
 # ---------------- Notion helpers for new company detection ----------------
 
 NOTION_API = "https://api.notion.com/v1"
+logger = logging.getLogger(__name__)
+
+
+@functools.lru_cache(maxsize=1)
+def get_quality_scorer() -> NewsQualityScorer:
+    """Return shared quality scorer for news weighting."""
+    return NewsQualityScorer(IntelligenceConfig())
 
 
 def get_notion_headers():
@@ -97,10 +111,7 @@ def ensure_company_page(
     domain: Optional[str] = None,
     company: Optional[str] = None,
 ) -> tuple[str, bool]:
-    """
-    Returns (page_id, created_flag).
-    Creates a Companies page if missing; sets Website/Domain when present in schema.
-    """
+    """Return `(page_id, created_flag)` after ensuring a company page exists."""
     title_prop = _companies_title_prop(companies_db_id)
     pid = _find_company_page(companies_db_id, title_prop, callsign)
     created = False
@@ -168,7 +179,8 @@ def fetch_csv_by_subject(service, user: str, subject: str) -> Optional[pd.DataFr
             _, data = atts[0]
             try:
                 return pd.read_csv(io.BytesIO(data))
-            except Exception:
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to parse CSV attachment", error=str(exc))
                 continue
     return None
 
@@ -177,6 +189,7 @@ def fetch_csv_by_subject(service, user: str, subject: str) -> Optional[pd.DataFr
 
 
 def build_queries(
+    callsign: str,
     dba: Optional[str],
     website: Optional[str],
     owners: Optional[List[str]],
@@ -184,39 +197,43 @@ def build_queries(
     aka_names: Optional[str] = None,
     tags: Optional[str] = None,
 ) -> List[str]:
+    """Construct search queries tailored to a company."""
+    scorer = get_quality_scorer()
+
+    company = Company(
+        callsign=(callsign or dba or "unknown"),
+        dba=dba,
+        website=website,
+        domain_root=domain_root,
+        blog_url=None,
+        beneficial_owners=owners or [],
+        aka_names=aka_names,
+        industry_tags=tags,
+    )
+
     names: List[str] = []
-    if dba:
-        names.append(str(dba).strip())
-    if aka_names:
-        names.extend([n.strip() for n in str(aka_names).split(",") if n.strip()])
-    names = [n for n in names if n]
+    if company.dba:
+        names.append(company.dba)
+    if company.callsign:
+        names.append(company.callsign.upper())
+    if company.aka_names:
+        names.extend([n.strip() for n in company.aka_names.split(",") if n.strip()])
+    if not names:
+        names.append(company.callsign)
+
     domains: List[str] = []
-    if domain_root:
-        domains.append(domain_root)
-    if website:
-        w = re.sub(r"^https?://", "", website.strip().lower())
+    if company.domain_root:
+        domains.append(company.domain_root)
+    if company.website:
+        w = re.sub(r"^https?://", "", company.website.strip().lower())
         w = re.sub(r"^www\.", "", w).split("/")[0]
         ext = tldextract.extract(w)
         if ext.registered_domain:
             domains.append(ext.registered_domain)
 
-    Q: List[str] = []
-    if domains:
-        for d in set(domains):
-            Q.append(f"site:{d} (launch OR announce OR funding OR partnership)")
-    if names:
-        for n in set(names):
-            Q.append(f'"{n}" (launch OR product OR partnership OR funding OR raises)')
-    if owners:
-        for p in owners[:3]:
-            p = p.strip()
-            if p:
-                query = (
-                    f'"{p}" ("{names[0]}" OR site:{domains[0] if domains else ""}) '
-                    f"(CEO OR founder OR CTO OR CFO OR raises OR interview)"
-                )
-                Q.append(query)
-    return [q for q in Q if q.strip()]
+    domains = [d.lower() for d in domains if d]
+
+    return scorer.build_query_variants(company, domains, names)
 
 
 # ---------------- RSS / Feeds ----------------
@@ -266,7 +283,8 @@ def try_rss_feeds(site: Optional[str]) -> tuple[List[Dict[str, Any]], List[str]]
                 successful_feeds.append(successful_url)
                 # Stop after first successful feed to avoid duplicates
                 break
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to fetch RSS feed", url=u, error=str(exc))
             continue
     return items, successful_feeds
 
@@ -277,6 +295,7 @@ def try_rss_feeds(site: Optional[str]) -> tuple[List[Dict[str, Any]], List[str]]
 def google_cse_search(
     api_key: str, cse_id: str, q: str, date_restrict: Optional[str] = None, num: int = 5
 ) -> List[Dict[str, Any]]:
+    """Query Google CSE and return simplified result dictionaries."""
     if not (api_key and cse_id and q):
         return []
     params = {"key": api_key, "cx": cse_id, "q": q, "num": min(10, max(1, num))}
@@ -316,6 +335,7 @@ def google_cse_search(
 def dedupe(
     items: List[Dict[str, Any]], key: Callable[[Dict[str, Any]], Any]
 ) -> List[Dict[str, Any]]:
+    """Deduplicate items based on the value returned by `key`."""
     seen = set()
     out: List[Dict[str, Any]] = []
     for it in items:
@@ -328,6 +348,7 @@ def dedupe(
 
 
 def _dict_to_news_item(data: Dict[str, Any], callsign: str) -> NewsItem:
+    """Convert stored dictionary data into a `NewsItem`."""
     url = (data.get("url") or "").strip()
     source = (data.get("source") or "").strip()
     if not source and url:
@@ -337,7 +358,8 @@ def _dict_to_news_item(data: Dict[str, Any], callsign: str) -> NewsItem:
     news_type_value = data.get("news_type") or data.get("type")
     try:
         news_type = NewsType(news_type_value)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Falling back to default news type", value=news_type_value, error=str(exc))
         news_type = NewsType.OTHER_NOTABLE
 
     summary = data.get("summary")
@@ -358,6 +380,7 @@ def _dict_to_news_item(data: Dict[str, Any], callsign: str) -> NewsItem:
 
 
 def _news_item_to_link(item: NewsItem) -> str:
+    """Return a markdown bullet linking to the news item."""
     return f"• [{item.title}]({item.url})" if item.url else f"• {item.title}"
 
 
@@ -379,7 +402,12 @@ def within_days(published_at: Any, days: int) -> bool:
             else:
                 return True
         return (datetime.utcnow() - dt) <= timedelta(days=int(days))
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "Failed to parse date for recency comparison",
+            value=published_at,
+            error=str(exc),
+        )
         return True
 
 
@@ -387,6 +415,7 @@ def within_days(published_at: Any, days: int) -> bool:
 
 
 def _source_from_url(url: str | None) -> str:
+    """Extract a reasonable source name from a URL."""
     if not url:
         return ""
     ext = tldextract.extract(url)
@@ -398,6 +427,7 @@ def _source_from_url(url: str | None) -> str:
 
 
 def _iso_date(dt_or_str) -> str:
+    """Normalize various date formats to YYYY-MM-DD strings."""
     if not dt_or_str:
         return ""
     if isinstance(dt_or_str, datetime):
@@ -409,12 +439,13 @@ def _iso_date(dt_or_str) -> str:
         if len(parts) >= 3:
             y, m, d = parts[:3]
             return datetime(y, m, d).strftime("%Y-%m-%d")
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Failed to normalise date", value=s, error=str(exc))
     return s
 
 
 def normalize_news_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Normalize raw search results into consistent dictionaries."""
     out: List[Dict[str, Any]] = []
     for it in items:
         url = (it.get("url") or "").strip()
@@ -461,13 +492,14 @@ def collect_recent_news(
             rss_items, successful_feeds = try_rss_feeds(site_for_rss)
             items += rss_items
             source_metadata["rss_feeds"].extend(successful_feeds)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RSS collection failed", site=site_for_rss, error=str(exc))
 
     # Google CSE (site + name queries + optional owners) - CONCURRENT
     disable_cse = str(os.getenv("CSE_DISABLE", "")).lower() in ("1", "true", "yes")
     if (g_api_key and g_cse_id) and not disable_cse:
         queries = build_queries(
+            org.get("callsign") or "",
             org.get("dba"),
             org.get("website"),
             org.get("owners"),
@@ -505,14 +537,53 @@ def collect_recent_news(
     items = [
         x for x in items if within_days(x.get("published_at", datetime.utcnow()), lookback_days)
     ]
-    items = normalize_news_items(items)
-    return items[:max_items], source_metadata
+    normalized = normalize_news_items(items)
+
+    company_model = Company(
+        callsign=(org.get("callsign") or org.get("dba") or "unknown"),
+        dba=org.get("dba"),
+        website=org.get("website"),
+        domain_root=org.get("domain_root"),
+        blog_url=org.get("blog_url"),
+        beneficial_owners=org.get("owners") or [],
+        aka_names=org.get("aka_names"),
+        industry_tags=org.get("industry_tags"),
+    )
+
+    scorer = get_quality_scorer()
+    news_models = [
+        NewsItem(
+            title=item["title"] or item["url"],
+            url=item["url"],
+            source=item["source"],
+            published_at=item.get("published_at"),
+            news_type=NewsType.OTHER_NOTABLE,
+            relevance_score=0.0,
+            sentiment=None,
+            company_mentions=[company_model.callsign.upper()],
+        )
+        for item in normalized
+    ]
+
+    ranked_items = scorer.rank_items(company_model, news_models, max_items)
+    filtered = [
+        {
+            "url": item.url,
+            "title": item.title,
+            "source": item.source,
+            "published_at": item.published_at,
+        }
+        for item in ranked_items
+    ]
+
+    return filtered, source_metadata
 
 
 # ---------------- LLM summary (optional) ----------------
 
 
 def _openai_summarize(text: str) -> Optional[str]:
+    """Generate a short summary using OpenAI if credentials are available."""
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key or not text:
         return None
@@ -549,10 +620,12 @@ def _openai_summarize(text: str) -> Optional[str]:
         try:
             out = try_call(send_temperature=True)
             return (out or "").strip()
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("OpenAI summary call failed, retrying", error=str(exc))
             out = try_call(send_temperature=False)
             return (out or "").strip()
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("OpenAI summarisation unavailable", error=str(exc))
         return None
 
 
@@ -560,6 +633,7 @@ def _openai_summarize(text: str) -> Optional[str]:
 
 
 def build_email_digest(intel: Dict[str, List[Dict[str, Any]]]) -> str:
+    """Render a simple HTML digest for legacy email workflows."""
     parts = ["<html><body><h2>Weekly Intel</h2>"]
     for cs, items in intel.items():
         parts.append(f"<h3>{cs}</h3><ul>")
@@ -587,8 +661,7 @@ def process_company_notion_with_data(
     cs: str,
     org: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
-    """Wrapper so partial binding works with the parallel processor."""
-
+    """Wrap partial binding so the parallel processor can call the function."""
     return process_company_notion(
         cs=cs,
         org=org,
@@ -610,7 +683,6 @@ def process_company_notion(
     news_store: Optional[NotionNewsSeenStore],
 ) -> Optional[Dict[str, Any]]:
     """Process Notion updates for a single company."""
-
     intel_items = intel_by_cs.get(cs, [])
     if not intel_items:
         return None
@@ -691,6 +763,7 @@ def process_company_notion(
 
 
 def main():
+    """Run the legacy news workflow using environment configuration."""
     # Gmail
     svc = build_service(
         client_id=os.environ["GMAIL_CLIENT_ID"],
@@ -727,7 +800,7 @@ def main():
         return {c.lower().strip(): c for c in df.columns}
 
     def safe_str(val):
-        """Safely convert value to string, handling NaN and None"""
+        """Safely convert value to string, handling NaN and None."""
         if (
             val is None
             or (hasattr(val, "__name__") and val.__name__ == "nan")
@@ -823,12 +896,12 @@ def main():
         print(f"[NEW COMPANIES] Created {len(new_callsigns)} new company pages: {displayed}")
 
         # Write new callsigns to trigger baseline generation
+        trigger_path = Path(tempfile.gettempdir()) / "new_callsigns.txt"
         try:
-            with open("/tmp/new_callsigns.txt", "w") as f:
-                f.write(",".join(new_callsigns))
+            trigger_path.write_text(",".join(new_callsigns), encoding="utf-8")
             trigger_msg = (
                 "[TRIGGER] Wrote "
-                f"{len(new_callsigns)} new callsigns to /tmp/new_callsigns.txt "
+                f"{len(new_callsigns)} new callsigns to {trigger_path} "
                 "for baseline generation"
             )
             print(trigger_msg)

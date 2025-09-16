@@ -4,20 +4,18 @@ News intelligence service for gathering and processing company intelligence.
 Handles news collection from multiple sources, LLM summarization, and Notion integration.
 """
 
-import json
 import re
 from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import feedparser
 import httpx
-import pandas as pd
 import structlog
 import tldextract
 from httpx import TimeoutException
 
 from app.core.config import IntelligenceConfig
-from app.core.exceptions import ExternalServiceError, ValidationError, WorkflowError
+from app.core.exceptions import ExternalServiceError, WorkflowError
 from app.core.models import (
     Company,
     CompanyIntelligence,
@@ -29,19 +27,20 @@ from app.core.models import (
 )
 from app.data.gmail_client import EnhancedGmailClient
 from app.data.notion_client import EnhancedNotionClient
+from app.intelligence.news_quality import NewsQualityScorer
 from app.utils.reliability import ParallelProcessor, with_circuit_breaker, with_retry
 
 logger = structlog.get_logger(__name__)
 
 
 class NewsCollector:
-    """
-    Collects news from multiple sources with reliability patterns.
-    """
+    """Collect news from multiple sources with reliability patterns."""
 
     def __init__(self, config: IntelligenceConfig):
+        """Initialise collector with configuration and quality scorer."""
         self.config = config
         self.http_client = httpx.Client(timeout=25.0, follow_redirects=True)
+        self.quality_scorer = NewsQualityScorer(config)
 
     def __del__(self):
         """Cleanup HTTP client."""
@@ -67,52 +66,36 @@ class NewsCollector:
         Returns:
             List of search query strings
         """
-        names = []
+        names: List[str] = []
         if company.dba:
             names.append(company.dba)
+        if company.callsign:
+            names.append(company.callsign.upper())
 
-        # Parse alternative names
         alt_names = aka_names or company.aka_names
         if alt_names:
             names.extend([n.strip() for n in alt_names.split(",") if n.strip()])
 
         names = [n for n in names if n]
+        if not names:
+            names.append(company.callsign)
 
-        # Build domain list
-        domains = []
+        domains: List[str] = []
         domain = domain_root or company.domain_root
         if domain:
-            domains.append(domain)
+            domains.append(domain.lower())
 
         if company.website:
-            # Extract domain from website
             w = re.sub(r"^https?://", "", company.website.strip().lower())
             w = re.sub(r"^www\.", "", w).split("/")[0]
             ext = tldextract.extract(w)
             if ext.registered_domain:
-                domains.append(ext.registered_domain)
+                domains.append(ext.registered_domain.lower())
 
-        # Build queries
-        queries = []
+        domains = list({d for d in domains if d})
 
-        # Domain-based queries
-        for d in set(domains):
-            queries.append(f"site:{d} (launch OR announce OR funding OR partnership)")
-
-        # Name-based queries
-        for n in set(names):
-            queries.append(f'"{n}" (launch OR product OR partnership OR funding OR raises)')
-
-        # Owner-based queries (limited to first 3)
-        if company.beneficial_owners:
-            for owner in company.beneficial_owners[:3]:
-                owner = owner.strip()
-                if owner and names and domains:
-                    queries.append(
-                        f'"{owner}" ("{names[0]}" OR site:{domains[0]}) (CEO OR founder OR CTO OR CFO OR raises OR interview)'
-                    )
-
-        return [q for q in queries if q.strip()]
+        queries = self.quality_scorer.build_query_variants(company, domains, names)
+        return queries
 
     @with_circuit_breaker(name="rss_feeds", failure_threshold=3, recovery_timeout=60.0)
     def collect_rss_feeds(self, site_url: Optional[str]) -> List[NewsItem]:
@@ -192,7 +175,11 @@ class NewsCollector:
     @with_circuit_breaker(name="google_search", failure_threshold=5, recovery_timeout=60.0)
     @with_retry(max_attempts=2, retry_exceptions=(TimeoutException, ExternalServiceError))
     def collect_google_search(
-        self, query: str, date_restrict: Optional[str] = None, num_results: int = 5
+        self,
+        query: str,
+        date_restrict: Optional[str] = None,
+        num_results: int = 5,
+        exclude_domains: Optional[List[str]] = None,
     ) -> List[NewsItem]:
         """
         Collect news items from Google Custom Search.
@@ -214,10 +201,16 @@ class NewsCollector:
             return []
 
         try:
+            query_string = query
+            if exclude_domains:
+                exclusions = " ".join(f"-site:{d}" for d in exclude_domains if d)
+                if exclusions:
+                    query_string = f"{query} {exclusions}"
+
             params = {
                 "key": self.config.google_api_key,
                 "cx": self.config.google_cse_id,
-                "q": query,
+                "q": query_string,
                 "num": min(10, max(1, num_results)),
             }
 
@@ -251,7 +244,11 @@ class NewsCollector:
                 pagemap = result.get("pagemap", {})
                 if "metatags" in pagemap and pagemap["metatags"]:
                     tags = pagemap["metatags"][0]
-                    for date_key in ("article:published_time", "og:updated_time", "date"):
+                    for date_key in (
+                        "article:published_time",
+                        "og:updated_time",
+                        "date",
+                    ):
                         if date_key in tags:
                             date = tags[date_key]
                             break
@@ -360,7 +357,9 @@ class NewsCollector:
             unique_items.append(item)
 
         logger.debug(
-            "Deduplication completed", original_count=len(items), unique_count=len(unique_items)
+            "Deduplication completed",
+            original_count=len(items),
+            unique_count=len(unique_items),
         )
 
         return unique_items
@@ -395,6 +394,8 @@ class NewsCollector:
                 logger.warning("RSS collection failed", callsign=company.callsign, error=str(e))
 
         # Collect from Google Custom Search
+        exclude_domains = self.quality_scorer.blocked_domains
+
         if not self.config.cse_disable and self.config.google_api_key and self.config.google_cse_id:
             try:
                 queries = self.build_search_queries(company, domain_root)
@@ -403,7 +404,10 @@ class NewsCollector:
                 for query in queries[:max_queries]:
                     try:
                         search_items = self.collect_google_search(
-                            query, date_restrict=f"d{self.config.lookback_days}", num_results=5
+                            query,
+                            date_restrict=f"d{self.config.lookback_days}",
+                            num_results=5,
+                            exclude_domains=exclude_domains,
                         )
                         all_items.extend(search_items)
                     except Exception as e:
@@ -412,34 +416,32 @@ class NewsCollector:
 
             except Exception as e:
                 logger.warning(
-                    "Google search collection failed", callsign=company.callsign, error=str(e)
+                    "Google search collection failed",
+                    callsign=company.callsign,
+                    error=str(e),
                 )
 
         # Deduplicate and filter
         all_items = self.deduplicate_items(all_items)
         all_items = self.filter_by_date_range(all_items, self.config.lookback_days)
 
-        # Limit results
-        limited_items = all_items[: self.config.max_per_org]
+        ranked_items = self.quality_scorer.rank_items(company, all_items, self.config.max_per_org)
 
-        # Set callsign on all items
-        for item in limited_items:
+        for item in ranked_items:
             item.callsign = company.callsign
 
         logger.info(
             "Company news collection completed",
             callsign=company.callsign,
-            items_collected=len(limited_items),
+            items_collected=len(ranked_items),
             sources_checked=["rss", "google_search"] if not self.config.cse_disable else ["rss"],
         )
 
-        return limited_items
+        return ranked_items
 
 
 class NewsService:
-    """
-    Main service for news intelligence processing.
-    """
+    """Coordinate the end-to-end news intelligence workflow."""
 
     def __init__(
         self,
@@ -447,6 +449,7 @@ class NewsService:
         notion_client: Optional[EnhancedNotionClient],
         config: IntelligenceConfig,
     ):
+        """Create the service with required dependencies."""
         self.gmail_client = gmail_client
         self.notion_client = notion_client
         self.config = config
@@ -499,7 +502,9 @@ class NewsService:
 
                 except Exception as e:
                     logger.warning(
-                        "Failed to process message", message_id=msg_info["id"], error=str(e)
+                        "Failed to process message",
+                        message_id=msg_info["id"],
+                        error=str(e),
                     )
                     continue
 
@@ -655,7 +660,9 @@ class NewsService:
         except Exception as e:
             error_msg = f"Failed to process intelligence for {company.callsign}: {e}"
             logger.error(
-                "Company intelligence processing failed", callsign=company.callsign, error=str(e)
+                "Company intelligence processing failed",
+                callsign=company.callsign,
+                error=str(e),
             )
 
             return CompanyIntelligence(
@@ -793,15 +800,5 @@ def create_news_service(
     notion_client: Optional[EnhancedNotionClient],
     config: IntelligenceConfig,
 ) -> NewsService:
-    """
-    Factory function to create news service.
-
-    Args:
-        gmail_client: Gmail client instance
-        notion_client: Optional Notion client instance
-        config: Intelligence configuration
-
-    Returns:
-        Configured NewsService
-    """
+    """Create a `NewsService` configured with required dependencies."""
     return NewsService(gmail_client, notion_client, config)
