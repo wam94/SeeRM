@@ -55,6 +55,8 @@ def _safe_parse_date(date_value: Optional[str]) -> Optional[str]:
 
 @dataclass
 class NewsSeenRecord:
+    """Record of a single news item with timestamps."""
+
     url: str
     callsign: str
     first_seen: datetime
@@ -66,11 +68,13 @@ class LocalNewsSeenStore:
     """Simple JSON-based store for environments without Notion."""
 
     def __init__(self, state_path: Path):
+        """Initialise the store backing JSON file if necessary."""
         self.state_path = state_path
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         self._data = self._load()
 
     def _load(self) -> Dict[str, NewsSeenRecord]:
+        """Load existing records from disk."""
         if not self.state_path.exists():
             return {}
         try:
@@ -90,6 +94,7 @@ class LocalNewsSeenStore:
             return {}
 
     def _save(self) -> None:
+        """Persist current records to disk."""
         raw = {
             key: {
                 "url": record.url,
@@ -105,6 +110,7 @@ class LocalNewsSeenStore:
     def ingest(
         self, callsign: str, items: Iterable[NewsItem]
     ) -> Tuple[List[NewsItem], List[NewsItem]]:
+        """Record items as seen and return (new, existing)."""
         new_items: List[NewsItem] = []
         existing_items: List[NewsItem] = []
         now = datetime.utcnow()
@@ -132,6 +138,7 @@ class LocalNewsSeenStore:
         return new_items, existing_items
 
     def get_recent(self, callsign: str, days: int) -> List[NewsItem]:
+        """Return items whose first_seen timestamp lies within the window."""
         cutoff = datetime.utcnow() - timedelta(days=days)
         results = []
         for record in self._data.values():
@@ -163,6 +170,7 @@ class NotionNewsSeenStore:
         intel_db_id: str,
         companies_db_id: Optional[str] = None,
     ):
+        """Initialise the store with Notion client and database identifiers."""
         self.client = notion_client
         self.intel_db_id = intel_db_id
         self.companies_db_id = companies_db_id
@@ -170,6 +178,7 @@ class NotionNewsSeenStore:
         self._company_page_cache: Dict[str, Optional[str]] = {}
 
     def _load_schema(self):
+        """Load schema metadata for news items database."""
         raw_schema = self.client.get_database_schema(self.intel_db_id)
         properties = raw_schema.get("properties", {})
 
@@ -205,6 +214,7 @@ class NotionNewsSeenStore:
         }
 
     def _get_company_page_id(self, callsign: str) -> Optional[str]:
+        """Resolve company page IDs with caching."""
         if not self.companies_db_id:
             return None
         key = callsign.lower()
@@ -219,6 +229,7 @@ class NotionNewsSeenStore:
         return page_id
 
     def _build_source_property(self, source_value: str) -> Dict[str, any]:
+        """Build a property payload for the source field."""
         prop = self._schema["source"]
         if not prop or not source_value:
             return {}
@@ -251,6 +262,7 @@ class NotionNewsSeenStore:
         first_seen_iso: str,
         last_seen_iso: str,
     ) -> Dict[str, any]:
+        """Create Notion properties for a news item."""
         props = {
             self._schema["title"]: {
                 "title": [
@@ -291,6 +303,7 @@ class NotionNewsSeenStore:
         company_page_id: Optional[str],
         items: Iterable[NewsItem],
     ) -> Tuple[List[NewsItem], List[NewsItem]]:
+        """Ingest items into Notion and classify them as new or existing."""
         now_iso = datetime.utcnow().isoformat()
         new_items: List[NewsItem] = []
         existing_items: List[NewsItem] = []
@@ -329,6 +342,7 @@ class NotionNewsSeenStore:
         return new_items, existing_items
 
     def get_recent(self, callsign: str, days: int) -> List[NewsItem]:
+        """Return recently seen items for a callsign."""
         cutoff = datetime.utcnow() - timedelta(days=days)
         cutoff_iso = cutoff.date().isoformat()
 

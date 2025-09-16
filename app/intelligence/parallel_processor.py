@@ -81,7 +81,9 @@ class ParallelProcessor:
         return results
 
     def batch_classify_news(
-        self, news_items_batches: List[List[Any]], classify_func: Callable[[List[Any]], List[Any]]
+        self,
+        news_items_batches: List[List[Any]],
+        classify_func: Callable[[List[Any]], List[Any]],
     ) -> List[Any]:
         """
         Classify news items in parallel batches.
@@ -123,7 +125,10 @@ class ParallelProcessor:
         return all_results
 
     def parallel_fetch_news(
-        self, companies: List[str], fetch_news_func: Callable[[str, int], List[Any]], days: int = 90
+        self,
+        companies: List[str],
+        fetch_news_func: Callable[[str, int], List[Any]],
+        days: int = 90,
     ) -> Dict[str, List[Any]]:
         """
         Fetch news for multiple companies in parallel.

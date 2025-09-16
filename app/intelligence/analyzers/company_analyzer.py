@@ -1,6 +1,4 @@
-"""
-Company analysis functionality for deep dive reports.
-"""
+"""Company analysis functionality for deep dive reports."""
 
 from datetime import datetime, timedelta
 from typing import Any, Dict
@@ -63,9 +61,8 @@ class CompanyAnalyzer:
                 movement_desc = f"New account with ${movement.current_balance:,.2f} balance"
             elif movement.percentage_change is not None:
                 direction = "increased" if movement.percentage_change > 0 else "decreased"
-                movement_desc = (
-                    f"Account balance {direction} by {abs(movement.percentage_change):.1f}%"
-                )
+                delta = abs(movement.percentage_change)
+                movement_desc = f"Account balance {direction} by {delta:.1f}%"
 
         # News summary
         news_desc = (
@@ -76,7 +73,11 @@ class CompanyAnalyzer:
 
         summary = " • ".join(summary_parts)
 
-        logger.debug("Executive summary generated", callsign=profile.callsign, length=len(summary))
+        logger.debug(
+            "Executive summary generated",
+            callsign=profile.callsign,
+            length=len(summary),
+        )
         return summary
 
     def analyze_product_usage(self, intelligence: CompanyIntelligence) -> Dict[str, Any]:
