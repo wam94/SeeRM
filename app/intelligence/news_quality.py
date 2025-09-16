@@ -211,6 +211,10 @@ class NewsQualityScorer:
 
         base = domain_score + keyword_score + recency_score + company_match_score
 
+        company_domains = self._company_domains(company)
+        if domain and domain in company_domains:
+            base += 2.5
+
         if domain not in self.preferences.trusted_domains and domain_score == 0:
             base -= 0.2  # slight penalty for unknown domains
 
@@ -264,6 +268,17 @@ class NewsQualityScorer:
             seen.add(q)
             unique_queries.append(q)
         return unique_queries
+
+    def _company_domains(self, company: Company) -> set[str]:
+        """Return canonical domains associated with a company."""
+        domains = set()
+        if getattr(company, "domain_root", None):
+            domains.add(company.domain_root.lower())
+        if company.website:
+            ext = tldextract.extract(company.website)
+            if ext.registered_domain:
+                domains.add(ext.registered_domain.lower())
+        return domains
 
 
 __all__ = ["NewsQualityScorer"]

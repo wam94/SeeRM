@@ -21,7 +21,12 @@ def make_scorer() -> NewsQualityScorer:
 
 def make_company() -> Company:
     """Create a baseline company instance."""
-    return Company(callsign="acme", dba="ACME Corp", website="https://acme.com")
+    return Company(
+        callsign="acme",
+        dba="ACME Corp",
+        website="https://acme.com",
+        domain_root="acme.com",
+    )
 
 
 def make_item(**overrides) -> NewsItem:
@@ -124,3 +129,22 @@ def test_rank_items_limits_results():
     ranked = scorer.rank_items(company, items, max_items=3)
 
     assert len(ranked) == 3
+
+
+def test_company_domain_bonus():
+    """Links hosted on the company domain should be strongly favoured."""
+    scorer = make_scorer()
+    company = make_company()
+    company_item = make_item(
+        url="https://news.acme.com/update",
+        source="news.acme.com",
+    )
+    external_item = make_item(
+        url="https://unknown.com/acme",
+        source="unknown.com",
+    )
+
+    company_score, _ = scorer.score_item(company, company_item)
+    external_score, _ = scorer.score_item(company, external_item)
+
+    assert company_score > external_score
