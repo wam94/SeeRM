@@ -1,10 +1,5 @@
-"""
-Test suite for digest service functionality.
+"""Validate digest service functionality end-to-end."""
 
-Validates end-to-end digest generation and compares with original system output.
-"""
-
-from datetime import datetime
 from unittest.mock import Mock, patch
 
 import pytest
@@ -16,17 +11,17 @@ from app.services.render_service import DigestRenderer
 
 
 class TestDigestService:
-    """Test digest service functionality."""
+    """Validate digest service functionality."""
 
     def setup_method(self):
-        """Setup for each test."""
+        """Prepare common mocks for each test."""
         self.mock_gmail_client = Mock()
         self.renderer = DigestRenderer()
         self.config = DigestConfig(top_movers=15)
         self.service = DigestService(self.mock_gmail_client, self.renderer, self.config)
 
     def test_digest_data_generation(self):
-        """Test digest data generation from companies."""
+        """Generate digest data from company fixtures."""
         # Create test companies
         companies = [
             Company(
@@ -100,7 +95,7 @@ class TestDigestRenderer:
     """Test digest HTML rendering."""
 
     def setup_method(self):
-        """Setup for each test."""
+        """Prepare common mocks for each test."""
         self.renderer = DigestRenderer()
 
     def test_digest_rendering(self):

@@ -1,24 +1,18 @@
-"""
-Test suite for CSV parser functionality.
-
-Validates that the refactored CSV processing produces identical results
-to the original system while adding enhanced error handling.
-"""
+"""Validate CSV parser functionality and output integrity."""
 
 from io import StringIO
 
 import pandas as pd
 import pytest
 
-from app.core.models import Company
 from app.data.csv_parser import CSVProcessor, parse_csv_data
 
 
 class TestCSVProcessor:
-    """Test CSV processing functionality."""
+    """Validate CSV processing functionality."""
 
     def setup_method(self):
-        """Setup for each test."""
+        """Prepare fixtures for each test."""
         self.processor = CSVProcessor(strict_validation=False)
 
         # Sample CSV data matching your format
@@ -30,7 +24,7 @@ testco,Test Company,test.com,"[""John Doe""]"
 """
 
     def test_column_normalization(self):
-        """Test that column names are normalized correctly."""
+        """Ensure column names are normalized correctly."""
         df = pd.read_csv(StringIO("CALLSIGN,DBA,Domain_Root\ntest,Test Co,test.com"))
 
         normalized = self.processor.normalize_column_names(df)
@@ -42,7 +36,7 @@ testco,Test Company,test.com,"[""John Doe""]"
         assert normalized["domain_root"] == "Domain_Root"
 
     def test_beneficial_owners_parsing(self):
-        """Test JSON parsing of beneficial owners."""
+        """Validate JSON parsing of beneficial owners."""
         df = pd.read_csv(StringIO(self.sample_csv))
         companies = self.processor.parse_companies_csv(df)
 
@@ -57,7 +51,7 @@ testco,Test Company,test.com,"[""John Doe""]"
         assert "Timothy Chaves" in accio.beneficial_owners
 
     def test_company_data_integrity(self):
-        """Test that all company data is preserved correctly."""
+        """Ensure company data is preserved correctly."""
         df = pd.read_csv(StringIO(self.sample_csv))
         companies = self.processor.parse_companies_csv(df)
 
@@ -70,7 +64,7 @@ testco,Test Company,test.com,"[""John Doe""]"
         assert test_co.beneficial_owners == ["John Doe"]
 
     def test_digest_calculation(self):
-        """Test digest statistics calculation."""
+        """Validate digest statistics calculation."""
         df = pd.read_csv(StringIO(self.sample_csv))
         companies = self.processor.parse_companies_csv(df)
 
@@ -83,7 +77,7 @@ testco,Test Company,test.com,"[""John Doe""]"
         assert "product_stops" in digest_data
 
     def test_validation_with_missing_columns(self):
-        """Test graceful handling of missing columns."""
+        """Ensure missing columns are handled gracefully."""
         minimal_csv = "CALLSIGN\n97labs\naalo\n"
         df = pd.read_csv(StringIO(minimal_csv))
 
@@ -94,7 +88,7 @@ testco,Test Company,test.com,"[""John Doe""]"
         assert all(len(c.beneficial_owners) == 0 for c in companies)
 
     def test_error_handling_with_invalid_data(self):
-        """Test error handling with malformed data."""
+        """Ensure malformed data is handled without raising errors."""
         invalid_csv = "CALLSIGN,BENEFICIAL_OWNERS\n97labs,invalid_json\n"
         df = pd.read_csv(StringIO(invalid_csv))
 
@@ -106,12 +100,12 @@ testco,Test Company,test.com,"[""John Doe""]"
 
 @pytest.fixture
 def real_csv_file():
-    """Fixture for real CSV file testing."""
+    """Return sample path for real CSV file testing."""
     return "files/Will Accounts Demographics_2025-09-01T09_09_22.742205229Z.csv"
 
 
 def test_real_csv_processing(real_csv_file):
-    """Test processing of your actual CSV file."""
+    """Process an actual CSV file and validate structure."""
     try:
         companies, digest_data = parse_csv_data(open(real_csv_file, "rb").read())
 
@@ -166,7 +160,7 @@ class TestCSVComparison:
                 assert stat in stats, f"Missing stat: {stat}"
                 assert isinstance(stats[stat], int), f"Stat {stat} should be integer"
 
-            print(f"✅ Output format validation passed")
+            print("✅ Output format validation passed")
 
         except FileNotFoundError:
             pytest.skip("Real CSV file not found")

@@ -1,31 +1,27 @@
-"""
-Integration tests for complete workflow validation.
+"""Validate integration workflows end-to-end."""
 
-Tests end-to-end functionality and comparison with original system behavior.
-"""
-
-import json
+import base64
 import os
-import tempfile
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 
-from app.core.config import Settings
-from app.core.models import ProcessingStatus
+from app.core.config import DigestConfig, GmailConfig, NotionConfig, Settings
+from app.core.models import Company, DigestData, ProcessingStatus
+from app.data.csv_parser import CSVProcessor, parse_csv_file
 from app.data.gmail_client import EnhancedGmailClient
 from app.data.notion_client import EnhancedNotionClient
+from app.services.digest_service import DigestService
+from app.services.render_service import DigestRenderer
 from app.workflows.weekly_digest import WeeklyDigestWorkflow
 
 
 class TestWorkflowIntegration:
-    """Test complete workflow integration."""
+    """Validate complete workflow integration."""
 
     def setup_method(self):
-        """Setup for each test."""
+        """Prepare minimal settings for each test."""
         # Create test settings with minimal required values to avoid validation errors
-        import os
-
         os.environ.update(
             {
                 "DRY_RUN": "true",
@@ -45,24 +41,31 @@ class TestWorkflowIntegration:
             "id": "test_msg_1",
             "payload": {
                 "parts": [
-                    {"filename": "test_data.csv", "body": {"data": self._create_test_csv_b64()}}
+                    {
+                        "filename": "test_data.csv",
+                        "body": {"data": self._create_test_csv_b64()},
+                    }
                 ]
             },
         }
 
     def _create_test_csv_b64(self):
-        """Create base64 encoded test CSV data."""
-        import base64
-
-        csv_data = """CALLSIGN,DBA,DOMAIN_ROOT,BENEFICIAL_OWNERS,CURR_BALANCE,PREV_BALANCE,BALANCE_PCT_DELTA_PCT,IS_NEW_ACCOUNT,ANY_CHANGE
-test1,Test Company 1,test1.com,"[""John Doe""]",100000,90000,11.11,False,True
-test2,Test Company 2,test2.com,"[""Jane Smith""]",80000,100000,-20.0,False,True
-newco,New Company,newco.com,"[""Bob Wilson""]",50000,0,0.0,True,True"""
+        """Generate base64-encoded CSV payload for tests."""
+        csv_rows = [
+            (
+                "CALLSIGN,DBA,DOMAIN_ROOT,BENEFICIAL_OWNERS,CURR_BALANCE,PREV_BALANCE,"
+                "BALANCE_PCT_DELTA_PCT,IS_NEW_ACCOUNT,ANY_CHANGE"
+            ),
+            'test1,Test Company 1,test1.com,"[""John Doe""]",100000,90000,11.11,False,True',
+            'test2,Test Company 2,test2.com,"[""Jane Smith""]",80000,100000,-20.0,False,True',
+            'newco,New Company,newco.com,"[""Bob Wilson""]",50000,0,0.0,True,True',
+        ]
+        csv_data = "\n".join(csv_rows)
         return base64.urlsafe_b64encode(csv_data.encode()).decode()
 
     @patch("app.data.gmail_client.build")
     def test_complete_digest_workflow_dry_run(self, mock_build):
-        """Test complete digest workflow in dry run mode."""
+        """Execute the digest workflow in dry-run mode."""
         # Setup Gmail service mock
         mock_service = Mock()
         mock_build.return_value = mock_service
@@ -96,7 +99,7 @@ newco,New Company,newco.com,"[""Bob Wilson""]",50000,0,0.0,True,True"""
         assert result.data["digest_stats"]["total_accounts"] == 3
 
     def test_workflow_configuration_validation(self):
-        """Test workflow validates configuration properly."""
+        """Validate that configuration errors are detected."""
         # Create settings with missing required fields
         incomplete_settings = Settings()
         incomplete_settings.gmail.client_id = ""  # Missing required field
@@ -111,7 +114,7 @@ newco,New Company,newco.com,"[""Bob Wilson""]",50000,0,0.0,True,True"""
         assert "GMAIL_CLIENT_ID" in str(exc_info.value)
 
     def test_workflow_health_checks(self):
-        """Test workflow health check functionality."""
+        """Verify health checks across dependencies."""
         workflow = WeeklyDigestWorkflow(self.settings)
 
         # Create mock objects
@@ -132,7 +135,7 @@ newco,New Company,newco.com,"[""Bob Wilson""]",50000,0,0.0,True,True"""
         assert health["digest_service"]["status"] == "healthy"
 
     def test_workflow_error_handling(self):
-        """Test workflow handles errors gracefully."""
+        """Ensure workflow handles errors gracefully."""
         workflow = WeeklyDigestWorkflow(self.settings)
 
         # Create mock service that raises an exception
@@ -150,19 +153,16 @@ newco,New Company,newco.com,"[""Bob Wilson""]",50000,0,0.0,True,True"""
 
 
 class TestOriginalSystemComparison:
-    """Compare refactored system output with original system."""
+    """Compare refactored system output with the original implementation."""
 
     def setup_method(self):
-        """Setup comparison tests."""
+        """Prepare shared CSV path for comparison tests."""
         self.test_csv_path = "files/Will Accounts Demographics_2025-09-01T09_09_22.742205229Z.csv"
 
     def test_csv_parsing_compatibility(self):
-        """Test CSV parsing produces compatible output."""
+        """Ensure CSV parsing produces compatible output."""
         if not os.path.exists(self.test_csv_path):
             pytest.skip("Test CSV file not available")
-
-        # Import both systems
-        from app.data.csv_parser import parse_csv_file
 
         # Parse with new system
         companies, digest_data = parse_csv_file(self.test_csv_path)
@@ -192,13 +192,9 @@ class TestOriginalSystemComparison:
         assert stats["total_accounts"] >= stats["new_accounts"]
 
     def test_digest_html_compatibility(self):
-        """Test HTML output structure matches original."""
+        """Verify digest HTML output structure matches the original."""
         if not os.path.exists(self.test_csv_path):
             pytest.skip("Test CSV file not available")
-
-        from app.core.models import DigestData
-        from app.data.csv_parser import parse_csv_file
-        from app.services.render_service import DigestRenderer
 
         # Parse data and render
         companies, digest_dict = parse_csv_file(self.test_csv_path)
@@ -224,19 +220,14 @@ class TestOriginalSystemComparison:
 
 
 class TestEndToEndValidation:
-    """End-to-end validation with real data and scenarios."""
+    """Validate end-to-end scenarios with real data."""
 
     def test_complete_pipeline_with_real_csv(self):
-        """Test complete processing pipeline with real CSV."""
+        """Process a real CSV through the complete pipeline."""
         csv_path = "files/Will Accounts Demographics_2025-09-01T09_09_22.742205229Z.csv"
 
         if not os.path.exists(csv_path):
             pytest.skip("Real CSV file not available for E2E test")
-
-        from app.core.config import DigestConfig
-        from app.data.csv_parser import parse_csv_file
-        from app.services.digest_service import DigestService
-        from app.services.render_service import DigestRenderer
 
         # Step 1: Parse CSV
         companies, digest_dict = parse_csv_file(csv_path)
@@ -249,8 +240,6 @@ class TestEndToEndValidation:
         service = DigestService(mock_gmail, renderer, config)
 
         # Step 3: Generate digest
-        from app.core.models import DigestData
-
         digest_data = DigestData(**digest_dict)
 
         # Step 4: Extract new callsigns
@@ -269,12 +258,10 @@ class TestEndToEndValidation:
         print(f"   Changed accounts: {digest_data.stats.changed_accounts}")
 
     def test_error_scenarios(self):
-        """Test system behavior under error conditions."""
+        """Exercise system behaviour under error conditions."""
         import io
 
         import pandas as pd
-
-        from app.data.csv_parser import CSVProcessor
 
         processor = CSVProcessor(strict_validation=False)
 
@@ -293,11 +280,8 @@ class TestEndToEndValidation:
         print("✅ Error scenario handling verified")
 
     def test_performance_with_large_dataset(self):
-        """Test performance with larger dataset."""
+        """Measure performance when processing a larger dataset."""
         import time
-
-        from app.core.models import Company
-        from app.data.csv_parser import CSVProcessor
 
         # Generate test companies
         companies = [
@@ -334,11 +318,7 @@ class TestDryRunValidation:
     """Test dry-run functionality and validation."""
 
     def test_dry_run_no_side_effects(self):
-        """Test dry-run mode prevents actual changes."""
-        from app.core.config import GmailConfig, NotionConfig
-        from app.data.gmail_client import EnhancedGmailClient
-        from app.data.notion_client import EnhancedNotionClient
-
+        """Ensure dry-run mode prevents actual changes."""
         # Create clients in dry-run mode
         gmail_config = GmailConfig(
             client_id="test", client_secret="test", refresh_token="test", user="test@example.com"
@@ -353,14 +333,14 @@ class TestDryRunValidation:
         assert notion_client.dry_run is True
 
         # Mock operations should not make real calls
-        with patch("httpx.Client") as mock_client:
+        with patch("httpx.Client") as mocked_client:
             # Notion operations in dry-run should not make HTTP requests
-            from app.core.models import Company
-
             test_company = Company(callsign="test", dba="Test Co")
 
             # This should not make actual HTTP calls
             result = notion_client.create_company_page("fake_db", test_company)
+
+            mocked_client.assert_not_called()
 
             # Should return dry-run result
             assert result.page_id == "dry_run_page_id"
