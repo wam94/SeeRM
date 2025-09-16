@@ -1,16 +1,12 @@
-"""
-Digest service for weekly client digest generation.
-
-Handles the business logic for generating and sending weekly client digests.
-"""
+"""Digest service for generating and sending weekly client digests."""
 
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import structlog
 
-from app.core.config import DigestConfig, NotionConfig, Settings
-from app.core.exceptions import GmailError, ValidationError, WorkflowError
+from app.core.config import DigestConfig, Settings
+from app.core.exceptions import GmailError, WorkflowError
 from app.core.models import Company, DigestData, ProcessingResult, ProcessingStatus, WorkflowType
 from app.data.csv_parser import CSVProcessor
 from app.data.gmail_client import EnhancedGmailClient
@@ -21,9 +17,7 @@ logger = structlog.get_logger(__name__)
 
 
 class DigestService:
-    """
-    Service for generating and sending weekly client digests.
-    """
+    """Generate and send weekly client digests."""
 
     def __init__(
         self,
@@ -33,6 +27,7 @@ class DigestService:
         notion_client: Optional[EnhancedNotionClient] = None,
         companies_db_id: Optional[str] = None,
     ):
+        """Initialise the digest service with clients and configuration."""
         self.gmail_client = gmail_client
         self.renderer = renderer
         self.config = config
@@ -104,7 +99,9 @@ class DigestService:
             top_movers = top_n or self.config.top_movers
 
             logger.info(
-                "Generating digest data", companies_count=len(companies), top_movers=top_movers
+                "Generating digest data",
+                companies_count=len(companies),
+                top_movers=top_movers,
             )
 
             # Calculate digest statistics and movements
@@ -196,19 +193,25 @@ class DigestService:
                     page_id = self.notion_client.upsert_company_page(companies_db_id, payload)
 
                     logger.debug(
-                        "Company synced to Notion", callsign=company.callsign, page_id=page_id
+                        "Company synced to Notion",
+                        callsign=company.callsign,
+                        page_id=page_id,
                     )
                     synced_count += 1
 
                 except Exception as e:
                     logger.warning(
-                        "Failed to sync company to Notion", callsign=company.callsign, error=str(e)
+                        "Failed to sync company to Notion",
+                        callsign=company.callsign,
+                        error=str(e),
                     )
                     # Continue with other companies
                     continue
 
             logger.info(
-                "Notion sync completed", synced_count=synced_count, total_new=len(new_companies)
+                "Notion sync completed",
+                synced_count=synced_count,
+                total_new=len(new_companies),
             )
 
         except Exception as e:
@@ -216,7 +219,7 @@ class DigestService:
             # Don't raise - this is not critical for the main workflow
 
     def write_new_callsigns_trigger(
-        self, callsigns: List[str], trigger_file: str = "/tmp/new_callsigns.txt"
+        self, callsigns: List[str], trigger_file: Optional[str] = None
     ) -> None:
         """
         Write new callsigns to trigger file for downstream workflows.
@@ -229,19 +232,18 @@ class DigestService:
             logger.debug("No new callsigns to write")
             return
 
+        from pathlib import Path
+
+        default_path = Path("/tmp/new_callsigns.txt")  # nosec B108
+        target = Path(trigger_file) if trigger_file else default_path
+
         try:
-            with open(trigger_file, "w") as f:
-                f.write(",".join(callsigns))
+            with open(str(target), "w") as handle:
+                handle.write(",".join(callsigns))
 
-            logger.info(
-                "New callsigns trigger written",
-                file=trigger_file,
-                count=len(callsigns),
-                callsigns=callsigns[:5],
-            )
-
+            logger.info("New callsigns written to trigger file", path=str(target))
         except Exception as e:
-            logger.error("Trigger file write failed", error=str(e), file=trigger_file)
+            logger.error("Trigger file write failed", error=str(e), path=str(target))
             # Don't raise exception - this is not critical
 
     def send_digest_email(self, digest_data: DigestData, html_content: str) -> Dict[str, Any]:
@@ -264,7 +266,13 @@ class DigestService:
             cc = self.config.cc
             bcc = self.config.bcc
 
-            logger.info("Sending digest email", to=to, cc=cc, bcc=bcc, subject=digest_data.subject)
+            logger.info(
+                "Sending digest email",
+                to=to,
+                cc=cc,
+                bcc=bcc,
+                subject=digest_data.subject,
+            )
 
             # Send email
             response = self.gmail_client.send_html_email(
@@ -403,20 +411,15 @@ class DigestService:
             }
 
         except Exception as e:
-            return {"status": "unhealthy", "error": str(e), "error_type": type(e).__name__}
+            return {
+                "status": "unhealthy",
+                "error": str(e),
+                "error_type": type(e).__name__,
+            }
 
 
 def create_digest_service(gmail_client: EnhancedGmailClient, settings: Settings) -> DigestService:
-    """
-    Factory function to create digest service.
-
-    Args:
-        gmail_client: Gmail client instance
-        settings: Application settings
-
-    Returns:
-        Configured DigestService
-    """
+    """Create a digest service configured from application settings."""
     from app.data.notion_client import create_notion_client
     from app.services.render_service import create_digest_renderer
 

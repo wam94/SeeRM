@@ -1,6 +1,4 @@
-"""
-CLI command modules for SeeRM.
-"""
+"""CLI command modules for SeeRM."""
 
 from .reports import reports
 

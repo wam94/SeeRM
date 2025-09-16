@@ -1,6 +1,4 @@
-"""
-CLI commands for testing email delivery and fallback systems.
-"""
+"""CLI commands for testing email delivery and fallback systems."""
 
 from datetime import datetime
 from pathlib import Path
@@ -26,7 +24,9 @@ def test_email():
 @click.option("--subject", default="SeeRM Email Delivery Test", help="Email subject")
 @click.option("--force-failure", is_flag=True, help="Force email failure to test fallback")
 @click.option(
-    "--fallback-dir", default="./test_email_fallbacks", help="Directory for fallback files"
+    "--fallback-dir",
+    default="./test_email_fallbacks",
+    help="Directory for fallback files",
 )
 def send_test(to: str, subject: str, force_failure: bool, fallback_dir: str):
     """
@@ -85,13 +85,13 @@ def send_test(to: str, subject: str, force_failure: bool, fallback_dir: str):
 
         # Force failure for testing if requested
         if force_failure and gmail_client:
-            # Temporarily break the Gmail client to test fallback
-            _original_method = gmail_client.send_html_email
-            gmail_client.send_html_email = lambda *args, **kwargs: (_ for _ in ()).throw(
-                GmailError(
+            # Temporarily raise an error to exercise the fallback path
+            def _forced_failure(*_args, **_kwargs):
+                raise GmailError(
                     "Forced test failure: EOF occurred in violation of protocol (_ssl.c:2437)"
                 )
-            )
+
+            gmail_client.send_html_email = _forced_failure
 
         click.echo("\n📧 Attempting email delivery...")
 
@@ -191,9 +191,13 @@ def _generate_test_email_content(is_forced_failure: bool = False) -> str:
 
     if is_forced_failure:
         failure_note = """
-        <div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; margin: 20px 0; border-radius: 5px;">
-            <h3 style="color: #856404; margin-top: 0;">⚠️ Forced Failure Test</h3>
-            <p style="color: #856404;">This email was intentionally set to fail to test the fallback system.</p>
+        <div
+            style="background:#fff3cd;border:1px solid #ffeaa7;padding:15px;"
+        >
+            <h3 style="color:#856404;margin-top:0;">⚠️ Forced Failure Test</h3>
+            <p style="color:#856404;">
+                This email was intentionally set to fail to test the fallback system.
+            </p>
         </div>
         """
 
@@ -201,13 +205,28 @@ def _generate_test_email_content(is_forced_failure: bool = False) -> str:
     <!DOCTYPE html>
     <html>
     <head>
-        <meta charset="UTF-8">
+        <meta charset="UTF-8" />
         <title>SeeRM Email Delivery Test</title>
         <style>
-            body {{ font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }}
-            .header {{ background: #f8f9fa; padding: 20px; border-radius: 5px; margin-bottom: 20px; }}
-            .content {{ line-height: 1.6; }}
-            .footer {{ background: #e9ecef; padding: 15px; border-radius: 5px; margin-top: 20px; font-size: 0.9em; }}
+            body {{
+                font-family: Arial, sans-serif;
+                max-width: 600px;
+                margin: 0 auto;
+                padding: 20px;
+            }}
+            .header {{
+                background: #f8f9fa;
+                padding: 20px;
+                border-radius: 5px;
+                margin-bottom: 20px;
+            }}
+            .footer {{
+                background: #e9ecef;
+                padding: 15px;
+                border-radius: 5px;
+                margin-top: 20px;
+                font-size: 0.9em;
+            }}
             .success {{ color: #28a745; }}
             .info {{ color: #17a2b8; }}
         </style>
@@ -222,7 +241,10 @@ def _generate_test_email_content(is_forced_failure: bool = False) -> str:
 
         <div class="content">
             <h2>📧 Email System Test</h2>
-            <p>This is a test email to verify the SeeRM email delivery system is working correctly.</p>
+            <p>
+                This is a test email to verify the SeeRM email delivery system is working
+                correctly.
+            </p>
 
             <h3>🔧 System Components Tested:</h3>
             <ul>
@@ -235,7 +257,10 @@ def _generate_test_email_content(is_forced_failure: bool = False) -> str:
             </ul>
 
             <h3>📊 Sample Intelligence Data:</h3>
-            <p>This email contains sample formatted content similar to the weekly intelligence reports:</p>
+            <p>
+                This email contains sample formatted content similar to the weekly
+                intelligence reports:
+            </p>
 
             <h4>💰 FUNDING & INVESTMENT (Sample)</h4>
             <p>• Company A, Company B, Company C</p>
@@ -248,7 +273,7 @@ def _generate_test_email_content(is_forced_failure: bool = False) -> str:
         </div>
 
         <div class="footer">
-            <p><strong>✅ If you received this email, the delivery system is working correctly!</strong></p>
+            <p><strong>✅ Delivery system check succeeded.</strong></p>
             <p>Generated by SeeRM Intelligence Reports • Test Command</p>
         </div>
     </body>

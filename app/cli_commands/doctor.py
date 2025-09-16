@@ -27,7 +27,9 @@ from app.data.notion_client import EnhancedNotionClient
 
 @click.command()
 @click.option(
-    "--fallback-dir", default="./reports/email_fallbacks", help="Fallback directory to scan"
+    "--fallback-dir",
+    default="./reports/email_fallbacks",
+    help="Fallback directory to scan",
 )
 def doctor(fallback_dir: str):
     """Run SeeRM diagnostics and print a summary report."""
@@ -60,7 +62,14 @@ def doctor(fallback_dir: str):
         click.echo("\n- CSV file path not set (using Gmail ingestion)")
 
     # Gmail health
-    if all([cfg.gmail.client_id, cfg.gmail.client_secret, cfg.gmail.refresh_token, cfg.gmail.user]):
+    if all(
+        [
+            cfg.gmail.client_id,
+            cfg.gmail.client_secret,
+            cfg.gmail.refresh_token,
+            cfg.gmail.user,
+        ]
+    ):
         try:
             gmail = EnhancedGmailClient(cfg.gmail)
             h = gmail.health_check()

@@ -144,7 +144,9 @@ def run(config_path: Path):
         cfg["NOTION_REPORTS_DB_ID"] = ask("Reports DB ID", "NOTION_REPORTS_DB_ID", default="")
         cfg["NOTION_INTEL_DB_ID"] = ask("Intel DB ID (optional)", "NOTION_INTEL_DB_ID", default="")
         cfg["NOTION_WORKSPACE_NAME"] = ask(
-            "Workspace short name for URLs (optional)", "NOTION_WORKSPACE_NAME", default=""
+            "Workspace short name for URLs (optional)",
+            "NOTION_WORKSPACE_NAME",
+            default="",
         )
         cfg["NOTION_COMPANIES_VIEW_ID"] = ask(
             "Companies DB view ID (optional)", "NOTION_COMPANIES_VIEW_ID", default=""
@@ -274,7 +276,14 @@ def _run_quick_health_check() -> None:
         click.echo("- CSV: Using Gmail ingestion (no CSV_SOURCE_PATH set)")
 
     # Gmail
-    if all([cfg.gmail.client_id, cfg.gmail.client_secret, cfg.gmail.refresh_token, cfg.gmail.user]):
+    if all(
+        [
+            cfg.gmail.client_id,
+            cfg.gmail.client_secret,
+            cfg.gmail.refresh_token,
+            cfg.gmail.user,
+        ]
+    ):
         try:
             gmail = EnhancedGmailClient(cfg.gmail)
             health = gmail.health_check()
