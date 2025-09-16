@@ -552,6 +552,43 @@ Artifacts:
 - **Access Control**: GitHub secrets for credential management
 - **Audit Trail**: Correlation IDs for request tracing
 
+## 🗂️ Notion Database Schemas
+
+To keep all workflows compatible, configure your Notion databases with the following
+property names and types:
+
+**Companies Database (`NOTION_COMPANIES_DB_ID`)**
+- `Callsign` (title) – primary key
+- `Company` (rich text) – optional display name
+- `Website` (url)
+- `Domain` (url or rich text)
+- `Owners` (rich text)
+- `Needs Dossier` (checkbox)
+- `Latest Intel` (rich text)
+- `Last Intel At` (date)
+
+**News Items Database (`NOTION_INTEL_DB_ID`)**
+- `Title` (title)
+- `URL` (url)
+- `First Seen` (date)
+- `Last Seen` (date)
+- `Callsign` (relation → Companies database)
+- `Source` (select / multi-select / rich text)
+- `Published At` (date)
+- `Summary` (rich text, optional)
+
+**Reports Database (`NOTION_REPORTS_DB_ID`)**
+- `Name` (title)
+- `Report Type` (select)
+- `Generated` (date)
+- `Status` (select)
+- `Duration` (rich text or number)
+- `News Items` (number)
+- `Week Of` (date or rich text)
+
+If you rename a column, update the Notion database to match these names so every
+CLI workflow, GitHub Action, and the new news-diff pipeline stay in sync.
+
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

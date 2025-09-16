@@ -92,35 +92,57 @@ jobs:
           print("✅ Intel DB:", intel.get("title",[{"plain_text":"(no title)"}])[0]["plain_text"])
 
           props = intel.get("properties", {})
-          def ptype(name): return props.get(name, {}).get("type")
+          def ptype(name):
+              return props.get(name, {}).get("type")
+
           errors = []
 
-          # Expected schema: Company=title, Callsign=relation->Companies DB
-          if ptype("Company") != "title":
-              errors.append(f"- Intel DB property 'Company' must be type 'title', found: {ptype('Company') or '(missing)'}")
+          required = {
+              "Title": "title",
+              "URL": "url",
+              "First Seen": "date",
+              "Last Seen": "date",
+              "Callsign": "relation",
+          }
 
-          if ptype("Callsign") != "relation":
-              errors.append(f"- Intel DB property 'Callsign' must be type 'relation', found: {ptype('Callsign') or '(missing)'}")
-          else:
+          for name, expected_type in required.items():
+              actual = ptype(name)
+              if actual != expected_type:
+                  errors.append(
+                      f"- Intel DB property '{name}' must be type '{expected_type}', "
+                      f"found: {actual or '(missing)'}"
+                  )
+
+          if ptype("Callsign") == "relation":
               rel_db = (props["Callsign"].get("relation") or {}).get("database_id")
-              # Normalize IDs for comparison
               if rel_db and undash(rel_db) != undash(comp["id"]):
-                  errors.append(f"- 'Callsign' relation points to a different DB ({rel_db}); expected Companies DB ({comp['id']}).")
+                  errors.append(
+                      "- 'Callsign' relation points to a different DB "
+                      f"({rel_db}); expected Companies DB ({comp['id']})."
+                  )
 
-          # Optional helpful checks
-          for name, want in (("Summary","rich_text"), ("Date","date")):
-              if ptype(name) not in (None, want):
-                  print(f"⚠️  Hint: '{name}' is {ptype(name)}, usually '{want}' works best.")
+          optional_hints = (
+              ("Source", ("select", "multi_select", "rich_text")),
+              ("Published At", ("date", None)),
+              ("Summary", ("rich_text", None)),
+          )
+          for name, allowed in optional_hints:
+              actual = ptype(name)
+              if actual and actual not in allowed:
+                  print(
+                      f"⚠️  Hint: '{name}' is {actual}; typically one of {allowed} works best."
+                  )
 
           if errors:
-              print("\n❌ Notion Intel DB schema mismatch:")
-              for e in errors: print(e)
-              print("\nFix one of these:")
-              print("  1) Adjust your Intel DB properties to match: Company=title, Callsign=relation→Companies DB; or")
-              print("  2) Update your code that writes Intel pages so it matches your actual schema.")
+              print("\n❌ Notion News Items DB schema mismatch:")
+              for e in errors:
+                  print(e)
+              print("\nEnsure the database includes Title, URL, First Seen, Last Seen, and a Callsign relation to Companies.")
               sys.exit(1)
           else:
-              print("✅ Intel DB schema looks good (Company=title, Callsign=relation to Companies).")
+              print(
+                  "✅ News Items DB schema looks good (Title/URL/First Seen/Last Seen/Callsign present)."
+              )
           PY
       - name: Compute batches
         id: out
