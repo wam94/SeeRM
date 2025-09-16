@@ -577,6 +577,13 @@ property names and types:
 - `Published At` (date)
 - `Summary` (rich text, optional)
 
+Environment overrides for tuning:
+- `NEWS_TRUSTED_DOMAINS`
+- `NEWS_BLOCKED_DOMAINS`
+- `NEWS_DEMOTED_DOMAINS`
+- `NEWS_POSITIVE_KEYWORDS`
+- `NEWS_NEGATIVE_KEYWORDS`
+
 **Reports Database (`NOTION_REPORTS_DB_ID`)**
 - `Name` (title)
 - `Report Type` (select)

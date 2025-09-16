@@ -13,7 +13,8 @@ import pandas as pd
 import requests
 import tldextract
 
-from app.core.config import NotionConfig
+from app.core.config import IntelligenceConfig, NotionConfig
+from app.core.models import Company
 from app.data.notion_client import EnhancedNotionClient
 from app.gmail_client import (
     build_service,
@@ -23,6 +24,7 @@ from app.gmail_client import (
     send_html_email,
 )
 from app.intelligence.models import NewsItem, NewsType
+from app.intelligence.news_quality import NewsQualityScorer
 from app.intelligence.seen_store import NotionNewsSeenStore
 from app.notion_client import get_all_companies_domain_data, set_latest_intel, upsert_company_page
 from app.performance_utils import (
@@ -36,6 +38,12 @@ from app.performance_utils import (
 # ---------------- Notion helpers for new company detection ----------------
 
 NOTION_API = "https://api.notion.com/v1"
+
+
+@functools.lru_cache(maxsize=1)
+def get_quality_scorer() -> NewsQualityScorer:
+    """Return shared quality scorer for news weighting."""
+    return NewsQualityScorer(IntelligenceConfig())
 
 
 def get_notion_headers():
@@ -177,6 +185,7 @@ def fetch_csv_by_subject(service, user: str, subject: str) -> Optional[pd.DataFr
 
 
 def build_queries(
+    callsign: str,
     dba: Optional[str],
     website: Optional[str],
     owners: Optional[List[str]],
@@ -184,39 +193,42 @@ def build_queries(
     aka_names: Optional[str] = None,
     tags: Optional[str] = None,
 ) -> List[str]:
+    scorer = get_quality_scorer()
+
+    company = Company(
+        callsign=(callsign or dba or "unknown"),
+        dba=dba,
+        website=website,
+        domain_root=domain_root,
+        blog_url=None,
+        beneficial_owners=owners or [],
+        aka_names=aka_names,
+        industry_tags=tags,
+    )
+
     names: List[str] = []
-    if dba:
-        names.append(str(dba).strip())
-    if aka_names:
-        names.extend([n.strip() for n in str(aka_names).split(",") if n.strip()])
-    names = [n for n in names if n]
+    if company.dba:
+        names.append(company.dba)
+    if company.callsign:
+        names.append(company.callsign.upper())
+    if company.aka_names:
+        names.extend([n.strip() for n in company.aka_names.split(",") if n.strip()])
+    if not names:
+        names.append(company.callsign)
+
     domains: List[str] = []
-    if domain_root:
-        domains.append(domain_root)
-    if website:
-        w = re.sub(r"^https?://", "", website.strip().lower())
+    if company.domain_root:
+        domains.append(company.domain_root)
+    if company.website:
+        w = re.sub(r"^https?://", "", company.website.strip().lower())
         w = re.sub(r"^www\.", "", w).split("/")[0]
         ext = tldextract.extract(w)
         if ext.registered_domain:
             domains.append(ext.registered_domain)
 
-    Q: List[str] = []
-    if domains:
-        for d in set(domains):
-            Q.append(f"site:{d} (launch OR announce OR funding OR partnership)")
-    if names:
-        for n in set(names):
-            Q.append(f'"{n}" (launch OR product OR partnership OR funding OR raises)')
-    if owners:
-        for p in owners[:3]:
-            p = p.strip()
-            if p:
-                query = (
-                    f'"{p}" ("{names[0]}" OR site:{domains[0] if domains else ""}) '
-                    f"(CEO OR founder OR CTO OR CFO OR raises OR interview)"
-                )
-                Q.append(query)
-    return [q for q in Q if q.strip()]
+    domains = [d.lower() for d in domains if d]
+
+    return scorer.build_query_variants(company, domains, names)
 
 
 # ---------------- RSS / Feeds ----------------
@@ -468,6 +480,7 @@ def collect_recent_news(
     disable_cse = str(os.getenv("CSE_DISABLE", "")).lower() in ("1", "true", "yes")
     if (g_api_key and g_cse_id) and not disable_cse:
         queries = build_queries(
+            org.get("callsign") or "",
             org.get("dba"),
             org.get("website"),
             org.get("owners"),
@@ -505,8 +518,46 @@ def collect_recent_news(
     items = [
         x for x in items if within_days(x.get("published_at", datetime.utcnow()), lookback_days)
     ]
-    items = normalize_news_items(items)
-    return items[:max_items], source_metadata
+    normalized = normalize_news_items(items)
+
+    company_model = Company(
+        callsign=(org.get("callsign") or org.get("dba") or "unknown"),
+        dba=org.get("dba"),
+        website=org.get("website"),
+        domain_root=org.get("domain_root"),
+        blog_url=org.get("blog_url"),
+        beneficial_owners=org.get("owners") or [],
+        aka_names=org.get("aka_names"),
+        industry_tags=org.get("industry_tags"),
+    )
+
+    scorer = get_quality_scorer()
+    news_models = [
+        NewsItem(
+            title=item["title"] or item["url"],
+            url=item["url"],
+            source=item["source"],
+            published_at=item.get("published_at"),
+            news_type=NewsType.OTHER_NOTABLE,
+            relevance_score=0.0,
+            sentiment=None,
+            company_mentions=[company_model.callsign.upper()],
+        )
+        for item in normalized
+    ]
+
+    ranked_items = scorer.rank_items(company_model, news_models, max_items)
+    filtered = [
+        {
+            "url": item.url,
+            "title": item.title,
+            "source": item.source,
+            "published_at": item.published_at,
+        }
+        for item in ranked_items
+    ]
+
+    return filtered, source_metadata
 
 
 # ---------------- LLM summary (optional) ----------------
