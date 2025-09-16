@@ -70,6 +70,16 @@ export NOTION_COMPANIES_DB_ID="your-companies-database-id"
 # Intelligence database (optional - for news and intel data)
 export NOTION_INTEL_DB_ID="your-intelligence-database-id"
 ```
+Required properties for the intelligence database:
+
+- `Title` (title)
+- `URL` (url)
+- `First Seen` (date)
+- `Last Seen` (date)
+- `Callsign` (relation to the Companies database)
+- `Source` (select, multi-select, or rich text)
+- `Published At` (date)
+- `Summary` (rich text, optional)
 
 ## CLI Commands
 

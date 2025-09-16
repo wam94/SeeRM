@@ -5,7 +5,7 @@ Provides robust Notion API integration with circuit breakers, retry logic, and v
 """
 
 import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import httpx
 import structlog
@@ -234,6 +234,69 @@ class EnhancedNotionClient:
             query_data["start_cursor"] = start_cursor
 
         return self._make_request("POST", f"/databases/{database_id}/query", json_data=query_data)
+
+    def query_database_iter(
+        self,
+        database_id: str,
+        filter_obj: Optional[Dict[str, Any]] = None,
+        sorts: Optional[List[Dict[str, Any]]] = None,
+        page_size: int = 100,
+    ) -> Iterable[Dict[str, Any]]:
+        """Yield pages from database queries handling pagination."""
+
+        cursor: Optional[str] = None
+        while True:
+            response = self.query_database(
+                database_id,
+                filter_obj=filter_obj,
+                sorts=sorts,
+                page_size=page_size,
+                start_cursor=cursor,
+            )
+            for page in response.get("results", []):
+                yield page
+
+            if not response.get("has_more"):
+                break
+            cursor = response.get("next_cursor")
+
+    def create_page(self, database_id: str, properties: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a new page in the specified database."""
+
+        payload = {"parent": {"database_id": database_id}, "properties": properties}
+        return self._make_request("POST", "/pages", json_data=payload)
+
+    def update_page(self, page_id: str, properties: Dict[str, Any]) -> Dict[str, Any]:
+        """Update properties on an existing Notion page."""
+
+        return self._make_request(
+            "PATCH", f"/pages/{page_id}", json_data={"properties": properties}
+        )
+
+    def find_news_item_by_url(
+        self, database_id: str, url_property: str, normalized_url: str
+    ) -> Optional[str]:
+        """Locate a news item page by normalized URL."""
+
+        try:
+            response = self.query_database(
+                database_id,
+                filter_obj={
+                    "property": url_property,
+                    "url": {"equals": normalized_url},
+                },
+                page_size=1,
+            )
+            results = response.get("results", [])
+            return results[0]["id"] if results else None
+        except Exception as exc:
+            logger.warning(
+                "Failed to find news item by URL",
+                database_id=database_id,
+                url=normalized_url,
+                error=str(exc),
+            )
+            return None
 
     def find_company_page(self, database_id: str, callsign: str) -> Optional[str]:
         """

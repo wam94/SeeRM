@@ -3,11 +3,8 @@ from __future__ import annotations
 
 import functools
 import io
-import json
-import math
 import os
 import re
-import time
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
@@ -16,6 +13,8 @@ import pandas as pd
 import requests
 import tldextract
 
+from app.core.config import NotionConfig
+from app.data.notion_client import EnhancedNotionClient
 from app.gmail_client import (
     build_service,
     extract_csv_attachments,
@@ -23,18 +22,14 @@ from app.gmail_client import (
     search_messages,
     send_html_email,
 )
-from app.notion_client import (
-    get_all_companies_domain_data,
-    set_latest_intel,
-    update_intel_archive_for_company,
-    upsert_company_page,
-)
+from app.intelligence.models import NewsItem, NewsType
+from app.intelligence.seen_store import NotionNewsSeenStore
+from app.notion_client import get_all_companies_domain_data, set_latest_intel, upsert_company_page
 from app.performance_utils import (
     DEFAULT_RATE_LIMITER,
     PERFORMANCE_MONITOR,
     ConcurrentAPIClient,
     ParallelProcessor,
-    has_valid_domain,
     should_skip_processing,
 )
 
@@ -143,7 +138,10 @@ def ensure_company_page(
         r = requests.post(
             f"{NOTION_API}/pages",
             headers=get_notion_headers(),
-            json={"parent": {"database_id": _dash32(companies_db_id)}, "properties": props},
+            json={
+                "parent": {"database_id": _dash32(companies_db_id)},
+                "properties": props,
+            },
             timeout=30,
         )
         r.raise_for_status()
@@ -329,6 +327,40 @@ def dedupe(
     return out
 
 
+def _dict_to_news_item(data: Dict[str, Any], callsign: str) -> NewsItem:
+    url = (data.get("url") or "").strip()
+    source = (data.get("source") or "").strip()
+    if not source and url:
+        ext = tldextract.extract(url)
+        source = ext.registered_domain or ext.domain or ""
+
+    news_type_value = data.get("news_type") or data.get("type")
+    try:
+        news_type = NewsType(news_type_value)
+    except Exception:
+        news_type = NewsType.OTHER_NOTABLE
+
+    summary = data.get("summary")
+    if isinstance(summary, dict):
+        summary = summary.get("text") or summary.get("content")
+
+    return NewsItem(
+        title=(data.get("title") or "").strip() or url,
+        url=url,
+        source=source,
+        published_at=(data.get("published_at") or "").strip(),
+        summary=summary,
+        news_type=news_type,
+        relevance_score=float(data.get("relevance_score") or 0.0),
+        sentiment=(data.get("sentiment") or None),
+        company_mentions=[callsign.upper()],
+    )
+
+
+def _news_item_to_link(item: NewsItem) -> str:
+    return f"• [{item.title}]({item.url})" if item.url else f"• {item.title}"
+
+
 def within_days(published_at: Any, days: int) -> bool:
     """Allow both ISO date strings and datetime objects; default True if unknown."""
     if published_at is None or published_at == "":
@@ -505,7 +537,10 @@ def _openai_summarize(text: str) -> Optional[str]:
                 r = client.responses.create(**kwargs)
                 return r.output_text
             else:
-                kwargs = {"model": model, "messages": [{"role": "user", "content": prompt}]}
+                kwargs = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                }
                 if send_temperature and temperature is not None:
                     kwargs["temperature"] = temperature
                 r = client.chat.completions.create(**kwargs)
@@ -529,7 +564,11 @@ def build_email_digest(intel: Dict[str, List[Dict[str, Any]]]) -> str:
     for cs, items in intel.items():
         parts.append(f"<h3>{cs}</h3><ul>")
         for it in items:
-            line = f"- {it.get('published_at','')} — <a href=\"{it.get('url','')}\">{it.get('title') or it.get('url')}</a> — {it.get('source','')}"
+            published = it.get("published_at", "")
+            url = it.get("url", "")
+            title = it.get("title") or url
+            source = it.get("source", "")
+            line = f"- {published} — " f'<a href="{url}">{title}</a> — {source}'
             parts.append(f"<li>{line}</li>")
         parts.append("</ul>")
     parts.append("</body></html>")
@@ -544,21 +583,11 @@ def process_company_notion_with_data(
     source_metadata_by_cs: Dict[str, Dict[str, List[str]]],
     companies_db: str,
     intel_db: str,
+    news_store: Optional[NotionNewsSeenStore],
     cs: str,
     org: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
-    """
-    Process Notion updates for a single company with data bound first.
-
-    This function signature is designed to work with functools.partial
-    where the data parameters are bound first, and cs/org are passed
-    by the parallel processor.
-    """
-    print(f"[DEBUG BOUND] process_company_notion_with_data called with:")
-    print(f"  cs: {type(cs)} = {cs}")
-    print(f"  org: {type(org)} = {org}")
-    print(f"  intel_by_cs: {type(intel_by_cs)}")
-    print(f"  companies_db: {type(companies_db)} = {companies_db}")
+    """Wrapper so partial binding works with the parallel processor."""
 
     return process_company_notion(
         cs=cs,
@@ -567,6 +596,7 @@ def process_company_notion_with_data(
         source_metadata_by_cs=source_metadata_by_cs,
         companies_db=companies_db,
         intel_db=intel_db,
+        news_store=news_store,
     )
 
 
@@ -577,46 +607,17 @@ def process_company_notion(
     source_metadata_by_cs: Dict[str, Dict[str, List[str]]],
     companies_db: str,
     intel_db: str,
+    news_store: Optional[NotionNewsSeenStore],
 ) -> Optional[Dict[str, Any]]:
-    """
-    Process Notion updates for a single company.
+    """Process Notion updates for a single company."""
 
-    Args:
-        cs: Company callsign
-        org: Company organization data dictionary
-        intel_by_cs: Intelligence items by callsign
-        source_metadata_by_cs: Source metadata by callsign
-        companies_db: Companies database ID
-        intel_db: Intel database ID
-
-    Returns:
-        Processing result dictionary or None
-    """
-    # DEBUG: Log all parameter types and values
-    print(f"[DEBUG] process_company_notion called with:")
-    print(f"  cs: {type(cs)} = {cs}")
-    print(f"  org: {type(org)} = {org}")
-    print(f"  intel_by_cs: {type(intel_by_cs)}")
-    print(f"  source_metadata_by_cs: {type(source_metadata_by_cs)}")
-    print(f"  companies_db: {type(companies_db)} = {companies_db}")
-    print(f"  intel_db: {type(intel_db)} = {intel_db}")
-
-    # Skip if no new intelligence data
-    try:
-        print(f"[DEBUG] About to call intel_by_cs.get(cs={cs}, [])")
-        intel_items = intel_by_cs.get(cs, [])
-        print(f"[DEBUG] intel_items: {type(intel_items)} with {len(intel_items)} items")
-    except Exception as e:
-        print(f"[DEBUG ERROR] Failed at intel_by_cs.get(): {e}")
-        print(f"[DEBUG ERROR] intel_by_cs type: {type(intel_by_cs)}, value: {intel_by_cs}")
-        raise
+    intel_items = intel_by_cs.get(cs, [])
     if not intel_items:
         return None
 
     try:
         # Ensure org is a dict (safety check)
         if not isinstance(org, dict):
-            print(f"[ERROR] Expected dict for org data, got {type(org)}: {org}")
             return {"status": "error", "error": f"Invalid org data type: {type(org)}"}
 
         # Upsert company page first (without domain/website to avoid overwriting baseline job data)
@@ -633,28 +634,35 @@ def process_company_notion(
         )
 
         # LLM summary (optional)
-        text_blob = "\n".join(
-            [
-                f"{it.get('published_at','')} — {it.get('title','')} — {it.get('source','')} {it.get('url','')}"
-                for it in intel_items
+        company_callsign = str(org.get("callsign") or cs)
+        collected_items: List[NewsItem] = [
+            _dict_to_news_item(item, company_callsign) for item in intel_items
+        ]
+
+        if news_store:
+            summary_items, _ = news_store.ingest(
+                company_callsign,
+                page_id,
+                collected_items,
+            )
+        else:
+            summary_items = collected_items
+
+        if summary_items:
+            text_blob = "\n".join(
+                f"{item.published_at} — {item.title} — {item.source} {item.url}"
+                for item in summary_items
+            )
+            ai_summary = _openai_summarize(text_blob) or f"{len(summary_items)} new items."
+            source_links = [
+                _news_item_to_link(item) for item in summary_items if item.title and item.url
             ]
-        )
-        ai_summary = _openai_summarize(text_blob) or f"{len(intel_items)} new items."
-
-        # Append source links to the summary
-        if intel_items:
-            source_links = []
-            for item in intel_items:
-                title = (item.get("title") or "").strip()[:100]  # Truncate long titles
-                url = (item.get("url") or "").strip()
-                if title and url:
-                    source_links.append(f"• [{title}]({url})")
-
             if source_links:
                 summary = ai_summary + "\n\nSources:\n" + "\n".join(source_links)
             else:
                 summary = ai_summary
         else:
+            ai_summary = "No new items detected."
             summary = ai_summary
 
         # Set Latest Intel + update Intel archive with new system
@@ -671,25 +679,6 @@ def process_company_notion(
             )
         except Exception as e:
             print(f"WARN set_latest_intel for {cs}: {e}")
-
-        # Update Intel archive: latest summary only + dated timeline bullets
-        try:
-            DEFAULT_RATE_LIMITER.wait_if_needed()
-            update_intel_archive_for_company(
-                intel_db_id=intel_db,
-                companies_db_id=companies_db,
-                company_page_id=page_id,
-                callsign=str(org.get("callsign") or cs),
-                date_iso=today_iso,
-                summary_text=summary,
-                items=intel_items,
-                summary_max_bytes=250_000,  # ~250 KB for property
-                timeline_max_bytes=800_000,  # ~800 KB for toggle groups
-                overwrite_summary_only=True,  # important: no summary history
-                source_metadata=source_metadata_by_cs.get(cs, {}),
-            )
-        except Exception as e:
-            print(f"WARN intel archive for {cs}: {e}")
 
         return {"status": "success", "items": len(intel_items)}
 
@@ -716,7 +705,12 @@ def main():
     ]
     lookback_days = int(os.getenv("INTEL_LOOKBACK_DAYS", "10") or "10")
     max_per_org = int(os.getenv("INTEL_MAX_PER_ORG", "5") or "5")
-    preview_only = str(os.getenv("PREVIEW_ONLY", "true")).lower() in ("1", "true", "yes", "y")
+    preview_only = str(os.getenv("PREVIEW_ONLY", "true")).lower() in (
+        "1",
+        "true",
+        "yes",
+        "y",
+    )
 
     g_api_key = os.getenv("GOOGLE_API_KEY")
     g_cse_id = os.getenv("GOOGLE_CSE_ID")
@@ -805,7 +799,11 @@ def main():
             if callsign:
                 try:
                     page_id, created = ensure_company_page(
-                        companies_db, callsign, website=website, domain=domain, company=dba
+                        companies_db,
+                        callsign,
+                        website=website,
+                        domain=domain,
+                        company=dba,
                     )
                     if created:
                         new_callsigns.append(callsign)
@@ -819,17 +817,21 @@ def main():
                     print(f"[ERROR] Failed to ensure company page for {callsign}: {e}")
 
     if new_callsigns:
-        print(
-            f"[NEW COMPANIES] Created {len(new_callsigns)} new company pages: {', '.join(new_callsigns[:8])}{' ...' if len(new_callsigns) > 8 else ''}"
-        )
+        displayed = ", ".join(new_callsigns[:8])
+        if len(new_callsigns) > 8:
+            displayed += " ..."
+        print(f"[NEW COMPANIES] Created {len(new_callsigns)} new company pages: {displayed}")
 
         # Write new callsigns to trigger baseline generation
         try:
             with open("/tmp/new_callsigns.txt", "w") as f:
                 f.write(",".join(new_callsigns))
-            print(
-                f"[TRIGGER] Wrote {len(new_callsigns)} new callsigns to /tmp/new_callsigns.txt for baseline generation"
+            trigger_msg = (
+                "[TRIGGER] Wrote "
+                f"{len(new_callsigns)} new callsigns to /tmp/new_callsigns.txt "
+                "for baseline generation"
             )
+            print(trigger_msg)
         except Exception as e:
             print(f"[ERROR] Failed to write new callsigns trigger file: {e}")
 
@@ -872,14 +874,20 @@ def main():
         if notion_domains.get("domain"):
             if enhanced_org.get("domain_root") != notion_domains["domain"]:
                 domain_sources.append(
-                    "domain: CSV '{enhanced_org.get('domain_root')}' → Notion '{notion_domains['domain']}'"
+                    "domain: CSV '{csv}' → Notion '{notion}'".format(
+                        csv=enhanced_org.get("domain_root"),
+                        notion=notion_domains["domain"],
+                    )
                 )
             enhanced_org["domain_root"] = notion_domains["domain"]
 
         if notion_domains.get("website"):
             if enhanced_org.get("website") != notion_domains["website"]:
                 domain_sources.append(
-                    "website: CSV '{enhanced_org.get('website')}' → Notion '{notion_domains['website']}'"
+                    "website: CSV '{csv}' → Notion '{notion}'".format(
+                        csv=enhanced_org.get("website"),
+                        notion=notion_domains["website"],
+                    )
                 )
             enhanced_org["website"] = notion_domains["website"]
 
@@ -905,14 +913,10 @@ def main():
     source_metadata_by_cs: Dict[str, Dict[str, List[str]]] = {}
     for cs in roster.keys():
         result = results.get(cs, {"items": [], "source_metadata": {}})
-        print(f"[DEBUG PROCESSING] cs={cs}, result type: {type(result)}, result: {result}")
 
         if isinstance(result, tuple) and len(result) == 2:
             # Handle tuple return format (cs, data)
             returned_cs, data = result
-            print(
-                f"[DEBUG PROCESSING] Tuple format: returned_cs={returned_cs}, data type: {type(data)}"
-            )
             if isinstance(data, dict):
                 intel_by_cs[cs] = data.get("items", [])
                 source_metadata_by_cs[cs] = data.get("source_metadata", {})
@@ -939,10 +943,18 @@ def main():
         PERFORMANCE_MONITOR.start_timer("notion_updates")
 
         # Create bound function with all data - NO nested functions!
-        print(f"[DEBUG MAIN] Creating bound function with:")
+        print("[DEBUG MAIN] Creating bound function with:")
         print(f"  intel_by_cs: {type(intel_by_cs)} with {len(intel_by_cs)} companies")
         print(f"  companies_db: {type(companies_db)} = {companies_db}")
         print(f"  intel_db: {type(intel_db)} = {intel_db}")
+
+        try:
+            notion_config = NotionConfig()
+            notion_client = EnhancedNotionClient(notion_config)
+            news_store = NotionNewsSeenStore(notion_client, intel_db, companies_db)
+        except Exception as exc:
+            print(f"[WARN] Failed to initialize Notion news store: {exc}")
+            news_store = None
 
         bound_processor = functools.partial(
             process_company_notion_with_data,
@@ -950,6 +962,7 @@ def main():
             source_metadata_by_cs,
             companies_db,
             intel_db,
+            news_store,
         )
 
         # Process Notion updates in parallel (with lower concurrency for API limits)
@@ -964,9 +977,11 @@ def main():
         successful_updates = sum(
             1 for r in notion_results.values() if r and r.get("status") == "success"
         )
-        print(
-            f"[PERFORMANCE] Notion updates completed in {notion_time:.2f}s ({successful_updates} successful)"
+        perf_msg = (
+            "[PERFORMANCE] Notion updates completed in "
+            f"{notion_time:.2f}s ({successful_updates} successful)"
         )
+        print(perf_msg)
 
     # Send optional email digest
     digest_to = os.getenv("DIGEST_TO") or os.getenv("GMAIL_USER") or ""
