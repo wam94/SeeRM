@@ -457,16 +457,14 @@ def ensure_intel_page(
 
     # 3) Create new Intel page
     props: Dict[str, Any] = {}
-    
+
     if title_prop:
         props[title_prop] = _title(company_name)
-        
+
     if callsign_rel and company_page_id:
         props[callsign_rel] = {"relation": [{"id": company_page_id}]}
-    
-    res = notion_post(
-        "/pages", {"parent": {"database_id": intel_db_id}, "properties": props}
-    )
+
+    res = notion_post("/pages", {"parent": {"database_id": intel_db_id}, "properties": props})
     return res.json()["id"]
 
 
@@ -497,6 +495,46 @@ def _set_summary_latest(page_id: str, summary_prop: str, text: str, max_bytes: i
     _set_page_props(page_id, {summary_prop: _rt_segments(text)})
 
 
+def _block_to_create_payload(block: Dict[str, Any]) -> Dict[str, Any]:
+    """Strip Notion read-only keys so a block can be recreated elsewhere."""
+    block_type = block.get("type")
+    if not block_type:
+        return {"object": "block", "type": "paragraph", "paragraph": {"rich_text": []}}
+
+    payload: Dict[str, Any] = {"object": "block", "type": block_type, block_type: {}}
+    source = block.get(block_type) or {}
+
+    for key, value in source.items():
+        if key == "children":
+            payload[block_type][key] = [_block_to_create_payload(child) for child in value]
+        else:
+            payload[block_type][key] = value
+
+    return payload
+
+
+def _clone_toggle_block(block: Dict[str, Any]) -> Dict[str, Any]:
+    toggle_data = block.get("toggle", {})
+    cloned: Dict[str, Any] = {
+        "object": "block",
+        "type": "toggle",
+        "toggle": {"rich_text": toggle_data.get("rich_text", [])},
+    }
+
+    color = toggle_data.get("color")
+    if color:
+        cloned["toggle"]["color"] = color
+
+    if block.get("has_children"):
+        child_blocks = _list_block_children(block["id"])
+        if child_blocks:
+            cloned["toggle"]["children"] = [
+                _block_to_create_payload(child) for child in child_blocks
+            ]
+
+    return cloned
+
+
 def _append_timeline_group(
     page_id: str, date_iso: str, summary_text: str, items: List[Dict[str, Any]]
 ):
@@ -522,6 +560,7 @@ def _append_timeline_group(
                 },
             }
         )
+
     children = [
         {
             "object": "block",
@@ -532,23 +571,45 @@ def _append_timeline_group(
         }
     ] + bullets
 
-    # Append blocks using POST (not PATCH) as per Notion API
-    r = notion_post(
-        f"/blocks/{page_id}/children",
-        {
-            "children": [
-                {
-                    "object": "block",
-                    "type": "toggle",
-                    "toggle": {
-                        "rich_text": [{"type": "text", "text": {"content": toggle_title}}],
-                        "children": children,
-                    },
-                }
-            ]
+    new_toggle = {
+        "object": "block",
+        "type": "toggle",
+        "toggle": {
+            "rich_text": [{"type": "text", "text": {"content": toggle_title}}],
+            "children": children,
         },
-    )
-    r.raise_for_status()
+    }
+
+    existing_blocks = _list_block_children(page_id)
+    existing_toggles = [b for b in existing_blocks if b.get("type") == "toggle"]
+
+    after_block_id: Optional[str] = None
+    for idx, block in enumerate(existing_blocks):
+        if block.get("type") == "toggle":
+            if idx > 0:
+                after_block_id = existing_blocks[idx - 1]["id"]
+            break
+
+    payload: Dict[str, Any] = {"children": [new_toggle]}
+
+    if after_block_id:
+        payload["after"] = {"block_id": after_block_id}
+        notion_post(f"/blocks/{page_id}/children", payload).raise_for_status()
+        return
+
+    if existing_toggles:
+        # No anchor block to insert before the first toggle, so rebuild the group order.
+        cloned_toggles = [_clone_toggle_block(block) for block in existing_toggles]
+        for block in existing_toggles:
+            try:
+                notion_delete(f"/blocks/{block['id']}")
+            except Exception:
+                pass
+        payload["children"] = [new_toggle] + cloned_toggles
+        notion_post(f"/blocks/{page_id}/children", payload).raise_for_status()
+        return
+
+    notion_post(f"/blocks/{page_id}/children", payload).raise_for_status()
 
 
 def _estimate_block_text_bytes(block: Dict[str, Any]) -> int:
