@@ -17,10 +17,11 @@ from app.data.gmail_client import EnhancedGmailClient
 from app.data.notion_client import EnhancedNotionClient
 from app.utils.reliability import track_performance, with_retry
 
-from .cache import cache_company_profile, cache_movements, cache_notion_query, get_cache
+from .cache import cache_company_profile, cache_movements
 from .models import CompanyIntelligence, CompanyProfile, Movement, MovementType, NewsItem, NewsType
 from .news_classifier import NewsClassifier
 from .parallel_processor import get_parallel_processor
+from .seen_store import NotionNewsSeenStore
 
 logger = structlog.get_logger(__name__)
 
@@ -44,6 +45,17 @@ class IntelligenceAggregator:
         self.settings = settings or Settings()
         self.csv_processor = CSVProcessor(strict_validation=False)
         self.news_classifier = NewsClassifier(self.settings)
+
+        self.news_store = None
+        if self.notion_client and self.settings.notion.intel_db_id:
+            try:
+                self.news_store = NotionNewsSeenStore(
+                    self.notion_client,
+                    self.settings.notion.intel_db_id,
+                    self.settings.notion.companies_db_id,
+                )
+            except Exception as exc:
+                logger.warning("Failed to initialize Notion news store", error=str(exc))
 
         logger.info(
             "Intelligence aggregator initialized",
@@ -203,6 +215,10 @@ class IntelligenceAggregator:
         Returns:
             List of NewsItem objects
         """
+        if self.news_store:
+            items = self.news_store.get_recent(callsign, days)
+            return items
+
         if not self.notion_client or not self.settings.notion.companies_db_id:
             logger.debug("Notion companies DB not configured")
             return []
@@ -247,7 +263,7 @@ class IntelligenceAggregator:
                             intel_date.isoformat() if intel_date else datetime.now().isoformat()
                         ),
                         summary=latest_intel,
-                        news_type=NewsType.OTHER_NOTABLE,  # Will be classified later by intelligent classifier
+                        news_type=NewsType.OTHER_NOTABLE,  # Classified later
                         relevance_score=0.8,  # High relevance since it's the latest intel
                         sentiment="neutral",  # Default to neutral
                         company_mentions=[callsign.upper()],
@@ -299,7 +315,9 @@ class IntelligenceAggregator:
         )
 
         logger.info(
-            "Company intelligence compiled", callsign=callsign, news_items=len(news_history)
+            "Company intelligence compiled",
+            callsign=callsign,
+            news_items=len(news_history),
         )
 
         return intelligence

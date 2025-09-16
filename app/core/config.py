@@ -7,6 +7,8 @@ with proper type checking and defaults.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from pydantic import Field, field_validator
@@ -23,7 +25,11 @@ class GmailConfig(BaseSettings):
 
     # Query settings
     query: str = Field(
-        default='from:metabase@mercury.com subject:"Alert: SeeRM Master Query has results" has:attachment filename:csv newer_than:10d',
+        default=(
+            "from:metabase@mercury.com "
+            'subject:"Alert: SeeRM Master Query has results" '
+            "has:attachment filename:csv newer_than:10d"
+        ),
         alias="GMAIL_QUERY",
     )
     attachment_regex: str = Field(default=r".*\.csv$", alias="ATTACHMENT_REGEX")
@@ -90,21 +96,21 @@ class IntelligenceConfig(BaseSettings):
 
     @field_validator("filter_callsigns", mode="before")
     @classmethod
-    def parse_callsigns(cls, v):
+    def parse_callsigns(cls, v):  # noqa: D102
         if isinstance(v, str):
             return [c.strip().lower() for c in v.split(",") if c.strip()]
         return v or []
 
     @field_validator("preview_only", mode="before")
     @classmethod
-    def parse_preview_only(cls, v):
+    def parse_preview_only(cls, v):  # noqa: D102
         if isinstance(v, str):
             return v.lower() in ("1", "true", "yes", "y")
         return bool(v)
 
     @field_validator("cse_disable", mode="before")
     @classmethod
-    def parse_cse_disable(cls, v):
+    def parse_cse_disable(cls, v):  # noqa: D102
         if isinstance(v, str):
             return v.lower() in ("1", "true", "yes")
         return bool(v)
@@ -121,21 +127,21 @@ class BaselineConfig(BaseSettings):
 
     @field_validator("callsigns", mode="before")
     @classmethod
-    def parse_callsigns(cls, v):
+    def parse_callsigns(cls, v):  # noqa: D102
         if isinstance(v, str):
             return [c.strip().lower() for c in v.split(",") if c.strip()]
         return v or []
 
     @field_validator("debug", mode="before")
     @classmethod
-    def parse_debug(cls, v):
+    def parse_debug(cls, v):  # noqa: D102
         if isinstance(v, str):
             return v.lower() in ("1", "true", "yes")
         return bool(v)
 
     @field_validator("use_notion_flags", mode="before")
     @classmethod
-    def parse_use_notion_flags(cls, v):
+    def parse_use_notion_flags(cls, v):  # noqa: D102
         if isinstance(v, str):
             return v.lower() in ("1", "true", "yes")
         return bool(v)
@@ -168,19 +174,19 @@ class Settings(BaseSettings):
 
     @field_validator("debug", mode="before")
     @classmethod
-    def parse_debug(cls, v):
+    def parse_debug(cls, v):  # noqa: D102
         if isinstance(v, str):
             return v.lower() in ("1", "true", "yes")
         return bool(v)
 
     @field_validator("dry_run", mode="before")
     @classmethod
-    def parse_dry_run(cls, v):
+    def parse_dry_run(cls, v):  # noqa: D102
         if isinstance(v, str):
             return v.lower() in ("1", "true", "yes")
         return bool(v)
 
-    def model_post_init(self, __context) -> None:
+    def model_post_init(self, __context) -> None:  # noqa: D102
         # Initialize sub-configurations
         self.gmail = GmailConfig()
         self.digest = DigestConfig()
@@ -202,9 +208,28 @@ settings: Optional[Settings] = None
 
 
 def get_settings() -> Settings:
-    """Get the global settings instance."""
+    """Get the global settings instance.
+
+    Load order for env file (first match wins):
+      1. SEERM_CONFIG env var path
+      2. ~/.seerm/.env
+      3. ./.env (default handled by Settings())
+    """
     global settings
     if settings is None:
+        # 1) Explicit config path from env var
+        seerm_cfg = os.getenv("SEERM_CONFIG")
+        if seerm_cfg and Path(seerm_cfg).expanduser().exists():
+            settings = Settings(_env_file=str(Path(seerm_cfg).expanduser()))
+            return settings
+
+        # 2) Home default
+        home_env = Path("~/.seerm/.env").expanduser()
+        if home_env.exists():
+            settings = Settings(_env_file=str(home_env))
+            return settings
+
+        # 3) Fallback to default .env in CWD or pure env vars
         settings = Settings()
     return settings
 
@@ -255,6 +280,7 @@ def validate_required_settings(for_workflow: str = "digest") -> List[str]:
 def validate_intelligence_reports_config() -> Dict[str, str]:
     """
     Validate intelligence reports configuration.
+
     Returns a dictionary with service status and messages.
     """
     status = {}
@@ -329,7 +355,12 @@ def print_configuration_summary():
         print(f"Notion Intel DB: {'✓' if config.notion.intel_db_id else '✗'}")
         print(f"Notion Reports DB: {'✓' if config.notion.reports_db_id else '✗'}")
         print(
-            f"Google CSE: {'✓' if config.intelligence.google_api_key and config.intelligence.google_cse_id else '✗'}"
+            "Google CSE: "
+            + (
+                "✓"
+                if (config.intelligence.google_api_key and config.intelligence.google_cse_id)
+                else "✗"
+            )
         )
         print(f"OpenAI: {'✓' if config.intelligence.openai_api_key else '✗'}")
         print()

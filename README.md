@@ -33,6 +33,7 @@ SeeRM is an enterprise-grade client intelligence platform that automates portfol
 - [Testing](#-testing)
 - [Deployment](#-deployment)
 - [Contributing](#-contributing)
+ - [Releases](#-releases)
 
 ## 🏗️ System Overview
 
@@ -504,6 +505,42 @@ pytest tests/test_digest_service.py::TestPerformanceBenchmarks -v
 - **[Archive Documentation](./archive/)** - Legacy system references
 - **[Test Documentation](./tests/)** - Testing guide and examples
 - **API Documentation** - Generated from docstrings (run `pydoc app`)
+
+### Notion News Items Database
+
+To track previously seen news, configure the Notion database referenced by
+`NOTION_INTEL_DB_ID` with the following properties:
+
+- `Title` (title) – article headline
+- `URL` (url) – canonical article link (used as unique key)
+- `First Seen` (date) – set automatically when the link first appears
+- `Last Seen` (date) – updated whenever the link reappears
+- `Callsign` (relation → Companies DB) – link back to the company page
+- `Source` (select or rich text) – publication/source name
+- `Published At` (date) – article publication date (optional but recommended)
+- `Summary` (rich text) – optional article synopsis
+
+The Weekly News job writes one row per URL and only surfaces items whose
+`First Seen` date falls within the report window, preventing duplicates from
+week to week.
+
+## 🏷️ Releases
+
+We publish wheels to GitHub Releases. Two options:
+
+- Tag-driven release (recommended):
+  1. Bump `version` in `pyproject.toml`.
+  2. Create a tag: `git tag v0.1.0 && git push origin v0.1.0`.
+  3. GitHub Actions builds the wheel/sdist and attaches them to the new Release.
+
+- Manual release via workflow_dispatch:
+  1. Open GitHub → Actions → `Release` workflow → `Run workflow`.
+  2. Provide the `tag` (e.g., `v0.1.0`) and optionally mark as prerelease.
+  3. The workflow builds artifacts and creates/updates the Release.
+
+Artifacts:
+- Wheel and sdist appear under the Release assets.
+- Consumers can install with `pipx install https://github.com/<org>/<repo>/releases/download/vX.Y.Z/seerm-X.Y.Z-py3-none-any.whl`.
 
 ## 🔐 Security & Privacy
 

@@ -11,8 +11,11 @@ import click
 from rich.console import Console
 from rich.table import Table
 
+from app.cli_commands.doctor import doctor
 from app.cli_commands.reports import reports
+from app.cli_commands.setup_wizard import setup as setup_wizard
 from app.cli_commands.test_email import test_email
+from app.cli_commands.update import update_check
 from app.core.config import get_settings, print_configuration_summary, validate_required_settings
 from app.core.exceptions import ConfigurationError, SeeRMError
 from app.core.logging import set_correlation_id, setup_logging
@@ -52,6 +55,9 @@ def main(ctx, debug: bool, dry_run: bool, correlation_id: Optional[str]):
 # Add subcommand groups
 main.add_command(reports)
 main.add_command(test_email)
+main.add_command(setup_wizard)
+main.add_command(doctor)
+main.add_command(update_check)
 
 
 @main.command()
