@@ -34,6 +34,22 @@ from app.utils.reliability import ParallelProcessor, with_circuit_breaker, with_
 
 logger = structlog.get_logger(__name__)
 
+_CORPORATE_SUFFIXES = {
+    "inc",
+    "inc.",
+    "llc",
+    "l.l.c.",
+    "corp",
+    "corp.",
+    "co",
+    "co.",
+    "company",
+    "ltd",
+    "ltd.",
+    "incorporated",
+    "corporation",
+}
+
 
 class NewsCollector:
     """Collect news from multiple sources with reliability patterns."""
@@ -68,18 +84,45 @@ class NewsCollector:
         Returns:
             List of search query strings
         """
-        names: List[str] = []
-        if company.dba:
-            names.append(company.dba)
+
+        def strip_suffix(name: str) -> str:
+            tokens = [t for t in re.split(r"\s+", name.strip()) if t]
+            while tokens:
+                suffix = tokens[-1].rstrip(",.").lower()
+                if suffix in _CORPORATE_SUFFIXES:
+                    tokens.pop()
+                    continue
+                break
+            return " ".join(tokens)
+
+        raw_names: List[str] = []
         if company.callsign:
-            names.append(company.callsign.upper())
+            raw_names.append(company.callsign)
+        if company.dba:
+            raw_names.append(company.dba)
+        if company.callsign:
+            raw_names.append(company.callsign.upper())
 
         alt_names = aka_names or company.aka_names
         if alt_names:
-            names.extend([n.strip() for n in alt_names.split(",") if n.strip()])
+            raw_names.extend([n.strip() for n in alt_names.split(",") if n.strip()])
 
-        names = [n for n in names if n]
-        if not names:
+        names: List[str] = []
+        seen_names = set()
+        for name in raw_names:
+            if not name:
+                continue
+            cleaned = strip_suffix(name)
+            cleaned = cleaned.strip()
+            if not cleaned:
+                continue
+            key = cleaned.lower()
+            if key in seen_names:
+                continue
+            seen_names.add(key)
+            names.append(cleaned)
+
+        if not names and company.callsign:
             names.append(company.callsign)
 
         domains: List[str] = []

@@ -249,7 +249,26 @@ class NewsQualityScorer:
     ) -> List[str]:
         """Generate focused Google CSE queries."""
         queries: List[str] = []
-        primary = base_terms[0] if base_terms else company.callsign
+        terms: List[str] = []
+        seen_terms = set()
+
+        def add_term(candidate: Optional[str]) -> None:
+            if not candidate:
+                return
+            value = candidate.strip()
+            if not value:
+                return
+            key = value.lower()
+            if key in seen_terms:
+                return
+            seen_terms.add(key)
+            terms.append(value)
+
+        add_term(company.callsign)
+        for term in base_terms:
+            add_term(term)
+
+        primary = terms[0] if terms else company.callsign
         if primary:
             queries.append(f'"{primary}" news')
             refined = (
@@ -258,14 +277,17 @@ class NewsQualityScorer:
             )
             queries.append(refined)
 
-        for domain in domains:
-            queries.append(f'site:{domain} "{primary}"')
-
         for scope in site_scopes or []:
-            queries.append(f'site:{scope} "{primary}"')
+            for term in terms:
+                queries.append(f'site:{scope} "{term}"')
+            queries.append(f"site:{scope}")
+
+        for domain in domains:
+            for term in terms:
+                queries.append(f'site:{domain} "{term}"')
 
         for trusted in self.preferences.trusted_sources_for_queries:
-            if trusted not in domains:
+            if trusted not in domains and primary:
                 queries.append(f'"{primary}" site:{trusted}')
 
         unique_queries = []

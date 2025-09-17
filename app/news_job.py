@@ -53,6 +53,23 @@ def get_quality_scorer() -> NewsQualityScorer:
     return NewsQualityScorer(IntelligenceConfig())
 
 
+_CORPORATE_SUFFIXES = {
+    "inc",
+    "inc.",
+    "llc",
+    "l.l.c.",
+    "corp",
+    "corp.",
+    "co",
+    "co.",
+    "company",
+    "ltd",
+    "ltd.",
+    "incorporated",
+    "corporation",
+}
+
+
 def get_notion_headers():
     """Get Notion API headers with current environment configuration."""
     return {
@@ -224,14 +241,42 @@ def build_queries(
         industry_tags=tags,
     )
 
-    names: List[str] = []
-    if company.dba:
-        names.append(company.dba)
+    def strip_suffix(name: str) -> str:
+        tokens = [t for t in re.split(r"\s+", name.strip()) if t]
+        while tokens:
+            suffix = tokens[-1].rstrip(",.").lower()
+            if suffix in _CORPORATE_SUFFIXES:
+                tokens.pop()
+                continue
+            break
+        return " ".join(tokens)
+
+    raw_names: List[str] = []
     if company.callsign:
-        names.append(company.callsign.upper())
+        raw_names.append(company.callsign)
+    if company.dba:
+        raw_names.append(company.dba)
+    if company.callsign:
+        raw_names.append(company.callsign.upper())
     if company.aka_names:
-        names.extend([n.strip() for n in company.aka_names.split(",") if n.strip()])
-    if not names:
+        raw_names.extend([n.strip() for n in company.aka_names.split(",") if n.strip()])
+
+    names: List[str] = []
+    seen_names = set()
+    for value in raw_names:
+        if not value:
+            continue
+        cleaned = strip_suffix(value)
+        cleaned = cleaned.strip()
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen_names:
+            continue
+        seen_names.add(key)
+        names.append(cleaned)
+
+    if not names and company.callsign:
         names.append(company.callsign)
 
     domains: List[str] = []
