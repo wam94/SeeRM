@@ -1037,7 +1037,17 @@ def main():
         notion_domains = notion_domain_data.get(cs, {})
         domain_sources = []
 
-        if notion_domains.get("domain"):
+        verified_domain = notion_domains.get("verified_domain")
+        if verified_domain:
+            if enhanced_org.get("domain_root") != verified_domain:
+                domain_sources.append(
+                    "domain: CSV '{csv}' → Notion verified '{notion}'".format(
+                        csv=enhanced_org.get("domain_root"), notion=verified_domain
+                    )
+                )
+            enhanced_org["domain_root"] = verified_domain
+
+        elif notion_domains.get("domain"):
             if enhanced_org.get("domain_root") != notion_domains["domain"]:
                 domain_sources.append(
                     "domain: CSV '{csv}' → Notion '{notion}'".format(

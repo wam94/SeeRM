@@ -27,9 +27,7 @@ NOTION_API = "https://api.notion.com/v1"
 
 
 class EnhancedNotionClient:
-    """
-    Enhanced Notion client with reliability patterns and structured error handling.
-    """
+    """Enhanced Notion client with reliability patterns and structured error handling."""
 
     def __init__(
         self,
@@ -37,6 +35,7 @@ class EnhancedNotionClient:
         rate_limiter: Optional[AdaptiveRateLimiter] = None,
         dry_run: bool = False,
     ):
+        """Initialise the client with configuration and optional rate limiting."""
         self.config = config
         self.rate_limiter = rate_limiter or default_rate_limiter
         self.dry_run = dry_run
@@ -243,7 +242,6 @@ class EnhancedNotionClient:
         page_size: int = 100,
     ) -> Iterable[Dict[str, Any]]:
         """Yield pages from database queries handling pagination."""
-
         cursor: Optional[str] = None
         while True:
             response = self.query_database(
@@ -262,13 +260,11 @@ class EnhancedNotionClient:
 
     def create_page(self, database_id: str, properties: Dict[str, Any]) -> Dict[str, Any]:
         """Create a new page in the specified database."""
-
         payload = {"parent": {"database_id": database_id}, "properties": properties}
         return self._make_request("POST", "/pages", json_data=payload)
 
     def update_page(self, page_id: str, properties: Dict[str, Any]) -> Dict[str, Any]:
         """Update properties on an existing Notion page."""
-
         return self._make_request(
             "PATCH", f"/pages/{page_id}", json_data={"properties": properties}
         )
@@ -277,7 +273,6 @@ class EnhancedNotionClient:
         self, database_id: str, url_property: str, normalized_url: str
     ) -> Optional[str]:
         """Locate a news item page by normalized URL."""
-
         try:
             response = self.query_database(
                 database_id,
@@ -655,6 +650,7 @@ class EnhancedNotionClient:
                 # Extract domain and website
                 domain = None
                 website = None
+                verified_domain = None
 
                 domain_prop = properties.get("Domain", {})
                 if domain_prop.get("type") == "url":
@@ -669,6 +665,18 @@ class EnhancedNotionClient:
                 website_prop = properties.get("Website", {})
                 if website_prop.get("type") == "url":
                     website = website_prop.get("url")
+
+                verified_prop = properties.get("Verified Domain", {})
+                if verified_prop.get("type") == "url":
+                    url = verified_prop.get("url")
+                    if url:
+                        verified_domain = (
+                            url.replace("https://", "").replace("http://", "").split("/")[0]
+                        )
+                elif verified_prop.get("type") == "rich_text":
+                    rich_text = verified_prop.get("rich_text", [])
+                    if rich_text and rich_text[0].get("text"):
+                        verified_domain = rich_text[0]["text"].get("content", "").strip()
 
                 # Extract Latest Intel field
                 latest_intel = None
@@ -692,6 +700,7 @@ class EnhancedNotionClient:
                 domain_data[callsign] = {
                     "domain": domain,
                     "website": website,
+                    "verified_domain": verified_domain,
                     "latest_intel": latest_intel,
                     "latest_intel_at": latest_intel_at,
                     "page_id": page_id,
@@ -703,6 +712,7 @@ class EnhancedNotionClient:
                     domain_data[cs.lower()] = {
                         "domain": None,
                         "website": None,
+                        "verified_domain": None,
                         "latest_intel": None,
                         "latest_intel_at": None,
                         "page_id": None,
@@ -1127,15 +1137,5 @@ def create_notion_client(
     rate_limiter: Optional[AdaptiveRateLimiter] = None,
     dry_run: bool = False,
 ) -> EnhancedNotionClient:
-    """
-    Factory function to create Notion client.
-
-    Args:
-        config: Notion configuration
-        rate_limiter: Optional rate limiter instance
-        dry_run: Whether to run in dry-run mode
-
-    Returns:
-        Configured Notion client
-    """
+    """Create a configured Notion client instance."""
     return EnhancedNotionClient(config, rate_limiter, dry_run)
