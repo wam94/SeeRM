@@ -320,12 +320,14 @@ def collect_recent_news(
         "y",
     ):
         queries = build_queries(
+            org.get("callsign") or org.get("dba") or "",
             org.get("dba"),
             org.get("website"),
             org.get("owners"),
             domain_root=org.get("domain_root") or org.get("domain"),
             aka_names=org.get("aka_names"),
             tags=org.get("industry_tags"),
+            blog_url=org.get("blog_url"),
         )
         limit = int(getenv("BASELINE_CSE_MAX_QUERIES", str(max_queries)) or max_queries)
         for q in queries[:limit]:

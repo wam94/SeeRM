@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from urllib.parse import urlparse
 
 import tldextract
 from dateutil import parser as date_parser
@@ -49,6 +50,7 @@ DEFAULT_BLOCKED_DOMAINS = {
     "greenhouse.io",
     "jobvite.com",
     "reddit.com",
+    "jooble.com",
 }
 
 DEFAULT_POSITIVE_KEYWORDS = [
@@ -75,7 +77,6 @@ DEFAULT_NEGATIVE_KEYWORDS = [
     "job alert",
     "podcast",
     "tips",
-    "blog post",
     "best practices",
     "how to",
 ]
@@ -212,8 +213,12 @@ class NewsQualityScorer:
         base = domain_score + keyword_score + recency_score + company_match_score
 
         company_domains = self._company_domains(company)
-        if domain and domain in company_domains:
+        domain_in_company = bool(domain and domain in company_domains)
+        if domain_in_company:
             base += 2.5
+
+        if not domain_in_company and self._matches_media_scope(item.url, company):
+            base += 2.2
 
         if domain not in self.preferences.trusted_domains and domain_score == 0:
             base -= 0.2  # slight penalty for unknown domains
@@ -240,6 +245,7 @@ class NewsQualityScorer:
         company: Company,
         domains: Sequence[str],
         base_terms: Sequence[str],
+        site_scopes: Optional[Sequence[str]] = None,
     ) -> List[str]:
         """Generate focused Google CSE queries."""
         queries: List[str] = []
@@ -254,6 +260,9 @@ class NewsQualityScorer:
 
         for domain in domains:
             queries.append(f'site:{domain} "{primary}"')
+
+        for scope in site_scopes or []:
+            queries.append(f'site:{scope} "{primary}"')
 
         for trusted in self.preferences.trusted_sources_for_queries:
             if trusted not in domains:
@@ -270,15 +279,86 @@ class NewsQualityScorer:
         return unique_queries
 
     def _company_domains(self, company: Company) -> set[str]:
-        """Return canonical domains associated with a company."""
+        """Return canonical registered domains associated with a company."""
         domains = set()
         if getattr(company, "domain_root", None):
             domains.add(company.domain_root.lower())
-        if company.website:
-            ext = tldextract.extract(company.website)
+
+        def _add_registered(url: Optional[str]) -> None:
+            if not url:
+                return
+            ext = tldextract.extract(url)
             if ext.registered_domain:
                 domains.add(ext.registered_domain.lower())
+
+        _add_registered(company.website)
+        base_domains = set(domains)
+        for host, _ in self._company_media_scopes(company):
+            ext = tldextract.extract(host)
+            if not ext.registered_domain:
+                continue
+            registered = ext.registered_domain.lower()
+            if not base_domains or registered in base_domains:
+                domains.add(registered)
+
         return domains
+
+    def company_site_scopes(self, company: Company) -> List[str]:
+        """Return normalised site scopes (host[/path]) for company media sources."""
+        scopes: List[str] = []
+        seen = set()
+        for host, path in self._company_media_scopes(company):
+            fragment = "" if path == "/" else path
+            scope = f"{host}{fragment}"
+            if scope and scope not in seen:
+                scopes.append(scope)
+                seen.add(scope)
+        return scopes
+
+    @staticmethod
+    def _normalize_site_scope(url: Optional[str]) -> Optional[Tuple[str, str]]:
+        if not url:
+            return None
+        value = str(url).strip()
+        if not value:
+            return None
+        parsed = urlparse(value if "://" in value else f"https://{value}")
+        host = parsed.netloc.lower()
+        if not host:
+            return None
+        if host.startswith("www."):
+            host = host[4:]
+        path = parsed.path or "/"
+        path = path.rstrip("/") or "/"
+        return host, path
+
+    def _company_media_scopes(self, company: Company) -> List[Tuple[str, str]]:
+        """Return host/path pairs for known company media URLs."""
+        scopes = set()
+        for attr in ("blog_url", "media_url", "news_url", "updates_url"):
+            if not hasattr(company, attr):
+                continue
+            scope = self._normalize_site_scope(getattr(company, attr))
+            if scope:
+                scopes.add(scope)
+        return list(scopes)
+
+    def _matches_media_scope(self, url: Optional[str], company: Company) -> bool:
+        """Return True if the URL falls within a known company media scope."""
+        if not url:
+            return False
+        parsed = urlparse(url)
+        host = parsed.netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        path = parsed.path or "/"
+        path = path.rstrip("/") or "/"
+        for scope_host, scope_path in self._company_media_scopes(company):
+            if host != scope_host:
+                continue
+            if scope_path == "/" or path.startswith(scope_path):
+                return True
+        return False
 
 
 __all__ = ["NewsQualityScorer"]

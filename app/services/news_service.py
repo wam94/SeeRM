@@ -93,8 +93,9 @@ class NewsCollector:
                 domains.append(ext.registered_domain.lower())
 
         domains = list({d for d in domains if d})
+        site_scopes = self.quality_scorer.company_site_scopes(company)
 
-        queries = self.quality_scorer.build_query_variants(company, domains, names)
+        queries = self.quality_scorer.build_query_variants(company, domains, names, site_scopes)
         return queries
 
     @with_circuit_breaker(name="rss_feeds", failure_threshold=3, recovery_timeout=60.0)
@@ -383,6 +384,13 @@ class NewsCollector:
         website = (enhanced_data or {}).get("website") or company.website
         domain_root = (enhanced_data or {}).get("domain") or company.domain_root
         blog_url = (enhanced_data or {}).get("blog_url") or company.blog_url
+
+        if website and website != company.website:
+            company.website = website
+        if domain_root and domain_root != company.domain_root:
+            company.domain_root = domain_root
+        if blog_url and blog_url != company.blog_url:
+            company.blog_url = blog_url
 
         # Collect from RSS feeds
         site_for_rss = blog_url or website

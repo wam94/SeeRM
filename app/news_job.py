@@ -196,6 +196,7 @@ def build_queries(
     domain_root: Optional[str] = None,
     aka_names: Optional[str] = None,
     tags: Optional[str] = None,
+    blog_url: Optional[str] = None,
 ) -> List[str]:
     """Construct search queries tailored to a company."""
     scorer = get_quality_scorer()
@@ -205,7 +206,7 @@ def build_queries(
         dba=dba,
         website=website,
         domain_root=domain_root,
-        blog_url=None,
+        blog_url=blog_url,
         beneficial_owners=owners or [],
         aka_names=aka_names,
         industry_tags=tags,
@@ -232,8 +233,9 @@ def build_queries(
             domains.append(ext.registered_domain)
 
     domains = [d.lower() for d in domains if d]
+    site_scopes = scorer.company_site_scopes(company)
 
-    return scorer.build_query_variants(company, domains, names)
+    return scorer.build_query_variants(company, domains, names, site_scopes)
 
 
 # ---------------- RSS / Feeds ----------------
@@ -506,6 +508,7 @@ def collect_recent_news(
             domain_root=org.get("domain_root"),
             aka_names=org.get("aka_names"),
             tags=org.get("industry_tags"),
+            blog_url=org.get("blog_url"),
         )
         limit = int(os.getenv("CSE_MAX_QUERIES_PER_ORG", str(max_queries)) or max_queries)
 
