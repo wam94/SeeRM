@@ -1,3 +1,5 @@
+"""Helpers for parsing CSV exports into digest-ready context dictionaries."""
+
 from __future__ import annotations
 
 import json
@@ -7,9 +9,9 @@ import pandas as pd
 
 
 def _num(series: Optional[pd.Series]) -> Optional[pd.Series]:
-    """
-    Coerce numeric from strings like '1,234' or '$1,234.56'.
-    Returns None if input is None.
+    """Coerce numeric strings (e.g., "1,234" or "$1,234.56") to floats.
+
+    Returns None if the incoming series is None.
     """
     if series is None:
         return None
@@ -23,9 +25,9 @@ def _num(series: Optional[pd.Series]) -> Optional[pd.Series]:
 
 
 def _pct(series: Optional[pd.Series]) -> Optional[pd.Series]:
-    """
-    Coerce percentage numbers; strips '%' if present.
-    Note: our SQL exports 'balance_pct_delta_pct' in percentage points (e.g., 2.34 means 2.34%).
+    """Convert percent-like strings to numeric values without percentage symbols.
+
+    SQL exports already emit percentage points (e.g., 2.34 == 2.34%), so we only strip symbols.
     """
     if series is None:
         return None
@@ -34,6 +36,7 @@ def _pct(series: Optional[pd.Series]) -> Optional[pd.Series]:
 
 
 def parse_csv_to_context(df: pd.DataFrame, top_n: int = 15) -> Dict[str, Any]:
+    """Transform the raw CSV export into the context structure digest generation expects."""
     # Normalize column names (case/space-insensitive)
     cols = {c.lower().strip(): c for c in df.columns}
 
@@ -122,11 +125,18 @@ def parse_csv_to_context(df: pd.DataFrame, top_n: int = 15) -> Dict[str, Any]:
 
     # --- stats ---
     total_accounts = int(len(df))
-    changed_accounts = (
-        int(any_change.sum())
-        if any_change is not None
-        else len(top_pct_gainers) + len(top_pct_losers)
-    )
+    if any_change is not None:
+        changed_accounts = int(any_change.fillna(False).astype(bool).sum())
+    else:
+        combined = None
+        for flag in base_flags:
+            if flag in cols:
+                series = df[cols[flag]].fillna(False).astype(bool)
+                combined = series if combined is None else combined | series
+        if combined is not None:
+            changed_accounts = int(combined.sum())
+        else:
+            changed_accounts = len(top_pct_gainers) + len(top_pct_losers)
     new_accounts = int(df[cols["is_new_account"]].sum()) if "is_new_account" in cols else 0
     removed_accounts = (
         int(df[cols["is_removed_account"]].sum()) if "is_removed_account" in cols else 0
