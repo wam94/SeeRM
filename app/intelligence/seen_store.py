@@ -350,25 +350,25 @@ class NotionNewsSeenStore:
         new_items: List[NewsItem] = []
         existing_items: List[NewsItem] = []
 
+        try:
+            recent_items = self.get_recent(callsign, days=365)
+            seen_urls = {
+                _normalize_url(item.url) for item in recent_items if getattr(item, "url", None)
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to load recent seen items", callsign=callsign, error=str(exc))
+            seen_urls = set()
+
         for item in items:
             norm_url = _normalize_url(item.url)
             if not norm_url:
                 continue
 
-            try:
-                existing_page = self.client.find_news_item_by_url(
-                    self.intel_db_id, self._schema["url"], norm_url
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "Failed to classify news item", callsign=callsign, url=norm_url, error=str(exc)
-                )
-                existing_page = None
-
-            if existing_page:
+            if norm_url in seen_urls:
                 existing_items.append(item)
             else:
                 new_items.append(item)
+                seen_urls.add(norm_url)
 
         return new_items, existing_items
 
