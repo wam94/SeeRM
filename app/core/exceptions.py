@@ -11,6 +11,7 @@ class SeeRMError(Exception):
     """Base exception for all SeeRM errors."""
 
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        """Store exception message and optional structured details."""
         super().__init__(message)
         self.message = message
         self.details = details or {}
@@ -74,6 +75,7 @@ class RateLimitError(DataAccessError):
     """Rate limiting errors."""
 
     def __init__(self, message: str, retry_after: Optional[float] = None, **kwargs):
+        """Capture retry window for rate limiting errors."""
         super().__init__(message, **kwargs)
         self.retry_after = retry_after
 
@@ -94,6 +96,7 @@ class ExternalServiceError(DataAccessError):
     """External service is unavailable or returning errors."""
 
     def __init__(self, service: str, message: str, status_code: Optional[int] = None, **kwargs):
+        """Store failing service name, message, and optional status code."""
         super().__init__(f"{service}: {message}", **kwargs)
         self.service = service
         self.status_code = status_code

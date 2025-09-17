@@ -1,30 +1,25 @@
-"""
-Test suite for reliability patterns and error handling.
-
-Validates circuit breakers, rate limiting, retry logic, and graceful degradation.
-"""
+"""Validate reliability patterns and error handling."""
 
 import time
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
-from app.core.exceptions import CircuitBreakerError, RateLimitError
+from app.core.exceptions import CircuitBreakerError
 from app.utils.reliability import (
     AdaptiveRateLimiter,
     CircuitBreaker,
     HealthChecker,
     ParallelProcessor,
-    with_circuit_breaker,
     with_retry,
 )
 
 
 class TestCircuitBreaker:
-    """Test circuit breaker functionality."""
+    """Exercise circuit breaker functionality."""
 
     def test_circuit_breaker_closed_state(self):
-        """Test circuit breaker allows calls when closed."""
+        """Ensure circuit breaker allows calls when closed."""
         breaker = CircuitBreaker("test", failure_threshold=3)
 
         def test_func():
@@ -35,7 +30,7 @@ class TestCircuitBreaker:
         assert breaker.state.value == "closed"
 
     def test_circuit_breaker_opens_on_failures(self):
-        """Test circuit breaker opens after threshold failures."""
+        """Ensure circuit breaker opens after threshold failures."""
         breaker = CircuitBreaker("test", failure_threshold=2)
 
         def failing_func():
@@ -57,7 +52,7 @@ class TestCircuitBreaker:
             breaker.call(failing_func)
 
     def test_circuit_breaker_recovery(self):
-        """Test circuit breaker recovery after timeout."""
+        """Verify circuit breaker recovery after timeout."""
         breaker = CircuitBreaker("test", failure_threshold=1, recovery_timeout=0.1)
 
         def failing_func():
@@ -82,10 +77,10 @@ class TestCircuitBreaker:
 
 
 class TestAdaptiveRateLimiter:
-    """Test adaptive rate limiting functionality."""
+    """Exercise adaptive rate limiting functionality."""
 
     def test_rate_limiter_allows_burst(self):
-        """Test rate limiter allows burst of requests."""
+        """Ensure rate limiter allows bursts of requests."""
         limiter = AdaptiveRateLimiter(calls_per_second=10, burst_size=5)
 
         # Should allow burst_size requests immediately
@@ -97,7 +92,7 @@ class TestAdaptiveRateLimiter:
         assert elapsed < 0.1  # Should be nearly instantaneous
 
     def test_rate_limiter_enforces_rate(self):
-        """Test rate limiter enforces rate after burst."""
+        """Ensure rate limiter enforces rate after bursts."""
         limiter = AdaptiveRateLimiter(calls_per_second=5, burst_size=2)
 
         # Use up burst
@@ -113,7 +108,7 @@ class TestAdaptiveRateLimiter:
         assert 0.15 < elapsed < 0.35
 
     def test_adaptive_rate_adjustment(self):
-        """Test adaptive rate adjustment based on success/error patterns."""
+        """Verify adaptive rate adjustment based on success/error patterns."""
         limiter = AdaptiveRateLimiter(calls_per_second=2.0, adaptive=True)
         initial_rate = limiter.current_calls_per_second
 
@@ -137,10 +132,10 @@ class TestAdaptiveRateLimiter:
 
 
 class TestParallelProcessor:
-    """Test parallel processing with reliability patterns."""
+    """Validate parallel processing with reliability patterns."""
 
     def test_parallel_processing_success(self):
-        """Test successful parallel processing."""
+        """Ensure parallel processing returns expected results."""
         processor = ParallelProcessor(max_workers=4)
 
         def square_func(x):
@@ -153,7 +148,7 @@ class TestParallelProcessor:
         assert results == expected
 
     def test_parallel_processing_with_failures(self):
-        """Test parallel processing handles individual failures."""
+        """Ensure parallel processing handles individual failures."""
         processor = ParallelProcessor(max_workers=4)
 
         def sometimes_fail(x):
@@ -172,7 +167,7 @@ class TestParallelProcessor:
         assert results[5] == 10
 
     def test_parallel_processing_with_rate_limiter(self):
-        """Test parallel processing respects rate limiting."""
+        """Verify parallel processing respects rate limiting."""
         rate_limiter = AdaptiveRateLimiter(calls_per_second=10, burst_size=3)
         processor = ParallelProcessor(max_workers=2, rate_limiter=rate_limiter)
 
@@ -192,10 +187,10 @@ class TestParallelProcessor:
 
 
 class TestRetryLogic:
-    """Test retry decorator functionality."""
+    """Validate retry decorator functionality."""
 
     def test_retry_succeeds_eventually(self):
-        """Test retry succeeds after initial failures."""
+        """Ensure retry succeeds after initial failures."""
         call_count = 0
 
         @with_retry(max_attempts=3, retry_exceptions=(ValueError,))

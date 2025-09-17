@@ -1,6 +1,4 @@
-"""
-Data models for SeeRM intelligence and reporting system.
-"""
+"""Data models for SeeRM intelligence and reporting system."""
 
 from dataclasses import dataclass, field
 from datetime import datetime

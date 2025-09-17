@@ -14,7 +14,6 @@ from openai import OpenAI
 from app.core.config import Settings
 from app.core.exceptions import WorkflowError
 
-from .cache import cache_news_classification
 from .models import NewsItem, NewsType
 
 logger = structlog.get_logger(__name__)
@@ -28,6 +27,7 @@ class NewsClassifier:
     """
 
     def __init__(self, settings: Optional[Settings] = None):
+        """Initialise the classifier with optional settings override."""
         self.settings = settings or Settings()
         self._openai_client = None
 
@@ -89,7 +89,8 @@ class NewsClassifier:
                 classified_items.extend(batch_results)
             except Exception as e:
                 logger.warning(
-                    f"LLM batch classification failed for items {i}-{i+len(batch)}", error=str(e)
+                    f"LLM batch classification failed for items {i}-{i+len(batch)}",
+                    error=str(e),
                 )
                 # Fall back to keyword classification for this batch
                 fallback_results = self._classify_with_keywords(batch)
@@ -142,26 +143,37 @@ class NewsClassifier:
             raise WorkflowError(f"LLM classification failed: {e}")
 
     def _get_system_prompt(self) -> str:
-        """Get the system prompt for LLM classification."""
-        return """You are a financial intelligence analyst categorizing company news for portfolio monitoring.
+        """Return the system prompt for LLM classification."""
+        from textwrap import dedent
 
-Classify each news item into exactly ONE of these categories:
-- funding: Investment rounds, fundraising, venture capital, IPOs
-- product_launch: New products, features, service releases, platform launches
-- partnerships: Strategic alliances, integrations, collaborations, joint ventures
-- leadership: C-suite appointments, key hires, departures, board changes
-- growth_metrics: User milestones, revenue announcements, expansion, scaling
-- legal_regulatory: Compliance updates, lawsuits, regulatory changes, policy impacts
-- technical: Platform issues, outages, security incidents, infrastructure changes
-- acquisition: M&A, buyouts, mergers, company purchases
-- other_notable: Significant news that doesn't fit other categories
+        prompt = dedent(
+            """
+            You are a financial intelligence analyst categorizing company news for
+            portfolio monitoring.
 
-Be precise and consistent. Focus on the primary business impact, not secondary effects."""
+            Classify each news item into exactly ONE of these categories:
+            - funding: investment rounds, fundraising, venture capital, IPOs
+            - product_launch: new products, features, service releases, launches
+            - partnerships: strategic alliances, integrations, joint ventures
+            - leadership: C-suite appointments, key hires, departures, board changes
+            - growth_metrics: user milestones, revenue announcements, expansion
+            - legal_regulatory: compliance updates, lawsuits, regulatory changes
+            - technical: outages, security incidents, infrastructure changes
+            - acquisition: mergers, acquisitions, buyouts, company purchases
+            - other_notable: significant news outside these categories
+
+            Be precise and consistent. Focus on the primary business impact, not secondary effects.
+            """
+        )
+        return prompt.strip()
 
     def _create_classification_prompt(self, news_summaries: List[str]) -> str:
         """Create the classification prompt for a batch of news items."""
         prompt_parts = [
-            "Classify each news item below. Respond with only the category name for each item (one per line):",
+            (
+                "Classify each news item below. Respond with only the category name for each "
+                "item (one per line):"
+            ),
             "",
         ]
         prompt_parts.extend(news_summaries)
@@ -227,28 +239,52 @@ Be precise and consistent. Focus on the primary business impact, not secondary e
         # Enhanced keyword patterns
         keyword_patterns = {
             NewsType.FUNDING: [
-                r"\b(funding|fundrais|investment|investor|venture|capital|series\s+[abc]|ipo|raised?\s+\$|round|valuation)\b"
+                (
+                    r"\b(funding|fundrais|investment|investor|venture|capital|"
+                    r"series\s+[abc]|ipo|raised?\s+\$|round|valuation)\b"
+                )
             ],
             NewsType.PRODUCT_LAUNCH: [
-                r"\b(launch|release|debut|unveil|introduce|announce.*product|new.*feature|platform|beta|version)\b"
+                (
+                    r"\b(launch|release|debut|unveil|introduce|announce.*product|"
+                    r"new.*feature|platform|beta|version)\b"
+                )
             ],
             NewsType.PARTNERSHIPS: [
-                r"\b(partnership|partner|collaboration|alliance|integration|joint\s+venture|team.*up|deal|agreement)\b"
+                (
+                    r"\b(partnership|partner|collaboration|alliance|integration|"
+                    r"joint\s+venture|team.*up|deal|agreement)\b"
+                )
             ],
             NewsType.LEADERSHIP: [
-                r"\b(ceo|cto|cfo|founder|president|director|executive|hire|appointment|resign|departure|joins?\s+as|named\s+as)\b"
+                (
+                    r"\b(ceo|cto|cfo|founder|president|director|executive|"
+                    r"hire|appointment|resign|departure|joins?\s+as|named\s+as)\b"
+                )
             ],
             NewsType.GROWTH_METRICS: [
-                r"\b(million\s+users|growth|revenue|quarterly|annual|milestone|expansion|scale|reaches?|crosses?)\b"
+                (
+                    r"\b(million\s+users|growth|revenue|quarterly|annual|"
+                    r"milestone|expansion|scale|reaches?|crosses?)\b"
+                )
             ],
             NewsType.LEGAL_REGULATORY: [
-                r"\b(lawsuit|legal|compliance|regulatory|sec|ftc|gdpr|privacy|court|settlement|investigation)\b"
+                (
+                    r"\b(lawsuit|legal|compliance|regulatory|sec|ftc|gdpr|"
+                    r"privacy|court|settlement|investigation)\b"
+                )
             ],
             NewsType.TECHNICAL: [
-                r"\b(outage|downtime|security|breach|incident|infrastructure|technical|platform.*issue|bug|fix)\b"
+                (
+                    r"\b(outage|downtime|security|breach|incident|"
+                    r"infrastructure|technical|platform.*issue|bug|fix)\b"
+                )
             ],
             NewsType.ACQUISITION: [
-                r"\b(acquire|acquisition|merger|bought|purchase|buyout|m&a|takes?\s+over|deal\s+worth)\b"
+                (
+                    r"\b(acquire|acquisition|merger|bought|purchase|"
+                    r"buyout|m&a|takes?\s+over|deal\s+worth)\b"
+                )
             ],
         }
 
@@ -276,5 +312,5 @@ Be precise and consistent. Focus on the primary business impact, not secondary e
 
 
 def create_news_classifier(settings: Optional[Settings] = None) -> NewsClassifier:
-    """Factory function to create news classifier."""
+    """Return a news classifier configured with provided settings."""
     return NewsClassifier(settings)

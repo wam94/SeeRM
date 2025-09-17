@@ -357,10 +357,12 @@ def collect_people_background(
     if not (g_api_key and g_cse_id) or not owners:
         return results
     for person in owners:
+        org_label = (org.get("dba") or org.get("domain_root") or "").strip()
+        org_clause = f' "{org_label}"' if org_label else ""
         qs = [
-            '"{person}" "{org.get("dba") or org.get("domain_root") or ""}" (founder OR cofounder OR CFO OR COO OR CTO OR CEO OR head)',
-            '"{person}" (LinkedIn OR Crunchbase OR AngelList OR PitchBook)',
-            '"{person}" (previous OR formerly OR ex-)',
+            f'"{person}"{org_clause} (founder OR cofounder OR CFO OR COO OR CTO OR CEO OR head)',
+            f'"{person}" (LinkedIn OR Crunchbase OR AngelList OR PitchBook)',
+            f'"{person}" (previous OR formerly OR ex-)',
         ]
         items: List[Dict[str, Any]] = []
         for q in qs:

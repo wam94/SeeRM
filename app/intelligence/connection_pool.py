@@ -89,13 +89,20 @@ class ConnectionPool:
             self._sessions[host] = session
 
             logger.info(
-                "Created new session", host=host, pool_size=pool_maxsize, max_retries=max_retries
+                "Created new session",
+                host=host,
+                pool_size=pool_maxsize,
+                max_retries=max_retries,
             )
 
         return self._sessions[host]
 
     def _create_session(
-        self, max_retries: int, backoff_factor: float, pool_connections: int, pool_maxsize: int
+        self,
+        max_retries: int,
+        backoff_factor: float,
+        pool_connections: int,
+        pool_maxsize: int,
     ) -> requests.Session:
         """Create a new configured session."""
         session = requests.Session()
@@ -105,7 +112,15 @@ class ConnectionPool:
             total=max_retries,
             backoff_factor=backoff_factor,
             status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["HEAD", "GET", "PUT", "DELETE", "OPTIONS", "TRACE", "POST"],
+            allowed_methods=[
+                "HEAD",
+                "GET",
+                "PUT",
+                "DELETE",
+                "OPTIONS",
+                "TRACE",
+                "POST",
+            ],
             respect_retry_after_header=True,
         )
 
@@ -213,8 +228,8 @@ class ConnectionPool:
                     if not pm:
                         continue
 
-                    # Getting number of pools is safe; iterating pools may not be
-                    pool_stats = {"num_pools": getattr(pm, "num_pools", len(getattr(pm, "pools", {})))}
+                    pool_count = getattr(pm, "num_pools", len(getattr(pm, "pools", {})))
+                    pool_stats = {"num_pools": pool_count}
 
                     # Try to collect per-pool stats, but guard against NotImplementedError
                     pools = getattr(pm, "pools", None)
@@ -238,8 +253,11 @@ class ConnectionPool:
                                         "num_connections": getattr(pool, "num_connections", None),
                                         "num_requests": getattr(pool, "num_requests", None),
                                     }
-                                except Exception:
-                                    # Skip if pool stats not accessible
+                                except Exception as exc:  # noqa: BLE001
+                                    logger.debug(
+                                        "Skipping pool stats extraction",
+                                        error=str(exc),
+                                    )
                                     continue
 
                         if per_pools:
@@ -247,8 +265,8 @@ class ConnectionPool:
 
                     stats[f"{host}_{prefix}"] = pool_stats
 
-                except Exception:
-                    # Never let stats collection break callers
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Pool statistics collection failed", error=str(exc))
                     continue
 
         return stats
@@ -270,6 +288,7 @@ class PooledGmailClient:
     """Gmail client wrapper with connection pooling."""
 
     def __init__(self, base_client):
+        """Wrap the provided Gmail client with a shared pooled session."""
         self.base_client = base_client
         self.pool = get_connection_pool()
         self.session = self.pool.get_session(
@@ -285,6 +304,7 @@ class PooledNotionClient:
     """Notion client wrapper with connection pooling."""
 
     def __init__(self, base_client):
+        """Wrap the provided Notion client with a shared pooled session."""
         self.base_client = base_client
         self.pool = get_connection_pool()
         self.session = self.pool.get_session(

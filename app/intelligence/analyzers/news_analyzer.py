@@ -1,9 +1,6 @@
-"""
-News analysis functionality for intelligence reports.
-"""
+"""News analysis functionality for intelligence reports."""
 
 from collections import Counter, defaultdict
-from datetime import datetime
 from typing import Dict, List
 
 import structlog
@@ -253,8 +250,9 @@ class NewsAnalyzer:
         # Top categories
         if type_counts:
             top_type = type_counts.most_common(1)[0]
+            top_category = top_type[0].value.replace("_", " ")
             summary_parts.append(
-                f"with {top_type[0].value.replace('_', ' ')} being the most active category ({top_type[1]} items)"
+                ("with " f"{top_category} being the most active category " f"({top_type[1]} items)")
             )
 
         # Most active company

@@ -818,7 +818,7 @@ def main():
         if filter_callsigns and cs not in filter_callsigns:
             continue
         roster[cs] = {
-            "callsign": safe_str(r[cols.get("callsign")]) if cols.get("callsign") in r else cs,
+            "callsign": (safe_str(r[cols.get("callsign")]) if cols.get("callsign") in r else cs),
             "dba": (
                 safe_str(r[cols.get("dba")])
                 if cols.get("dba") in r and r[cols.get("dba")] is not None

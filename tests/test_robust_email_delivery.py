@@ -1,12 +1,9 @@
-"""
-Tests for robust email delivery with SSL error handling and fallback options.
-"""
+"""Test robust email delivery with SSL error handling and fallbacks."""
 
 import os
 import tempfile
-from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -15,7 +12,7 @@ from app.data.gmail_client import GmailError
 
 
 class TestRobustEmailDelivery:
-    """Test suite for robust email delivery system."""
+    """Exercise the robust email delivery system."""
 
     @pytest.fixture
     def temp_fallback_dir(self):
@@ -57,7 +54,7 @@ class TestRobustEmailDelivery:
         """Test SSL error handling with successful HTML file fallback."""
         # Simulate SSL error
         ssl_error = GmailError(
-            "Unexpected error sending email: EOF occurred in violation of protocol (_ssl.c:2437)"
+            "Unexpected error sending email: EOF occurred in violation of protocol" " (_ssl.c:2437)"
         )
         mock_gmail_client.send_html_email.side_effect = ssl_error
 
@@ -205,7 +202,10 @@ class TestRobustEmailDelivery:
 
         result = email_delivery.send_with_fallback(
             to="test@example.com",
-            subject='Test/with\\special:chars<>|*?"and very long subject that should be truncated at some point',
+            subject=(
+                'Test/with\\special:chars<>|*?" and very long subject '
+                "that should be truncated at some point"
+            ),
             html="<p>Test content</p>",
         )
 

@@ -4,7 +4,6 @@ Optimized data models for SeeRM intelligence system with reduced memory footprin
 Uses __slots__ for memory efficiency and lazy loading for heavy fields.
 """
 
-from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from functools import cached_property
@@ -62,6 +61,7 @@ class OptimizedNewsItem:
         sentiment: Optional[str] = None,
         company_mentions: Optional[List[str]] = None,
     ):
+        """Initialise the news item with compact storage."""
         self._title = title
         self._url = url
         self._source = source
@@ -73,43 +73,43 @@ class OptimizedNewsItem:
         self._company_mentions = company_mentions or []
 
     @property
-    def title(self) -> str:
+    def title(self) -> str:  # noqa: D102
         return self._title
 
     @property
-    def url(self) -> str:
+    def url(self) -> str:  # noqa: D102
         return self._url
 
     @property
-    def source(self) -> str:
+    def source(self) -> str:  # noqa: D102
         return self._source
 
     @property
-    def published_at(self) -> str:
+    def published_at(self) -> str:  # noqa: D102
         return self._published_at
 
     @property
-    def summary(self) -> Optional[str]:
+    def summary(self) -> Optional[str]:  # noqa: D102
         return self._summary
 
     @property
-    def news_type(self) -> NewsType:
+    def news_type(self) -> NewsType:  # noqa: D102
         return self._news_type
 
     @news_type.setter
-    def news_type(self, value: NewsType):
+    def news_type(self, value: NewsType):  # noqa: D102
         self._news_type = value
 
     @property
-    def relevance_score(self) -> float:
+    def relevance_score(self) -> float:  # noqa: D102
         return self._relevance_score
 
     @property
-    def sentiment(self) -> Optional[str]:
+    def sentiment(self) -> Optional[str]:  # noqa: D102
         return self._sentiment
 
     @property
-    def company_mentions(self) -> List[str]:
+    def company_mentions(self) -> List[str]:  # noqa: D102
         return self._company_mentions
 
     def to_dict(self) -> Dict[str, Any]:
@@ -154,6 +154,7 @@ class OptimizedMovement:
         is_new_account: bool = False,
         products: Optional[List[str]] = None,
     ):
+        """Initialise a movement record using slot-based storage."""
         self._callsign = callsign
         self._company_name = company_name
         self._current_balance = current_balance
@@ -165,39 +166,39 @@ class OptimizedMovement:
         self._products = products or []
 
     @property
-    def callsign(self) -> str:
+    def callsign(self) -> str:  # noqa: D102
         return self._callsign
 
     @property
-    def company_name(self) -> str:
+    def company_name(self) -> str:  # noqa: D102
         return self._company_name
 
     @property
-    def current_balance(self) -> float:
+    def current_balance(self) -> float:  # noqa: D102
         return self._current_balance
 
     @property
-    def percentage_change(self) -> Optional[float]:
+    def percentage_change(self) -> Optional[float]:  # noqa: D102
         return self._percentage_change
 
     @property
-    def movement_type(self) -> MovementType:
+    def movement_type(self) -> MovementType:  # noqa: D102
         return self._movement_type
 
     @movement_type.setter
-    def movement_type(self, value: MovementType):
+    def movement_type(self, value: MovementType):  # noqa: D102
         self._movement_type = value
 
     @property
-    def rank(self) -> Optional[int]:
+    def rank(self) -> Optional[int]:  # noqa: D102
         return self._rank
 
     @property
-    def is_new_account(self) -> bool:
+    def is_new_account(self) -> bool:  # noqa: D102
         return self._is_new_account
 
     @property
-    def products(self) -> List[str]:
+    def products(self) -> List[str]:  # noqa: D102
         return self._products
 
 
@@ -230,6 +231,7 @@ class LazyCompanyProfile:
         domain: Optional[str] = None,
         lazy_loader: Optional[Callable[[str], Dict[str, Any]]] = None,
     ):
+        """Initialise a lazily fetched company profile."""
         self._callsign = callsign
         self._company_name = company_name
         self._website = website
@@ -259,43 +261,43 @@ class LazyCompanyProfile:
                 )
 
     @property
-    def callsign(self) -> str:
+    def callsign(self) -> str:  # noqa: D102
         return self._callsign
 
     @property
-    def company_name(self) -> str:
+    def company_name(self) -> str:  # noqa: D102
         return self._company_name
 
     @property
-    def website(self) -> Optional[str]:
+    def website(self) -> Optional[str]:  # noqa: D102
         return self._website
 
     @property
-    def domain(self) -> Optional[str]:
+    def domain(self) -> Optional[str]:  # noqa: D102
         return self._domain
 
     @property
-    def owners(self) -> List[str]:
+    def owners(self) -> List[str]:  # noqa: D102
         self._load_if_needed("owners")
         return self._owners or []
 
     @property
-    def tags(self) -> List[str]:
+    def tags(self) -> List[str]:  # noqa: D102
         self._load_if_needed("tags")
         return self._tags or []
 
     @property
-    def products(self) -> List[str]:
+    def products(self) -> List[str]:  # noqa: D102
         self._load_if_needed("products")
         return self._products or []
 
     @property
-    def needs_dossier(self) -> bool:
+    def needs_dossier(self) -> bool:  # noqa: D102
         self._load_if_needed("needs_dossier")
         return self._needs_dossier or False
 
     @property
-    def notion_page_id(self) -> Optional[str]:
+    def notion_page_id(self) -> Optional[str]:  # noqa: D102
         self._load_if_needed("notion_page_id")
         return self._notion_page_id
 
@@ -320,6 +322,7 @@ class OptimizedCompanyIntelligence:
         latest_intel: Optional[str] = None,
         last_intel_date: Optional[datetime] = None,
     ):
+        """Initialise optimized intelligence for a company."""
         self._profile = profile
         self._movement = movement
         self._news_history = news_history or []
@@ -328,15 +331,15 @@ class OptimizedCompanyIntelligence:
         self._cached_summary = None
 
     @property
-    def profile(self):
+    def profile(self):  # noqa: D102
         return self._profile
 
     @property
-    def movement(self):
+    def movement(self):  # noqa: D102
         return self._movement
 
     @property
-    def news_history(self):
+    def news_history(self):  # noqa: D102
         return self._news_history
 
     @cached_property

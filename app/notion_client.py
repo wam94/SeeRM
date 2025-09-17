@@ -1,22 +1,25 @@
-# app/notion_client.py
+"""Utility functions for interacting with the Notion API."""
+
 from __future__ import annotations
 
 import datetime
-import json
 import os
-import re
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+import structlog
 
 NOTION_API = "https://api.notion.com/v1"
 NOTION_VERSION = os.getenv("NOTION_VERSION", "2022-06-28")
+
+logger = structlog.get_logger(__name__)
 
 
 # -------------------- HTTP --------------------
 
 
 def _headers() -> Dict[str, str]:
+    """Return standard headers for Notion API requests."""
     return {
         "Authorization": f"Bearer {os.environ['NOTION_API_KEY']}",
         "Notion-Version": NOTION_VERSION,
@@ -25,32 +28,40 @@ def _headers() -> Dict[str, str]:
 
 
 def notion_get(path: str, params: Dict[str, Any] | None = None) -> requests.Response:
+    """Perform a GET request and return the response."""
     r = requests.get(f"{NOTION_API}{path}", headers=_headers(), params=params, timeout=30)
     r.raise_for_status()
     return r
 
 
 def notion_post(path: str, json: Dict[str, Any]) -> requests.Response:
+    """Perform a POST request and return the response."""
     r = requests.post(f"{NOTION_API}{path}", headers=_headers(), json=json, timeout=30)
     r.raise_for_status()
     return r
 
 
 def notion_patch(path: str, json: Dict[str, Any]) -> requests.Response:
+    """Perform a PATCH request and return the response."""
     r = requests.patch(f"{NOTION_API}{path}", headers=_headers(), json=json, timeout=30)
     r.raise_for_status()
     return r
 
 
 def notion_delete(path: str) -> requests.Response:
+    """Perform a DELETE request and return the response."""
     r = requests.delete(f"{NOTION_API}{path}", headers=_headers(), timeout=30)
     r.raise_for_status()
     return r
 
 
 def notion_query_db(db_id: str, filter_json: Dict[str, Any]) -> Dict[str, Any]:
+    """Query a Notion database and return decoded JSON."""
     r = requests.post(
-        f"{NOTION_API}/databases/{db_id}/query", headers=_headers(), json=filter_json, timeout=30
+        f"{NOTION_API}/databases/{db_id}/query",
+        headers=_headers(),
+        json=filter_json,
+        timeout=30,
     )
     r.raise_for_status()
     return r.json()
@@ -60,25 +71,29 @@ def notion_query_db(db_id: str, filter_json: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _rt_segments(text: str, chunk: int = 1800) -> Dict[str, Any]:
-    # Break into <= ~2k chars per segment (rich_text item limit)
+    """Break text into rich-text segments respecting Notion limits."""
     parts = [text[i : i + chunk] for i in range(0, len(text), chunk)] or [""]
     return {"rich_text": [{"type": "text", "text": {"content": p}} for p in parts]}
 
 
 def _title(text: str) -> Dict[str, Any]:
+    """Build a Notion title payload."""
     parts = [text[i : i + 1800] for i in range(0, len(text), 1800)] or [""]
     return {"title": [{"type": "text", "text": {"content": p}} for p in parts]}
 
 
 def _date_iso(dt: Optional[str]) -> Dict[str, Any]:
+    """Return a Notion date property, defaulting to today if absent."""
     return {"date": {"start": dt or datetime.date.today().isoformat()}}
 
 
 def get_db_schema(db_id: str) -> Dict[str, Any]:
+    """Retrieve the database schema JSON for the provided ID."""
     return notion_get(f"/databases/{db_id}").json()
 
 
 def get_title_prop_name(schema: Dict[str, Any]) -> str:
+    """Locate the title property name within a schema."""
     for name, meta in (schema.get("properties") or {}).items():
         if meta.get("type") == "title":
             return name
@@ -86,6 +101,7 @@ def get_title_prop_name(schema: Dict[str, Any]) -> str:
 
 
 def prop_exists(schema: Dict[str, Any], name: str, typ: str) -> bool:
+    """Return True if the schema defines a property of the given type."""
     meta = (schema.get("properties") or {}).get(name)
     return bool(meta and meta.get("type") == typ)
 
@@ -93,6 +109,7 @@ def prop_exists(schema: Dict[str, Any], name: str, typ: str) -> bool:
 def _first_prop_of_type(
     schema: Dict[str, Any], typ: str, preferred: str | None = None
 ) -> Optional[str]:
+    """Return the first property of a given type, preferring a named option."""
     if preferred and prop_exists(schema, preferred, typ):
         return preferred
     for name, meta in (schema.get("properties") or {}).items():
@@ -102,14 +119,16 @@ def _first_prop_of_type(
 
 
 def _get_rich_text_plain(props: Dict[str, Any], prop: str) -> str:
+    """Extract concatenated plain text from a rich-text property."""
     node = (props.get(prop) or {}).get("rich_text") or []
     return "".join(x.get("plain_text", "") for x in node)
 
 
 def _bytes(s: str) -> int:
+    """Return the byte length of a string in UTF-8."""
     try:
         return len(s.encode("utf-8"))
-    except Exception:
+    except UnicodeEncodeError:
         return len(s)
 
 
@@ -119,20 +138,19 @@ def _bytes(s: str) -> int:
 def find_company_page(
     companies_db_id: str, callsign: str, title_prop: Optional[str] = None
 ) -> Optional[str]:
+    """Return company page ID for a callsign if it exists."""
     schema = get_db_schema(companies_db_id)
     title_prop = title_prop or get_title_prop_name(schema)
     data = notion_query_db(
-        companies_db_id, {"filter": {"property": title_prop, "title": {"equals": callsign}}}
+        companies_db_id,
+        {"filter": {"property": title_prop, "title": {"equals": callsign}}},
     )
     res = data.get("results", [])
     return res[0]["id"] if res else None
 
 
 def upsert_company_page(companies_db_id: str, payload: Dict[str, Any]) -> str:
-    """
-    payload keys: callsign (required), company, website, domain, owners (list[str]), tags (list[str]), needs_dossier (bool)
-    Writes whatever props exist in the DB schema.
-    """
+    """Create or update a company page using the provided payload."""
     schema = get_db_schema(companies_db_id)
     title_prop = get_title_prop_name(schema)
 
@@ -184,10 +202,7 @@ def set_latest_intel(
     date_iso: Optional[str] = None,
     companies_db_id: Optional[str] = None,
 ):
-    """
-    Safely set Latest Intel and Last Intel At (if those props exist).
-    If companies_db_id provided, we verify property existence/types first.
-    """
+    """Set latest intel summary/date while respecting schema constraints."""
     props: Dict[str, Any] = {}
     if companies_db_id:
         schema = get_db_schema(companies_db_id)
@@ -206,8 +221,10 @@ def set_latest_intel(
 
 
 def set_needs_dossier(companies_page_id: str, needs: bool = True):
+    """Update the Needs Dossier checkbox for a company page."""
     notion_patch(
-        f"/pages/{companies_page_id}", {"properties": {"Needs Dossier": {"checkbox": bool(needs)}}}
+        f"/pages/{companies_page_id}",
+        {"properties": {"Needs Dossier": {"checkbox": bool(needs)}}},
     )
 
 
@@ -217,7 +234,8 @@ def get_company_domain_data(companies_db_id: str, callsign: str) -> Dict[str, Op
     title_prop = get_title_prop_name(schema)
 
     data = notion_query_db(
-        companies_db_id, {"filter": {"property": title_prop, "title": {"equals": callsign}}}
+        companies_db_id,
+        {"filter": {"property": title_prop, "title": {"equals": callsign}}},
     )
 
     results = data.get("results", [])
@@ -321,10 +339,7 @@ def get_all_companies_domain_data(
 
 
 def get_companies_needing_dossiers(companies_db_id: str) -> List[Tuple[str, str]]:
-    """
-    Query Notion for companies that have 'Needs Dossier' = true.
-    Returns list of (callsign, page_id) tuples.
-    """
+    """Return (callsign, page_id) tuples for companies flagged as needing dossiers."""
     schema = get_db_schema(companies_db_id)
     title_prop = get_title_prop_name(schema)
 
@@ -365,10 +380,7 @@ def get_companies_needing_dossiers(companies_db_id: str) -> List[Tuple[str, str]
 
 
 def page_has_dossier(page_id: str) -> bool:
-    """
-    Check if a Notion page already has a dossier by looking for a "Dossier" heading.
-    Returns True if dossier exists, False otherwise.
-    """
+    """Return True if a page already contains a Dossier heading."""
     try:
         blocks = _list_block_children(page_id)
         for block in blocks:
@@ -381,8 +393,8 @@ def page_has_dossier(page_id: str) -> bool:
                 if "Dossier" in heading_text:
                     return True
         return False
-    except Exception:
-        # If we can't check, assume no dossier to be safe
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Failed to inspect page for dossier", page_id=page_id, error=str(exc))
         return False
 
 
@@ -398,7 +410,7 @@ def _intel_schema_hints(intel_db_id: str) -> Dict[str, Optional[str]]:
         ),  # Callsign = relation
         "company_rel": None,  # No separate company relation - company name is the title
         "callsign_prop": None,  # No separate callsign text property - callsign is the relation
-        "date_prop": "Date" if prop_exists(s, "Date", "date") else _first_prop_of_type(s, "date"),
+        "date_prop": ("Date" if prop_exists(s, "Date", "date") else _first_prop_of_type(s, "date")),
         "summary_prop": (
             "Summary"
             if prop_exists(s, "Summary", "rich_text")
@@ -413,8 +425,12 @@ def _intel_schema_hints(intel_db_id: str) -> Dict[str, Optional[str]]:
 
 
 def ensure_intel_page(
-    intel_db_id: str, companies_db_id: Optional[str], company_page_id: Optional[str], callsign: str
+    intel_db_id: str,
+    companies_db_id: Optional[str],
+    company_page_id: Optional[str],
+    callsign: str,
 ) -> str:
+    """Return the intel page ID for a callsign, creating it if needed."""
     hints = _intel_schema_hints(intel_db_id)
     title_prop = hints["title"]  # "Company" column (title)
     callsign_rel = hints["callsign_rel"]  # "Callsign" column (relation to Companies DB)
@@ -424,7 +440,12 @@ def ensure_intel_page(
         try:
             data = notion_query_db(
                 intel_db_id,
-                {"filter": {"property": callsign_rel, "relation": {"contains": company_page_id}}},
+                {
+                    "filter": {
+                        "property": callsign_rel,
+                        "relation": {"contains": company_page_id},
+                    }
+                },
             )
             res = data.get("results", [])
             if res:
@@ -451,9 +472,12 @@ def ensure_intel_page(
                             pass
                         else:
                             company_name = f"Intel — {callsign}"  # Fallback for empty company
-        except Exception:
-            # If we can't get company name, use fallback
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "Failed to derive company name from Notion page",
+                callsign=callsign,
+                error=str(exc),
+            )
 
     # 3) Create new Intel page
     props: Dict[str, Any] = {}
@@ -478,9 +502,7 @@ def _set_page_props(page_id: str, props: Dict[str, Any]):
 
 
 def _set_summary_latest(page_id: str, summary_prop: str, text: str, max_bytes: int = 250_000):
-    """
-    Overwrite Summary with ONLY the latest text (no history).
-    """
+    """Overwrite summary with only the most recent text."""
     text = (text or "").strip()
     enc = text.encode("utf-8")
     if len(enc) > max_bytes:
@@ -538,7 +560,7 @@ def _clone_toggle_block(block: Dict[str, Any]) -> Dict[str, Any]:
 def _append_timeline_group(
     page_id: str, date_iso: str, summary_text: str, items: List[Dict[str, Any]]
 ):
-    """Append a toggle group: heading line + summary paragraph + bullets."""
+    """Append a toggle block containing summary text and bullet points."""
     toggle_title = f"{date_iso} — Weekly intel"
     bullets: List[Dict[str, Any]] = []
     for it in items or []:
@@ -554,7 +576,10 @@ def _append_timeline_group(
                     "rich_text": [
                         {
                             "type": "text",
-                            "text": {"content": line, "link": {"url": url} if url else None},
+                            "text": {
+                                "content": line,
+                                "link": {"url": url} if url else None,
+                            },
                         }
                     ]
                 },
@@ -603,8 +628,12 @@ def _append_timeline_group(
         for block in existing_toggles:
             try:
                 notion_delete(f"/blocks/{block['id']}")
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "Failed to delete existing toggle block",
+                    block_id=block.get("id"),
+                    error=str(exc),
+                )
         payload["children"] = [new_toggle] + cloned_toggles
         notion_post(f"/blocks/{page_id}/children", payload).raise_for_status()
         return
@@ -643,10 +672,7 @@ def _list_block_children(page_id: str, page_size: int = 100) -> List[Dict[str, A
 
 
 def _append_sources_summary(page_id: str, date_iso: str, source_metadata: Dict[str, List[str]]):
-    """
-    Append or update a 'News Sources' section at the bottom of the Intel Archive page.
-    This provides clickable URLs for RSS feeds and readable search queries used this week.
-    """
+    """Append a 'News Sources' toggle summarising RSS feeds and queries."""
     rss_feeds = source_metadata.get("rss_feeds", [])
     search_queries = source_metadata.get("search_queries", [])
 
@@ -683,7 +709,10 @@ def _append_sources_summary(page_id: str, date_iso: str, source_metadata: Dict[s
                         "rich_text": [
                             {
                                 "type": "text",
-                                "text": {"content": feed_url, "link": {"url": feed_url}},
+                                "text": {
+                                    "content": feed_url,
+                                    "link": {"url": feed_url},
+                                },
                             }
                         ]
                     },
@@ -728,7 +757,10 @@ def _append_sources_summary(page_id: str, date_iso: str, source_metadata: Dict[s
                         "rich_text": [
                             {
                                 "type": "text",
-                                "text": {"content": '"{query}"', "link": {"url": search_url}},
+                                "text": {
+                                    "content": '"{query}"',
+                                    "link": {"url": search_url},
+                                },
                             }
                         ]
                     },
@@ -741,7 +773,10 @@ def _append_sources_summary(page_id: str, date_iso: str, source_metadata: Dict[s
         "type": "toggle",
         "toggle": {
             "rich_text": [
-                {"type": "text", "text": {"content": f"📋 News Sources Used - {date_iso}"}}
+                {
+                    "type": "text",
+                    "text": {"content": f"📋 News Sources Used - {date_iso}"},
+                }
             ],
             "children": sources_content,
         },
@@ -752,10 +787,7 @@ def _append_sources_summary(page_id: str, date_iso: str, source_metadata: Dict[s
 
 
 def _prune_oldest_toggles_by_budget(page_id: str, approx_max_bytes: int = 800_000):
-    """
-    Keep the page's top-level toggle groups within an approximate byte budget.
-    We estimate text bytes; if over budget, delete oldest toggles.
-    """
+    """Ensure toggle groups stay within an approximate byte budget."""
     blocks = _list_block_children(page_id)
     toggles = [b for b in blocks if b.get("type") == "toggle"]
     est_bytes = 0
@@ -772,8 +804,12 @@ def _prune_oldest_toggles_by_budget(page_id: str, approx_max_bytes: int = 800_00
         if b["id"] not in keep_set:
             try:
                 notion_delete(f"/blocks/{b['id']}")
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "Failed to delete old toggle block",
+                    block_id=b.get("id"),
+                    error=str(exc),
+                )
 
 
 def _set_last_updated(
@@ -808,10 +844,7 @@ def update_intel_archive_for_company(
     overwrite_summary_only: bool = True,
     source_metadata: Optional[Dict[str, List[str]]] = None,
 ) -> str:
-    """
-    Upsert a single Intel page per company, overwrite Summary with latest (no history),
-    append a dated toggle group of news items, and enforce a coarse timeline budget.
-    """
+    """Upsert the company's intel page with summary, timeline, and sources."""
     callsign = (callsign or "").strip()
     summary_text = (summary_text or "").strip()
     date_iso = date_iso or datetime.date.today().isoformat()

@@ -1,17 +1,19 @@
-"""
-Tests for correct interpolation of links/titles in WeeklyNewsReport HTML rendering.
-"""
+"""Test WeeklyNewsReport link and title interpolation."""
 
 from app.intelligence.models import NewsItem, NewsType, WeeklyNewsDigest
 from app.reports.weekly_news import WeeklyNewsReport
 
 
 class DummyAggregator:
+    """Minimal aggregator stub for tests."""
+
     def __init__(self):
+        """Initialise aggregator stub."""
         self.gmail_client = None
 
 
 def test_weekly_news_html_contains_links():
+    """Render digest HTML and assert link interpolation."""
     aggregator = DummyAggregator()
     report_gen = WeeklyNewsReport(aggregator=aggregator, notion_client=None)
 

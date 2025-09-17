@@ -8,7 +8,6 @@ automatic invalidation, and performance metrics.
 import hashlib
 import json
 import time
-from datetime import datetime
 from functools import wraps
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -21,6 +20,7 @@ class CacheStats:
     """Track cache performance metrics."""
 
     def __init__(self):
+        """Initialise counters for cache statistics."""
         self.hits = 0
         self.misses = 0
         self.evictions = 0
@@ -88,7 +88,7 @@ class IntelligenceCache:
         # Create stable key from arguments
         key_data = {"prefix": prefix, "args": args, "kwargs": sorted(kwargs.items())}
         key_json = json.dumps(key_data, sort_keys=True, default=str)
-        key_hash = hashlib.md5(key_json.encode()).hexdigest()[:16]
+        key_hash = hashlib.md5(key_json.encode(), usedforsecurity=False).hexdigest()[:16]
         return f"{prefix}:{key_hash}"
 
     def get(self, key: str) -> Optional[Any]:
@@ -204,7 +204,7 @@ _cache = IntelligenceCache(max_size=2000, default_ttl=3600)
 
 def cached(prefix: str, ttl: Optional[int] = None):
     """
-    Decorator to cache function results.
+    Cache function results using the given prefix and TTL.
 
     Args:
         prefix: Cache key prefix

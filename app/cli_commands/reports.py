@@ -102,7 +102,8 @@ def company_deepdive(callsign: str, no_email: bool, config_file: Optional[str]):
 
 @reports.command()
 @click.option(
-    "--callsigns", help="Comma-separated list of new callsigns (auto-detects if not provided)"
+    "--callsigns",
+    help="Comma-separated list of new callsigns (auto-detects if not provided)",
 )
 @click.option("--no-email", is_flag=True, help="Skip email delivery")
 @click.option("--config-file", type=click.Path(exists=True), help="Configuration file path")
