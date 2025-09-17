@@ -341,6 +341,37 @@ class NotionNewsSeenStore:
 
         return new_items, existing_items
 
+    def filter_new_items(
+        self,
+        callsign: str,
+        items: Iterable[NewsItem],
+    ) -> Tuple[List[NewsItem], List[NewsItem]]:
+        """Return items split into (new, existing) without mutating Notion."""
+        new_items: List[NewsItem] = []
+        existing_items: List[NewsItem] = []
+
+        for item in items:
+            norm_url = _normalize_url(item.url)
+            if not norm_url:
+                continue
+
+            try:
+                existing_page = self.client.find_news_item_by_url(
+                    self.intel_db_id, self._schema["url"], norm_url
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to classify news item", callsign=callsign, url=norm_url, error=str(exc)
+                )
+                existing_page = None
+
+            if existing_page:
+                existing_items.append(item)
+            else:
+                new_items.append(item)
+
+        return new_items, existing_items
+
     def get_recent(self, callsign: str, days: int) -> List[NewsItem]:
         """Return recently seen items for a callsign."""
         cutoff = datetime.utcnow() - timedelta(days=days)

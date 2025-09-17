@@ -386,6 +386,20 @@ def _news_item_to_link(item: NewsItem) -> str:
     return f"• [{item.title}]({item.url})" if item.url else f"• {item.title}"
 
 
+def _news_item_to_dict(item: NewsItem) -> Dict[str, Any]:
+    """Convert a `NewsItem` back into the dictionary format used in caches."""
+    return {
+        "title": item.title,
+        "url": item.url,
+        "source": item.source,
+        "published_at": item.published_at,
+        "news_type": item.news_type.value,
+        "relevance_score": item.relevance_score,
+        "sentiment": item.sentiment,
+        "summary": item.summary,
+    }
+
+
 def within_days(published_at: Any, days: int) -> bool:
     """Allow both ISO date strings and datetime objects; default True if unknown."""
     if published_at is None or published_at == "":
@@ -658,6 +672,7 @@ def build_email_digest(intel: Dict[str, List[Dict[str, Any]]]) -> str:
 def process_company_notion_with_data(
     intel_by_cs: Dict[str, List[Dict[str, Any]]],
     source_metadata_by_cs: Dict[str, Dict[str, List[str]]],
+    filtered_news_by_cs: Dict[str, List[NewsItem]],
     companies_db: str,
     intel_db: str,
     news_store: Optional[NotionNewsSeenStore],
@@ -670,6 +685,7 @@ def process_company_notion_with_data(
         org=org,
         intel_by_cs=intel_by_cs,
         source_metadata_by_cs=source_metadata_by_cs,
+        filtered_news_by_cs=filtered_news_by_cs,
         companies_db=companies_db,
         intel_db=intel_db,
         news_store=news_store,
@@ -681,6 +697,7 @@ def process_company_notion(
     org: Dict[str, Any],
     intel_by_cs: Dict[str, List[Dict[str, Any]]],
     source_metadata_by_cs: Dict[str, Dict[str, List[str]]],
+    filtered_news_by_cs: Dict[str, List[NewsItem]],
     companies_db: str,
     intel_db: str,
     news_store: Optional[NotionNewsSeenStore],
@@ -710,9 +727,11 @@ def process_company_notion(
 
         # LLM summary (optional)
         company_callsign = str(org.get("callsign") or cs)
-        collected_items: List[NewsItem] = [
-            _dict_to_news_item(item, company_callsign) for item in intel_items
-        ]
+        prefiltered_items = filtered_news_by_cs.get(cs)
+        if prefiltered_items is not None:
+            collected_items = prefiltered_items
+        else:
+            collected_items = [_dict_to_news_item(item, company_callsign) for item in intel_items]
 
         if news_store:
             summary_items, _ = news_store.ingest(
@@ -791,6 +810,21 @@ def main():
     g_api_key = os.getenv("GOOGLE_API_KEY")
     g_cse_id = os.getenv("GOOGLE_CSE_ID")
 
+    companies_db = os.getenv("NOTION_COMPANIES_DB_ID")
+    token = os.getenv("NOTION_API_KEY")
+    intel_db = os.getenv("NOTION_INTEL_DB_ID")
+    notion_client: Optional[EnhancedNotionClient] = None
+    news_store: Optional[NotionNewsSeenStore] = None
+    if token and companies_db and intel_db:
+        try:
+            notion_config = NotionConfig()
+            notion_client = EnhancedNotionClient(notion_config)
+            news_store = NotionNewsSeenStore(notion_client, intel_db, companies_db)
+        except Exception as exc:
+            print(f"[WARN] Failed to initialize Notion news store: {exc}")
+            news_store = None
+            notion_client = None
+
     # Pull roster CSV (subject configured via env)
     profile_subject = os.getenv("NEWS_PROFILE_SUBJECT") or "Org Profile — Will Mitchell"
     df = fetch_csv_by_subject(svc, user, profile_subject)
@@ -863,7 +897,6 @@ def main():
 
     # Detect new companies and flag for baseline generation
     new_callsigns: List[str] = []
-    companies_db = os.getenv("NOTION_COMPANIES_DB_ID")
 
     if companies_db:
         for cs, org in roster.items():
@@ -987,36 +1020,64 @@ def main():
 
     intel_by_cs: Dict[str, List[Dict[str, Any]]] = {}
     source_metadata_by_cs: Dict[str, Dict[str, List[str]]] = {}
+    filtered_news_by_cs: Dict[str, List[NewsItem]] = {}
+
     for cs in roster.keys():
         result = results.get(cs, {"items": [], "source_metadata": {}})
+
+        items_list: List[Dict[str, Any]]
+        source_metadata: Dict[str, List[str]]
 
         if isinstance(result, tuple) and len(result) == 2:
             # Handle tuple return format (cs, data)
             returned_cs, data = result
             if isinstance(data, dict):
-                intel_by_cs[cs] = data.get("items", [])
-                source_metadata_by_cs[cs] = data.get("source_metadata", {})
+                items_list = data.get("items", []) or []
+                source_metadata = data.get("source_metadata", {}) or {}
             else:
                 # Data is a list (old cached format)
-                intel_by_cs[cs] = data if isinstance(data, list) else []
-                source_metadata_by_cs[cs] = {}
+                items_list = data if isinstance(data, list) else []
+                source_metadata = {}
         elif isinstance(result, dict):
-            intel_by_cs[cs] = result.get("items", [])
-            source_metadata_by_cs[cs] = result.get("source_metadata", {})
+            items_list = result.get("items", []) or []
+            source_metadata = result.get("source_metadata", {}) or {}
         else:
             # Backwards compatibility: if result is just a list (old format)
-            intel_by_cs[cs] = result if isinstance(result, list) else []
-            source_metadata_by_cs[cs] = {}
+            items_list = result if isinstance(result, list) else []
+            source_metadata = {}
+
+        source_metadata_by_cs[cs] = source_metadata
+
+        if news_store and items_list:
+            org = roster.get(cs, {})
+            company_callsign = str(org.get("callsign") or cs or "").strip() or cs
+            candidate_items = [_dict_to_news_item(item, company_callsign) for item in items_list]
+            new_items, existing_items = news_store.filter_new_items(
+                company_callsign,
+                candidate_items,
+            )
+            filtered_news_by_cs[cs] = new_items
+            if existing_items:
+                print(f"[DEDUP] {cs} skipped {len(existing_items)} archived items")
+            intel_by_cs[cs] = [_news_item_to_dict(item) for item in new_items]
+        else:
+            intel_by_cs[cs] = items_list
 
     collection_time = PERFORMANCE_MONITOR.end_timer("intel_collection")
     print(f"[PERFORMANCE] Intel collection completed in {collection_time:.2f}s")
 
     # Notion (optional) - PARALLEL PROCESSING
-    token = os.getenv("NOTION_API_KEY")
-    companies_db = os.getenv("NOTION_COMPANIES_DB_ID")
-    intel_db = os.getenv("NOTION_INTEL_DB_ID")
     if token and companies_db and intel_db:
         PERFORMANCE_MONITOR.start_timer("notion_updates")
+
+        if news_store is None:
+            try:
+                notion_config = NotionConfig()
+                notion_client = EnhancedNotionClient(notion_config)
+                news_store = NotionNewsSeenStore(notion_client, intel_db, companies_db)
+            except Exception as exc:
+                print(f"[WARN] Failed to initialize Notion news store: {exc}")
+                news_store = None
 
         # Create bound function with all data - NO nested functions!
         print("[DEBUG MAIN] Creating bound function with:")
@@ -1024,18 +1085,11 @@ def main():
         print(f"  companies_db: {type(companies_db)} = {companies_db}")
         print(f"  intel_db: {type(intel_db)} = {intel_db}")
 
-        try:
-            notion_config = NotionConfig()
-            notion_client = EnhancedNotionClient(notion_config)
-            news_store = NotionNewsSeenStore(notion_client, intel_db, companies_db)
-        except Exception as exc:
-            print(f"[WARN] Failed to initialize Notion news store: {exc}")
-            news_store = None
-
         bound_processor = functools.partial(
             process_company_notion_with_data,
             intel_by_cs,
             source_metadata_by_cs,
+            filtered_news_by_cs,
             companies_db,
             intel_db,
             news_store,
