@@ -1,5 +1,6 @@
 """Digest service for generating and sending weekly client digests."""
 
+import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -8,7 +9,7 @@ import structlog
 from app.core.config import DigestConfig, Settings
 from app.core.exceptions import GmailError, WorkflowError
 from app.core.models import Company, DigestData, ProcessingResult, ProcessingStatus, WorkflowType
-from app.data.csv_parser import CSVProcessor
+from app.data.csv_parser import CSVProcessor, filter_dataframe_by_relationship_manager
 from app.data.gmail_client import EnhancedGmailClient
 from app.data.notion_client import EnhancedNotionClient
 from app.services.render_service import DigestRenderer
@@ -59,6 +60,12 @@ class DigestService:
 
             if df is None:
                 raise WorkflowError("No CSV attachments found in Gmail messages")
+
+            relationship_manager = os.getenv("RELATIONSHIP_MANAGER_NAME", "Will Mitchell")
+            df = filter_dataframe_by_relationship_manager(df, relationship_manager)
+
+            if df.empty:
+                raise WorkflowError("CSV data empty after applying relationship manager filter")
 
             # Parse into Company objects
             companies = self.csv_processor.parse_companies_csv(df)
@@ -206,7 +213,10 @@ class DigestService:
                 callsigns=new_callsigns[:5],
             )
         else:
-            logger.debug("No new accounts detected via Notion lookup", company_count=len(companies))
+            logger.debug(
+                "No new accounts detected via Notion lookup",
+                company_count=len(companies),
+            )
 
         return new_callsigns
 

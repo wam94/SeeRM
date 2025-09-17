@@ -20,6 +20,7 @@ import tldextract
 
 from app.core.config import IntelligenceConfig, NotionConfig
 from app.core.models import Company
+from app.data.csv_parser import filter_dataframe_by_relationship_manager
 from app.data.notion_client import EnhancedNotionClient
 from app.gmail_client import (
     build_service,
@@ -172,13 +173,24 @@ def fetch_csv_by_subject(service, user: str, subject: str) -> Optional[pd.DataFr
     msgs = search_messages(
         service, user, f'subject:"{subject}" has:attachment filename:csv', max_results=5
     )
+    relationship_manager = os.getenv("RELATIONSHIP_MANAGER_NAME", "Will Mitchell")
+
     for m in msgs:
         msg = get_message(service, user, m["id"])
         atts = extract_csv_attachments(service, user, msg, r".*\.csv$")
         if atts:
             _, data = atts[0]
             try:
-                return pd.read_csv(io.BytesIO(data))
+                df = pd.read_csv(io.BytesIO(data))
+                df = filter_dataframe_by_relationship_manager(df, relationship_manager)
+                if df.empty:
+                    logger.warning(
+                        "CSV attachment contained no rows after relationship manager filter",
+                        message_id=m["id"],
+                        relationship_manager=relationship_manager,
+                    )
+                    continue
+                return df
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to parse CSV attachment", error=str(exc))
                 continue

@@ -15,6 +15,7 @@ import click
 import structlog
 
 from app.core.config import Settings
+from app.data.csv_parser import filter_dataframe_by_relationship_manager
 
 logger = structlog.get_logger(__name__)
 
@@ -269,6 +270,7 @@ def _run_quick_health_check() -> None:
     if cfg.csv_source_path:
         try:
             df = pd.read_csv(cfg.csv_source_path)
+            df = filter_dataframe_by_relationship_manager(df, cfg.relationship_manager_name)
             click.echo(f"✓ CSV readable: {cfg.csv_source_path} ({len(df)} rows)")
         except Exception as e:
             click.echo(f"✗ CSV read failed: {e}")

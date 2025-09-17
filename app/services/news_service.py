@@ -4,6 +4,7 @@ News intelligence service for gathering and processing company intelligence.
 Handles news collection from multiple sources, LLM summarization, and Notion integration.
 """
 
+import os
 import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -25,6 +26,7 @@ from app.core.models import (
     ProcessingStatus,
     WorkflowType,
 )
+from app.data.csv_parser import CSVProcessor, filter_dataframe_by_relationship_manager
 from app.data.gmail_client import EnhancedGmailClient
 from app.data.notion_client import EnhancedNotionClient
 from app.intelligence.news_quality import NewsQualityScorer
@@ -442,7 +444,7 @@ class NewsCollector:
             "Company news collection completed",
             callsign=company.callsign,
             items_collected=len(ranked_items),
-            sources_checked=["rss", "google_search"] if not self.config.cse_disable else ["rss"],
+            sources_checked=(["rss", "google_search"] if not self.config.cse_disable else ["rss"]),
         )
 
         return ranked_items
@@ -473,10 +475,10 @@ class NewsService:
         Returns:
             List of Company objects
         """
-        from app.data.csv_parser import CSVProcessor
-
         try:
             subject = subject_filter or self.config.news_profile_subject
+
+            relationship_manager = os.getenv("RELATIONSHIP_MANAGER_NAME", "Will Mitchell")
 
             # Search for CSV with company profiles
             messages = self.gmail_client.search_messages(
@@ -495,6 +497,14 @@ class NewsService:
                     if attachments:
                         filename, data = attachments[0]
                         df = self.gmail_client.parse_csv_attachment(data)
+                        df = filter_dataframe_by_relationship_manager(df, relationship_manager)
+                        if df.empty:
+                            logger.warning(
+                                "CSV attachment empty after relationship manager filter",
+                                message_id=msg_info["id"],
+                                relationship_manager=relationship_manager,
+                            )
+                            continue
 
                         # Parse into Company objects
                         processor = CSVProcessor(strict_validation=False)

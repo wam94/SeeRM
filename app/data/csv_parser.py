@@ -6,6 +6,7 @@ Provides robust CSV parsing with validation, normalization, and error handling.
 
 import io
 import json
+import os
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -15,6 +16,51 @@ from app.core.exceptions import CSVParsingError, ValidationError
 from app.core.models import AccountMovement, Company, DigestStats
 
 logger = structlog.get_logger(__name__)
+
+
+def filter_dataframe_by_relationship_manager(
+    df: pd.DataFrame, manager_name: Optional[str]
+) -> pd.DataFrame:
+    """Filter DataFrame rows by the configured relationship manager name."""
+    if df is None or df.empty or not manager_name:
+        return df
+
+    normalized_columns = {c.lower().strip(): c for c in df.columns}
+    column_name = normalized_columns.get("relationship_manager_name")
+
+    if not column_name:
+        logger.debug(
+            "Relationship manager column not found in CSV; skipping filter",
+            available_columns=list(df.columns),
+        )
+        return df
+
+    target_name = manager_name.strip()
+    if not target_name:
+        return df
+
+    column_values = df[column_name].fillna("").astype(str).str.strip()
+    mask = column_values.str.casefold() == target_name.casefold()
+
+    filtered_df = df.loc[mask].copy()
+
+    if filtered_df.empty:
+        logger.warning(
+            "No rows remain after filtering by relationship manager",
+            relationship_manager=target_name,
+            original_rows=len(df),
+        )
+        return filtered_df
+
+    if len(filtered_df) != len(df):
+        logger.info(
+            "Filtered CSV rows by relationship manager",
+            relationship_manager=target_name,
+            original_rows=len(df),
+            filtered_rows=len(filtered_df),
+        )
+
+    return filtered_df
 
 
 class CSVProcessor:
@@ -526,6 +572,13 @@ def parse_csv_data(
     try:
         # Parse CSV into DataFrame
         df = pd.read_csv(io.BytesIO(csv_data))
+        relationship_manager = os.getenv("RELATIONSHIP_MANAGER_NAME", "Will Mitchell")
+        df = filter_dataframe_by_relationship_manager(df, relationship_manager)
+        if df.empty:
+            logger.warning(
+                "CSV data empty after relationship manager filter",
+                relationship_manager=relationship_manager,
+            )
 
         # Create processor and validate
         processor = CSVProcessor(strict_validation=strict_validation)

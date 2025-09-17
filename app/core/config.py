@@ -180,6 +180,9 @@ class Settings(BaseSettings):
 
     # Data source paths
     csv_source_path: Optional[str] = Field(default=None, alias="CSV_SOURCE_PATH")
+    relationship_manager_name: Optional[str] = Field(
+        default="Will Mitchell", alias="RELATIONSHIP_MANAGER_NAME"
+    )
 
     # Component configurations
     gmail: GmailConfig = Field(default_factory=GmailConfig)
@@ -199,6 +202,14 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return v.lower() in ("1", "true", "yes")
         return bool(v)
+
+    @field_validator("relationship_manager_name", mode="before")
+    @classmethod
+    def normalize_relationship_manager_name(cls, v):  # noqa: D102
+        if v is None:
+            return None
+        value = str(v).strip()
+        return value or None
 
     @field_validator("dry_run", mode="before")
     @classmethod

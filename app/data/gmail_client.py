@@ -6,6 +6,7 @@ Provides robust Gmail API integration with circuit breakers, retry logic, and co
 
 import base64
 import io
+import os
 import re
 from email.message import EmailMessage
 from typing import Any, Dict, List, Optional, Tuple
@@ -18,6 +19,7 @@ from googleapiclient.errors import HttpError
 
 from app.core.config import GmailConfig
 from app.core.exceptions import GmailError, ValidationError
+from app.data.csv_parser import filter_dataframe_by_relationship_manager
 from app.utils.reliability import (
     AdaptiveRateLimiter,
     default_rate_limiter,
@@ -393,6 +395,8 @@ class EnhancedGmailClient:
         """
         try:
             df = pd.read_csv(io.BytesIO(attachment_data))
+            relationship_manager = os.getenv("RELATIONSHIP_MANAGER_NAME", "Will Mitchell")
+            df = filter_dataframe_by_relationship_manager(df, relationship_manager)
 
             logger.info("CSV parsed successfully", rows=len(df), columns=list(df.columns))
 

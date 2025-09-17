@@ -11,7 +11,7 @@ import click
 import structlog
 
 from app.core.config import Settings, validate_intelligence_reports_config
-from app.data.csv_parser import CSVProcessor
+from app.data.csv_parser import CSVProcessor, filter_dataframe_by_relationship_manager
 from app.data.gmail_client import EnhancedGmailClient
 from app.data.notion_client import EnhancedNotionClient
 from app.intelligence.data_aggregator import IntelligenceAggregator
@@ -226,6 +226,9 @@ def health_check(config_file: Optional[str]):
                 import pandas as pd
 
                 df = pd.read_csv(settings.csv_source_path)
+                df = filter_dataframe_by_relationship_manager(
+                    df, settings.relationship_manager_name
+                )
                 companies = csv_processor.parse_companies_csv(df)
                 click.echo(f"✓ CSV Access: {len(companies)} company records available")
             except Exception as e:

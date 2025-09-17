@@ -12,6 +12,7 @@ import pandas as pd
 import requests
 import tldextract
 
+from app.data.csv_parser import filter_dataframe_by_relationship_manager
 from app.gmail_client import (
     build_service,
     extract_csv_attachments,
@@ -278,6 +279,7 @@ def getenv(n: str, d: Optional[str] = None) -> Optional[str]:
 def load_latest_weekly_csv(service, user, q, attachment_regex):
     if not q:
         return None
+    relationship_manager = os.getenv("RELATIONSHIP_MANAGER_NAME", "Will Mitchell")
     msgs = search_messages(service, user, q, max_results=5)
     for m in msgs:
         msg = get_message(service, user, m["id"])
@@ -285,7 +287,11 @@ def load_latest_weekly_csv(service, user, q, attachment_regex):
         if atts:
             _, data = atts[0]
             try:
-                return pd.read_csv(io.BytesIO(data))
+                df = pd.read_csv(io.BytesIO(data))
+                df = filter_dataframe_by_relationship_manager(df, relationship_manager)
+                if df.empty:
+                    continue
+                return df
             except Exception:
                 pass
     return None
@@ -593,7 +599,10 @@ def _openai_write_narrative(prompt: str) -> Optional[str]:
                 r = client.responses.create(**kwargs)
                 return r.output_text
             else:
-                kwargs = {"model": model, "messages": [{"role": "user", "content": prompt}]}
+                kwargs = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                }
                 if send_temperature and temperature is not None:
                     kwargs["temperature"] = temperature
                 r = client.chat.completions.create(**kwargs)
@@ -802,7 +811,9 @@ def main():
                 "aka_names": (
                     _norm(r[pcols.get("aka_names")]) if pcols.get("aka_names") in r else None
                 ),
-                "blog_url": _norm(r[pcols.get("blog_url")]) if pcols.get("blog_url") in r else None,
+                "blog_url": (
+                    _norm(r[pcols.get("blog_url")]) if pcols.get("blog_url") in r else None
+                ),
                 "rss_feeds": (
                     _norm(r[pcols.get("rss_feeds")]) if pcols.get("rss_feeds") in r else None
                 ),
@@ -824,7 +835,7 @@ def main():
                     if pcols.get("industry_tags") in r
                     else None
                 ),
-                "hq_city": _norm(r[pcols.get("hq_city")]) if pcols.get("hq_city") in r else None,
+                "hq_city": (_norm(r[pcols.get("hq_city")]) if pcols.get("hq_city") in r else None),
                 "hq_region": (
                     _norm(r[pcols.get("hq_region")]) if pcols.get("hq_region") in r else None
                 ),
@@ -999,11 +1010,19 @@ def main():
             except Exception as e:
                 print(f"Notion dossier push error for {cs}: {e}")
 
-            return {"callsign": org.get("callsign"), "body_md": narr, "status": "success"}
+            return {
+                "callsign": org.get("callsign"),
+                "body_md": narr,
+                "status": "success",
+            }
 
         except Exception as e:
             print(f"Error processing company {cs}: {e}")
-            return {"callsign": cs, "body_md": f"Error processing {cs}: {e}", "status": "error"}
+            return {
+                "callsign": cs,
+                "body_md": f"Error processing {cs}: {e}",
+                "status": "error",
+            }
 
     print(f"Processing {len(targets_keys)} companies for baseline generation...")
 

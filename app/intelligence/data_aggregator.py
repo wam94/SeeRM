@@ -12,7 +12,7 @@ import structlog
 
 from app.core.config import Settings
 from app.core.exceptions import WorkflowError
-from app.data.csv_parser import CSVProcessor
+from app.data.csv_parser import CSVProcessor, filter_dataframe_by_relationship_manager
 from app.data.gmail_client import EnhancedGmailClient
 from app.data.notion_client import EnhancedNotionClient
 from app.utils.reliability import track_performance, with_retry
@@ -112,16 +112,33 @@ class IntelligenceAggregator:
             logger.info("Fetching latest movements", days=days)
 
             # Get CSV data from Gmail if available, otherwise use csv_source_path
+            manager_name = self.settings.relationship_manager_name
+
             if self.gmail_client:
                 df = self.gmail_client.get_latest_csv_from_query(max_messages=5)
                 if df is None:
                     logger.warning("No CSV data found in Gmail")
+                    return []
+                df = filter_dataframe_by_relationship_manager(df, manager_name)
+                if df.empty:
+                    logger.warning(
+                        "CSV data empty after relationship manager filter",
+                        relationship_manager=manager_name,
+                    )
                     return []
             elif self.settings.csv_source_path:
                 import pandas as pd
 
                 df = pd.read_csv(self.settings.csv_source_path)
                 logger.info("Loaded CSV from file path", path=self.settings.csv_source_path)
+                df = filter_dataframe_by_relationship_manager(df, manager_name)
+                if df.empty:
+                    logger.warning(
+                        "CSV file empty after relationship manager filter",
+                        relationship_manager=manager_name,
+                        path=self.settings.csv_source_path,
+                    )
+                    return []
             else:
                 logger.warning(
                     "No CSV data source configured (no Gmail client and no csv_source_path)"
