@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
@@ -173,6 +173,8 @@ class NewsQualityScorer:
             return 0.0
         try:
             dt = date_parser.parse(str(published_at))
+            if dt.tzinfo is not None and dt.tzinfo.utcoffset(dt) is not None:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
         except Exception:
             return 0.0
         delta = datetime.utcnow() - dt
