@@ -52,6 +52,7 @@ jobs:
           # Notion (for company data and optional report pages)
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
           NOTION_COMPANIES_DB_ID: ${{ secrets.NOTION_COMPANIES_DB_ID }}
+          NOTION_INTEL_DB_ID: ${{ secrets.NOTION_INTEL_DB_ID }}
           NOTION_REPORTS_DB_ID: ${{ secrets.NOTION_REPORTS_DB_ID }}
 
           # OpenAI (optional summaries)
@@ -62,6 +63,7 @@ jobs:
           # Intelligence options
           INTELLIGENCE_DEFAULT_REPORT_DAYS: ${{ inputs.days || '7' }}
           PREVIEW_ONLY: ${{ inputs.no_email || 'false' }}
+          DRY_RUN: 'false'
         run: |
           python - <<'PY'
           from app.core.config import Settings
