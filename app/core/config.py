@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -65,7 +65,9 @@ class IntelligenceConfig(BaseSettings):
     """News intelligence configuration."""
 
     # Source filtering
-    filter_callsigns: List[str] = Field(default_factory=list, alias="FILTER_CALLSIGNS")
+    filter_callsigns: Union[List[str], str, None] = Field(
+        default_factory=list, alias="FILTER_CALLSIGNS"
+    )
     lookback_days: int = Field(default=10, alias="INTEL_LOOKBACK_DAYS")
     max_per_org: int = Field(default=5, alias="INTEL_MAX_PER_ORG")
     preview_only: bool = Field(default=True, alias="PREVIEW_ONLY")
@@ -87,11 +89,21 @@ class IntelligenceConfig(BaseSettings):
     openai_temperature: Optional[float] = Field(default=0.2, alias="OPENAI_TEMPERATURE")
 
     # News quality tuning
-    trusted_domains: List[str] = Field(default_factory=list, alias="NEWS_TRUSTED_DOMAINS")
-    blocked_domains: List[str] = Field(default_factory=list, alias="NEWS_BLOCKED_DOMAINS")
-    demoted_domains: List[str] = Field(default_factory=list, alias="NEWS_DEMOTED_DOMAINS")
-    positive_keywords: List[str] = Field(default_factory=list, alias="NEWS_POSITIVE_KEYWORDS")
-    negative_keywords: List[str] = Field(default_factory=list, alias="NEWS_NEGATIVE_KEYWORDS")
+    trusted_domains: Union[List[str], str, None] = Field(
+        default_factory=list, alias="NEWS_TRUSTED_DOMAINS"
+    )
+    blocked_domains: Union[List[str], str, None] = Field(
+        default_factory=list, alias="NEWS_BLOCKED_DOMAINS"
+    )
+    demoted_domains: Union[List[str], str, None] = Field(
+        default_factory=list, alias="NEWS_DEMOTED_DOMAINS"
+    )
+    positive_keywords: Union[List[str], str, None] = Field(
+        default_factory=list, alias="NEWS_POSITIVE_KEYWORDS"
+    )
+    negative_keywords: Union[List[str], str, None] = Field(
+        default_factory=list, alias="NEWS_NEGATIVE_KEYWORDS"
+    )
 
     # Intelligence Reports configuration
     reports_enabled: bool = Field(default=True, alias="INTELLIGENCE_REPORTS_ENABLED")
