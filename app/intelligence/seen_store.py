@@ -372,6 +372,57 @@ class NotionNewsSeenStore:
 
         return new_items, existing_items
 
+    def archive_recent_items(self, callsign: str, days: int) -> int:
+        """Archive items seen within the given window for a callsign."""
+        first_seen_property = self._schema.get("first_seen")
+        if not first_seen_property:
+            logger.debug("Skipping archive; first_seen property missing", callsign=callsign)
+            return 0
+
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff_iso = cutoff.date().isoformat()
+
+        company_page_id = self._get_company_page_id(callsign)
+        filter_and = [
+            {
+                "property": first_seen_property,
+                "date": {"on_or_after": cutoff_iso},
+            }
+        ]
+
+        relation_property = self._schema.get("callsign_rel")
+        if company_page_id and relation_property:
+            filter_and.append(
+                {
+                    "property": relation_property,
+                    "relation": {"contains": company_page_id},
+                }
+            )
+
+        filter_obj = {"and": filter_and} if filter_and else None
+
+        archived = 0
+        for page in self.client.query_database_iter(self.intel_db_id, filter_obj=filter_obj):
+            page_id = page.get("id")
+            if not page_id:
+                continue
+
+            try:
+                self.client.archive_page(page_id)
+                archived += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to archive news item",
+                    callsign=callsign,
+                    page_id=page_id,
+                    error=str(exc),
+                )
+
+        if archived:
+            logger.info("Archived recent news items", callsign=callsign, archived=archived)
+
+        return archived
+
     def get_recent(self, callsign: str, days: int) -> List[NewsItem]:
         """Return recently seen items for a callsign."""
         cutoff = datetime.utcnow() - timedelta(days=days)

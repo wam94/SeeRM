@@ -269,6 +269,14 @@ class EnhancedNotionClient:
             "PATCH", f"/pages/{page_id}", json_data={"properties": properties}
         )
 
+    def archive_page(self, page_id: str) -> None:
+        """Archive (soft delete) a Notion page."""
+        try:
+            self._make_request("PATCH", f"/pages/{page_id}", json_data={"archived": True})
+            logger.info("Notion page archived", page_id=page_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to archive Notion page", page_id=page_id, error=str(exc))
+
     def find_news_item_by_url(
         self, database_id: str, url_property: str, normalized_url: str
     ) -> Optional[str]:

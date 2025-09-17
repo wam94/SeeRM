@@ -730,6 +730,7 @@ def process_company_notion_with_data(
     intel_by_cs: Dict[str, List[Dict[str, Any]]],
     source_metadata_by_cs: Dict[str, Dict[str, List[str]]],
     filtered_news_by_cs: Dict[str, List[NewsItem]],
+    lookback_days: int,
     companies_db: str,
     intel_db: str,
     news_store: Optional[NotionNewsSeenStore],
@@ -746,6 +747,7 @@ def process_company_notion_with_data(
         companies_db=companies_db,
         intel_db=intel_db,
         news_store=news_store,
+        lookback_days=lookback_days,
     )
 
 
@@ -758,10 +760,13 @@ def process_company_notion(
     companies_db: str,
     intel_db: str,
     news_store: Optional[NotionNewsSeenStore],
+    lookback_days: int,
 ) -> Optional[Dict[str, Any]]:
     """Process Notion updates for a single company."""
     intel_items = intel_by_cs.get(cs, [])
-    if not intel_items:
+    prefiltered_items = filtered_news_by_cs.get(cs)
+
+    if not intel_items and prefiltered_items is None:
         return None
 
     try:
@@ -784,18 +789,23 @@ def process_company_notion(
 
         # LLM summary (optional)
         company_callsign = str(org.get("callsign") or cs)
-        prefiltered_items = filtered_news_by_cs.get(cs)
         if prefiltered_items is not None:
             collected_items = prefiltered_items
         else:
             collected_items = [_dict_to_news_item(item, company_callsign) for item in intel_items]
 
         if news_store:
-            summary_items, _ = news_store.ingest(
-                company_callsign,
-                page_id,
-                collected_items,
-            )
+            if collected_items:
+                summary_items, _ = news_store.ingest(
+                    company_callsign,
+                    page_id,
+                    collected_items,
+                )
+            else:
+                archived = news_store.archive_recent_items(company_callsign, lookback_days)
+                if archived:
+                    print(f"[ARCHIVE] {cs} archived {archived} stale items")
+                summary_items = []
         else:
             summary_items = collected_items
 
@@ -1115,7 +1125,7 @@ def main():
 
         source_metadata_by_cs[cs] = source_metadata
 
-        if news_store and items_list:
+        if news_store:
             org = roster.get(cs, {})
             company_callsign = str(org.get("callsign") or cs or "").strip() or cs
             candidate_items = [_dict_to_news_item(item, company_callsign) for item in items_list]
@@ -1157,6 +1167,7 @@ def main():
             intel_by_cs,
             source_metadata_by_cs,
             filtered_news_by_cs,
+            lookback_days,
             companies_db,
             intel_db,
             news_store,
