@@ -19,6 +19,14 @@ class TestDigestService:
         self.renderer = DigestRenderer()
         self.config = DigestConfig(top_movers=15)
         self.service = DigestService(self.mock_gmail_client, self.renderer, self.config)
+        self.mock_notion_client = Mock()
+        self.service_with_notion = DigestService(
+            self.mock_gmail_client,
+            self.renderer,
+            self.config,
+            notion_client=self.mock_notion_client,
+            companies_db_id="test_db",
+        )
 
     def test_digest_data_generation(self):
         """Generate digest data from company fixtures."""
@@ -70,7 +78,18 @@ class TestDigestService:
             Company(callsign="existing2", any_change=False),
         ]
 
-        new_callsigns = self.service.extract_new_account_callsigns(companies)
+        self.mock_notion_client.get_all_companies_domain_data.return_value = {
+            "existing1": {"page_id": "page_existing1"},
+            "new1": {"page_id": None},
+            "new2": {"page_id": None},
+            "existing2": {"page_id": "page_existing2"},
+        }
+
+        new_callsigns = self.service_with_notion.extract_new_account_callsigns(companies)
+
+        self.mock_notion_client.get_all_companies_domain_data.assert_called_once_with(
+            "test_db", [c.callsign for c in companies]
+        )
 
         assert len(new_callsigns) == 2
         assert "new1" in new_callsigns

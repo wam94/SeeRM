@@ -6,7 +6,7 @@ for report generation and analysis.
 """
 
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import structlog
 
@@ -64,6 +64,37 @@ class IntelligenceAggregator:
             intelligent_classification=True,
         )
 
+    def _get_notion_company_data(self, callsigns: List[str]) -> Optional[Dict[str, Dict[str, Any]]]:
+        """Fetch Notion company metadata for supplied callsigns."""
+        if not self.notion_client or not self.settings.notion.companies_db_id:
+            logger.debug(
+                "Notion client not configured; new-account detection will rely on CSV flags"
+            )
+            return None
+
+        filtered_callsigns = [cs for cs in callsigns if cs]
+        if not filtered_callsigns:
+            return {}
+
+        try:
+            notion_data = self.notion_client.get_all_companies_domain_data(
+                self.settings.notion.companies_db_id,
+                filtered_callsigns,
+            )
+            logger.debug(
+                "Fetched Notion metadata for new-account detection",
+                requested=len(filtered_callsigns),
+                received=len(notion_data or {}),
+            )
+            return notion_data
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Failed to fetch Notion company metadata; falling back to CSV new-account flags",
+                error=str(exc),
+                companies=len(filtered_callsigns),
+            )
+            return None
+
     @track_performance("get_latest_movements")
     @with_retry(max_attempts=3)
     @cache_movements(ttl=300)  # Cache for 5 minutes
@@ -100,16 +131,31 @@ class IntelligenceAggregator:
             # Parse into Company objects
             companies = self.csv_processor.parse_companies_csv(df)
 
+            callsigns = [company.callsign for company in companies if company.callsign]
+            notion_company_data = self._get_notion_company_data(callsigns)
+
             # Convert to Movement objects
             movements = []
             for company in companies:
+                notion_entry = (
+                    notion_company_data.get(company.callsign.lower())
+                    if notion_company_data is not None
+                    else None
+                )
+                page_exists = bool(notion_entry and notion_entry.get("page_id"))
+                is_new_account = (
+                    not page_exists
+                    if notion_company_data is not None
+                    else bool(company.is_new_account)
+                )
+
                 movement = Movement(
                     callsign=company.callsign,
                     company_name=company.dba or company.callsign,
                     current_balance=company.curr_balance or 0,
                     percentage_change=company.balance_pct_delta_pct,
                     rank=getattr(company, "rank", None),
-                    is_new_account=getattr(company, "is_new_account", False),
+                    is_new_account=is_new_account,
                     products=getattr(company, "products", []),
                 )
 

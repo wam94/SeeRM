@@ -80,7 +80,10 @@ class DigestService:
             raise WorkflowError(error_msg)
 
     def generate_digest_data(
-        self, companies: List[Company], top_n: Optional[int] = None
+        self,
+        companies: List[Company],
+        top_n: Optional[int] = None,
+        new_callsigns: Optional[List[str]] = None,
     ) -> DigestData:
         """
         Generate digest data from company list.
@@ -107,6 +110,10 @@ class DigestService:
             # Calculate digest statistics and movements
             digest_dict = self.csv_processor.calculate_digest_data(companies, top_movers)
 
+            if new_callsigns is not None:
+                digest_dict.setdefault("stats", {})
+                digest_dict["stats"]["new_accounts"] = len(new_callsigns)
+
             # Create DigestData object
             digest_data = DigestData(
                 subject=self.config.subject or f"Client Weekly Digest — {datetime.now().date()}",
@@ -128,28 +135,87 @@ class DigestService:
             logger.error("Digest generation failed", error=str(e))
             raise WorkflowError(error_msg)
 
-    def extract_new_account_callsigns(self, companies: List[Company]) -> List[str]:
+    def _fetch_notion_company_data(
+        self, companies: List[Company]
+    ) -> Optional[Dict[str, Dict[str, Any]]]:
+        """Fetch Notion company metadata for the supplied companies."""
+        if not self.notion_client or not self._companies_db_id:
+            logger.debug("Notion client/DB not configured; skipping Notion lookup for new accounts")
+            return None
+
+        callsigns = [c.callsign for c in companies if getattr(c, "callsign", None)]
+        if not callsigns:
+            return {}
+
+        try:
+            notion_data = self.notion_client.get_all_companies_domain_data(
+                self._companies_db_id, callsigns
+            )
+            logger.debug(
+                "Fetched Notion company metadata",
+                requested=len(callsigns),
+                received=len(notion_data or {}),
+            )
+            return notion_data
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Failed to fetch Notion company data for new-account detection",
+                error=str(exc),
+                companies=len(callsigns),
+            )
+            return None
+
+    def extract_new_account_callsigns(
+        self,
+        companies: List[Company],
+        notion_company_data: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> List[str]:
         """
         Extract callsigns of new accounts for downstream processing.
 
         Args:
             companies: List of Company objects
+            notion_company_data: Optional cached Notion metadata
 
         Returns:
             List of new account callsigns
         """
-        new_callsigns = self.csv_processor.extract_new_callsigns(companies)
+        if notion_company_data is None:
+            notion_company_data = self._fetch_notion_company_data(companies)
+
+        if notion_company_data is None:
+            logger.debug("Notion metadata unavailable; skipping Notion-based new account detection")
+            return []
+
+        new_callsigns: List[str] = []
+        for company in companies:
+            callsign = getattr(company, "callsign", "") or ""
+            if not callsign:
+                continue
+
+            entry = notion_company_data.get(callsign.lower()) if notion_company_data else None
+            page_id = entry.get("page_id") if entry else None
+
+            if not page_id:
+                new_callsigns.append(callsign)
 
         if new_callsigns:
             logger.info(
-                "New accounts detected",
+                "New accounts detected via Notion",
                 count=len(new_callsigns),
-                callsigns=new_callsigns[:5],  # Log first 5
+                callsigns=new_callsigns[:5],
             )
+        else:
+            logger.debug("No new accounts detected via Notion lookup", company_count=len(companies))
 
         return new_callsigns
 
-    def sync_new_companies_to_notion(self, companies: List[Company], companies_db_id: str) -> None:
+    def sync_new_companies_to_notion(
+        self,
+        companies: List[Company],
+        companies_db_id: str,
+        new_callsigns: Optional[List[str]] = None,
+    ) -> None:
         """
         Sync new companies to Notion database.
 
@@ -161,15 +227,18 @@ class DigestService:
             logger.debug("Notion sync skipped - no client or DB ID configured")
             return
 
+        targets = {cs.lower() for cs in (new_callsigns or []) if cs}
+        if not targets:
+            logger.debug("No new callsigns supplied for Notion sync; skipping")
+            return
+
         try:
-            # Find companies that are marked as new
-            # NOTE: This relies on CSV is_new_account flag which may be unreliable.
-            # The news job also sets needs_dossier=True in Notion for new companies,
-            # which is the preferred mechanism for triggering baseline dossiers.
-            new_companies = [c for c in companies if getattr(c, "is_new_account", False)]
+            new_companies = [c for c in companies if c.callsign and c.callsign.lower() in targets]
 
             if not new_companies:
-                logger.debug("No new companies to sync to Notion")
+                logger.debug(
+                    "No new companies matched the provided callsigns; skipping Notion sync"
+                )
                 return
 
             logger.info(
@@ -181,16 +250,21 @@ class DigestService:
             synced_count = 0
             for company in new_companies:
                 try:
-                    # Prepare company data for Notion
-                    payload = {
-                        "callsign": company.callsign,
-                        "company": company.company_name,
-                        "website": company.website,
-                        "needs_dossier": True,  # Mark new companies for dossier generation
-                    }
+                    company.needs_dossier = True
 
-                    # Upsert company page
-                    page_id = self.notion_client.upsert_company_page(companies_db_id, payload)
+                    notion_page = self.notion_client.upsert_company_page(companies_db_id, company)
+                    page_id = getattr(notion_page, "page_id", None)
+
+                    if page_id:
+                        try:
+                            self.notion_client.set_needs_dossier(page_id, True)
+                        except Exception as flag_error:  # noqa: BLE001
+                            logger.warning(
+                                "Failed to set Needs Dossier flag",
+                                callsign=company.callsign,
+                                page_id=page_id,
+                                error=str(flag_error),
+                            )
 
                     logger.debug(
                         "Company synced to Notion",
@@ -313,14 +387,22 @@ class DigestService:
             companies = self.fetch_latest_csv_data(gmail_query, max_messages)
             result.items_processed = len(companies)
 
-            # Step 2: Generate digest data
-            digest_data = self.generate_digest_data(companies)
+            notion_company_data = self._fetch_notion_company_data(companies)
 
-            # Step 3: Render HTML
+            # Step 2: Extract new callsigns for downstream processing using Notion data
+            new_callsigns = self.extract_new_account_callsigns(
+                companies, notion_company_data=notion_company_data
+            )
+
+            # Step 3: Generate digest data (override new account count when available)
+            digest_data = self.generate_digest_data(
+                companies,
+                new_callsigns=new_callsigns if new_callsigns else None,
+            )
+
+            # Step 4: Render HTML
             html_content = self.renderer.render_digest(digest_data)
 
-            # Step 4: Extract new callsigns for downstream processing
-            new_callsigns = self.extract_new_account_callsigns(companies)
             if new_callsigns:
                 self.write_new_callsigns_trigger(new_callsigns)
 
@@ -329,7 +411,9 @@ class DigestService:
                 # Access companies_db_id through the settings passed to the factory
                 companies_db_id = getattr(self, "_companies_db_id", None)
                 if companies_db_id:
-                    self.sync_new_companies_to_notion(companies, companies_db_id)
+                    self.sync_new_companies_to_notion(
+                        companies, companies_db_id, new_callsigns=new_callsigns
+                    )
 
             # Step 5: Send digest email
             email_response = self.send_digest_email(digest_data, html_content)
