@@ -40,7 +40,6 @@ DEFAULT_DEMOTED_DOMAINS: Dict[str, float] = {
 DEFAULT_BLOCKED_DOMAINS = {
     "facebook.com",
     "twitter.com",
-    "linkedin.com",
     "instagram.com",
     "youtube.com",
     "tiktok.com",
