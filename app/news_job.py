@@ -716,17 +716,18 @@ def collect_recent_news(
                 if result:
                     owned_items += result
 
-    combined_items = external_items + owned_items
-    combined_items = dedupe(combined_items, key=lambda x: x.get("url"))
-    combined_items = [
+    scorer = get_quality_scorer()
+
+    # Score and select external items
+    external_items = dedupe(external_items, key=lambda x: x.get("url"))
+    external_items = [
         x
-        for x in combined_items
+        for x in external_items
         if within_days(x.get("published_at", datetime.utcnow()), lookback_days)
     ]
-    normalized = normalize_news_items(combined_items)
+    external_normalized = normalize_news_items(external_items)
 
-    scorer = get_quality_scorer()
-    news_models = [
+    external_models = [
         NewsItem(
             title=item["title"] or item["url"],
             url=item["url"],
@@ -737,21 +738,42 @@ def collect_recent_news(
             sentiment=None,
             company_mentions=[company_model.callsign.upper()],
         )
-        for item in normalized
+        for item in external_normalized
     ]
 
-    ranked_items = scorer.rank_items(company_model, news_models, max_items)
-    filtered = [
+    ranked_external = scorer.rank_items(company_model, external_models, max_items)
+    external_filtered = [
         {
             "url": item.url,
             "title": item.title,
             "source": item.source,
             "published_at": item.published_at,
         }
-        for item in ranked_items
+        for item in ranked_external
     ]
 
-    return filtered, source_metadata
+    # Always include owned-domain items that are within the lookback window
+    owned_items = dedupe(owned_items, key=lambda x: x.get("url"))
+    owned_items = [
+        x
+        for x in owned_items
+        if within_days(x.get("published_at", datetime.utcnow()), lookback_days)
+    ]
+    owned_normalized = normalize_news_items(owned_items)
+
+    existing_urls = {item.get("url") for item in external_filtered if item.get("url")}
+    owned_filtered: List[Dict[str, Any]] = []
+    for item in owned_normalized:
+        url = item.get("url")
+        if url and url in existing_urls:
+            continue
+        owned_filtered.append(item)
+        if url:
+            existing_urls.add(url)
+
+    combined_filtered = external_filtered + owned_filtered
+
+    return combined_filtered, source_metadata
 
 
 # ---------------- LLM summary (optional) ----------------
