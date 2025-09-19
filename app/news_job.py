@@ -352,7 +352,7 @@ def try_rss_feeds(site: Optional[str]) -> tuple[List[Dict[str, Any]], List[str]]
 
 
 def google_cse_search(
-    api_key: str, cse_id: str, q: str, date_restrict: Optional[str] = None, num: int = 3
+    api_key: str, cse_id: str, q: str, date_restrict: Optional[str] = None, num: int = 5
 ) -> List[Dict[str, Any]]:
     """Query Google CSE and return simplified result dictionaries."""
     if not (api_key and cse_id and q):
@@ -592,7 +592,7 @@ def collect_recent_news(
         for q in queries[:limit]:
             api_calls.append(
                 lambda query=q: google_cse_search(
-                    g_api_key, g_cse_id, query, date_restrict=f"d{lookback_days}", num=3
+                    g_api_key, g_cse_id, query, date_restrict=f"d{lookback_days}", num=5
                 )
             )
 
