@@ -217,29 +217,9 @@ def fetch_csv_by_subject(service, user: str, subject: str) -> Optional[pd.DataFr
 # ---------------- Query building ----------------
 
 
-def build_queries(
-    callsign: str,
-    dba: Optional[str],
-    website: Optional[str],
-    owners: Optional[List[str]],
-    domain_root: Optional[str] = None,
-    aka_names: Optional[str] = None,
-    tags: Optional[str] = None,
-    blog_url: Optional[str] = None,
-) -> List[str]:
-    """Construct search queries tailored to a company."""
+def _prepare_query_sets(company: Company) -> Dict[str, Any]:
+    """Return grouped query variants plus metadata for a company."""
     scorer = get_quality_scorer()
-
-    company = Company(
-        callsign=(callsign or dba or "unknown"),
-        dba=dba,
-        website=website,
-        domain_root=domain_root,
-        blog_url=blog_url,
-        beneficial_owners=owners or [],
-        aka_names=aka_names,
-        industry_tags=tags,
-    )
 
     def strip_suffix(name: str) -> str:
         tokens = [t for t in re.split(r"\s+", name.strip()) if t]
@@ -291,8 +271,82 @@ def build_queries(
 
     domains = [d.lower() for d in domains if d]
     site_scopes = scorer.company_site_scopes(company)
+    all_queries = scorer.build_query_variants(company, domains, names, site_scopes)
 
-    return scorer.build_query_variants(company, domains, names, site_scopes)
+    scope_tokens = {scope.lower() for scope in site_scopes}
+    scope_hosts = set()
+    for scope in site_scopes:
+        host = scope.split("/", 1)[0].lower()
+        if host.startswith("www."):
+            host = host[4:]
+        scope_hosts.add(host)
+
+    domain_set = set(domains)
+
+    external_queries: List[str] = []
+    owned_queries: List[str] = []
+    for query in all_queries:
+        q = query.strip()
+        is_owned = False
+        if q.lower().startswith("site:"):
+            token = q[5:].split()[0].lower()
+            host = token.split("/", 1)[0]
+            if host.startswith("www."):
+                host = host[4:]
+            if token in scope_tokens or host in scope_hosts or host in domain_set:
+                is_owned = True
+        if is_owned:
+            owned_queries.append(q)
+        else:
+            external_queries.append(q)
+
+    return {
+        "all": all_queries,
+        "external": external_queries,
+        "owned": owned_queries,
+        "domains": domain_set,
+        "scope_hosts": scope_hosts,
+    }
+
+
+def build_queries(
+    callsign: str,
+    dba: Optional[str],
+    website: Optional[str],
+    owners: Optional[List[str]],
+    domain_root: Optional[str] = None,
+    aka_names: Optional[str] = None,
+    tags: Optional[str] = None,
+    blog_url: Optional[str] = None,
+    include_owned: bool = True,
+) -> List[str]:
+    """Construct search queries tailored to a company.
+
+    Args:
+        include_owned: When False, omit site-scoped queries for company-controlled domains.
+    """
+    company = Company(
+        callsign=(callsign or dba or "unknown"),
+        dba=dba,
+        website=website,
+        domain_root=domain_root,
+        blog_url=blog_url,
+        beneficial_owners=owners or [],
+        aka_names=aka_names,
+        industry_tags=tags,
+    )
+
+    query_sets = _prepare_query_sets(company)
+    external_set = set(query_sets["external"])
+    owned_set = set(query_sets["owned"])
+
+    ordered: List[str] = []
+    for q in query_sets["all"]:
+        if q in external_set:
+            ordered.append(q)
+        elif include_owned and q in owned_set:
+            ordered.append(q)
+    return ordered
 
 
 # ---------------- RSS / Feeds ----------------
@@ -352,12 +406,31 @@ def try_rss_feeds(site: Optional[str]) -> tuple[List[Dict[str, Any]], List[str]]
 
 
 def google_cse_search(
-    api_key: str, cse_id: str, q: str, date_restrict: Optional[str] = None, num: int = 5
+    api_key: str,
+    cse_id: str,
+    q: str,
+    date_restrict: Optional[str] = None,
+    num: int = 5,
+    exclude_domains: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """Query Google CSE and return simplified result dictionaries."""
     if not (api_key and cse_id and q):
         return []
-    params = {"key": api_key, "cx": cse_id, "q": q, "num": min(10, max(1, num))}
+    query = q
+    if exclude_domains:
+        exclusions = []
+        for domain in exclude_domains:
+            token = (domain or "").strip()
+            if not token:
+                continue
+            clause = f"-site:{token}"
+            if clause in query:
+                continue
+            exclusions.append(clause)
+        if exclusions:
+            query = f"{query} {' '.join(exclusions)}".strip()
+
+    params = {"key": api_key, "cx": cse_id, "q": query, "num": min(10, max(1, num))}
     if date_restrict:
         params["dateRestrict"] = date_restrict  # e.g., 'd10'
     r = requests.get("https://www.googleapis.com/customsearch/v1", params=params, timeout=25)
@@ -552,66 +625,15 @@ def collect_recent_news(
     source_metadata format:
     {
         "rss_feeds": ["https://company.com/feed", "https://blog.company.com/rss"],
-        "search_queries": ["site:company.com funding", "Company Name partnership"]
+        "search_queries": ["Company Name partnership"],
+        "owned_queries": ["site:company.com/news"]
     }
     """
-    items: List[Dict[str, Any]] = []
-    source_metadata: Dict[str, List[str]] = {"rss_feeds": [], "search_queries": []}
-
-    # RSS/blog (prefer explicit blog_url; else website)
-    site_for_rss = org.get("blog_url") or org.get("website")
-    if site_for_rss:
-        try:
-            rss_items, successful_feeds = try_rss_feeds(site_for_rss)
-            items += rss_items
-            source_metadata["rss_feeds"].extend(successful_feeds)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("RSS collection failed", site=site_for_rss, error=str(exc))
-
-    # Google CSE (site + name queries + optional owners) - CONCURRENT
-    disable_cse = str(os.getenv("CSE_DISABLE", "")).lower() in ("1", "true", "yes")
-    if (g_api_key and g_cse_id) and not disable_cse:
-        queries = build_queries(
-            org.get("callsign") or "",
-            org.get("dba"),
-            org.get("website"),
-            org.get("owners"),
-            domain_root=org.get("domain_root"),
-            aka_names=org.get("aka_names"),
-            tags=org.get("industry_tags"),
-            blog_url=org.get("blog_url"),
-        )
-        limit = int(os.getenv("CSE_MAX_QUERIES_PER_ORG", str(max_queries)) or max_queries)
-
-        # Track queries that will be executed
-        executed_queries = queries[:limit]
-        source_metadata["search_queries"] = executed_queries
-
-        # Create API call functions for concurrent execution
-        api_calls = []
-        for q in queries[:limit]:
-            api_calls.append(
-                lambda query=q: google_cse_search(
-                    g_api_key, g_cse_id, query, date_restrict=f"d{lookback_days}", num=5
-                )
-            )
-
-        # Execute queries concurrently with rate limiting
-        if api_calls:
-            api_client = ConcurrentAPIClient(DEFAULT_RATE_LIMITER)
-            concurrent_results = api_client.batch_api_calls(api_calls, max_workers=4, timeout=30)
-
-            # Flatten results
-            for result in concurrent_results:
-                if result:
-                    items += result
-
-    # Clean / dedupe / window
-    items = dedupe(items, key=lambda x: x.get("url"))
-    items = [
-        x for x in items if within_days(x.get("published_at", datetime.utcnow()), lookback_days)
-    ]
-    normalized = normalize_news_items(items)
+    source_metadata: Dict[str, List[str]] = {
+        "rss_feeds": [],
+        "search_queries": [],
+        "owned_queries": [],
+    }
 
     company_model = Company(
         callsign=(org.get("callsign") or org.get("dba") or "unknown"),
@@ -623,6 +645,85 @@ def collect_recent_news(
         aka_names=org.get("aka_names"),
         industry_tags=org.get("industry_tags"),
     )
+
+    owned_items: List[Dict[str, Any]] = []
+    external_items: List[Dict[str, Any]] = []
+
+    # RSS/blog (prefer explicit blog_url; else website)
+    site_for_rss = org.get("blog_url") or org.get("website")
+    if site_for_rss:
+        try:
+            rss_items, successful_feeds = try_rss_feeds(site_for_rss)
+            owned_items += rss_items
+            source_metadata["rss_feeds"].extend(successful_feeds)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("RSS collection failed", site=site_for_rss, error=str(exc))
+
+    # Google CSE (site + name queries + optional owners) - CONCURRENT
+    disable_cse = str(os.getenv("CSE_DISABLE", "")).lower() in ("1", "true", "yes")
+    if (g_api_key and g_cse_id) and not disable_cse:
+        query_sets = _prepare_query_sets(company_model)
+
+        limit = int(os.getenv("CSE_MAX_QUERIES_PER_ORG", str(max_queries)) or max_queries)
+        executed_external = query_sets["external"][:limit]
+        source_metadata["search_queries"] = executed_external
+
+        owned_limit = int(os.getenv("CSE_MAX_OWNED_QUERIES_PER_ORG", "3") or "3")
+        executed_owned = query_sets["owned"][:owned_limit]
+        if executed_owned:
+            source_metadata["owned_queries"] = executed_owned
+
+        # Determine company-controlled domains for exclusion in external searches
+        exclude_domains = set(query_sets["domains"])
+        for host in query_sets["scope_hosts"]:
+            if any(host == dom or host.endswith(f".{dom}") for dom in query_sets["domains"]):
+                exclude_domains.add(host)
+
+        api_client = None
+
+        if executed_external:
+            api_client = api_client or ConcurrentAPIClient(DEFAULT_RATE_LIMITER)
+            external_calls = [
+                lambda query=q: google_cse_search(
+                    g_api_key,
+                    g_cse_id,
+                    query,
+                    date_restrict=f"d{lookback_days}",
+                    num=5,
+                    exclude_domains=sorted(exclude_domains) if exclude_domains else None,
+                )
+                for q in executed_external
+            ]
+            results = api_client.batch_api_calls(external_calls, max_workers=4, timeout=30)
+            for result in results:
+                if result:
+                    external_items += result
+
+        if executed_owned:
+            api_client = api_client or ConcurrentAPIClient(DEFAULT_RATE_LIMITER)
+            owned_calls = [
+                lambda query=q: google_cse_search(
+                    g_api_key,
+                    g_cse_id,
+                    query,
+                    date_restrict=f"d{lookback_days}",
+                    num=5,
+                )
+                for q in executed_owned
+            ]
+            results = api_client.batch_api_calls(owned_calls, max_workers=4, timeout=30)
+            for result in results:
+                if result:
+                    owned_items += result
+
+    combined_items = external_items + owned_items
+    combined_items = dedupe(combined_items, key=lambda x: x.get("url"))
+    combined_items = [
+        x
+        for x in combined_items
+        if within_days(x.get("published_at", datetime.utcnow()), lookback_days)
+    ]
+    normalized = normalize_news_items(combined_items)
 
     scorer = get_quality_scorer()
     news_models = [

@@ -675,8 +675,9 @@ def _append_sources_summary(page_id: str, date_iso: str, source_metadata: Dict[s
     """Append a 'News Sources' toggle summarising RSS feeds and queries."""
     rss_feeds = source_metadata.get("rss_feeds", [])
     search_queries = source_metadata.get("search_queries", [])
+    owned_queries = source_metadata.get("owned_queries", [])
 
-    if not rss_feeds and not search_queries:
+    if not rss_feeds and not search_queries and not owned_queries:
         return  # No sources to add
 
     # Build sources content
@@ -759,6 +760,52 @@ def _append_sources_summary(page_id: str, date_iso: str, source_metadata: Dict[s
                                 "type": "text",
                                 "text": {
                                     "content": '"{query}"',
+                                    "link": {"url": search_url},
+                                },
+                            }
+                        ]
+                    },
+                }
+            )
+
+    if owned_queries:
+        if sources_content:
+            sources_content.append(
+                {
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {"rich_text": [{"type": "text", "text": {"content": ""}}]},
+                }
+            )
+
+        sources_content.append(
+            {
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [
+                        {
+                            "type": "text",
+                            "text": {"content": "🏠 Company Queries:", "link": None},
+                            "annotations": {"bold": True},
+                        }
+                    ]
+                },
+            }
+        )
+
+        for query in owned_queries:
+            search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+            sources_content.append(
+                {
+                    "object": "block",
+                    "type": "bulleted_list_item",
+                    "bulleted_list_item": {
+                        "rich_text": [
+                            {
+                                "type": "text",
+                                "text": {
+                                    "content": f'"{query}"',
                                     "link": {"url": search_url},
                                 },
                             }

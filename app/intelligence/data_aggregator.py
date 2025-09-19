@@ -432,8 +432,16 @@ class IntelligenceAggregator:
         # Get all companies from movements
         movements = self.get_latest_movements()
 
+        if not movements:
+            logger.warning(
+                "No recent movements found; skipping news stream aggregation",
+                days=days,
+            )
+            return []
+
         # Use parallel processing to fetch news for all companies
-        processor = get_parallel_processor(max_workers=min(10, len(movements)))
+        worker_count = max(1, min(10, len(movements)))
+        processor = get_parallel_processor(max_workers=worker_count)
         callsigns = [movement.callsign for movement in movements]
 
         # Fetch news in parallel
