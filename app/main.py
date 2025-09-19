@@ -78,7 +78,7 @@ def news(ctx, callsigns: Optional[str], lookback_days: int, no_email: bool):
     """
     try:
         # Use the existing weekly-news report functionality
-        ctx.invoke(reports.commands["weekly-news"], no_email=no_email)
+        ctx.invoke(reports.commands["weekly-news"], days=lookback_days, no_email=no_email)
     except Exception as e:
         console.print(f"[red]News Intelligence Error:[/red] {e}")
         if ctx.obj and ctx.obj.get("debug"):
