@@ -946,11 +946,11 @@ def process_company_notion(
             else:
                 summary = ai_summary
         else:
-            ai_summary = "No new items detected."
-            summary = ai_summary
+            summary = ""
 
         # Set Latest Intel + update Intel archive with new system
         today_iso = datetime.utcnow().date().isoformat()
+        latest_intel_date = today_iso if summary else None
 
         # Keep slim "Latest Intel" on Companies DB
         try:
@@ -958,7 +958,7 @@ def process_company_notion(
             set_latest_intel(
                 page_id,
                 summary_text=summary,
-                date_iso=today_iso,
+                date_iso=latest_intel_date,
                 companies_db_id=companies_db,
             )
         except Exception as e:
