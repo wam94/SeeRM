@@ -157,6 +157,7 @@ class BaselineConfig(BaseSettings):
     callsigns: List[str] = Field(default_factory=list, alias="BASELINE_CALLSIGNS")
     debug: bool = Field(default=False, alias="BASELINE_DEBUG")
     use_notion_flags: bool = Field(default=False, alias="BASELINE_USE_NOTION_FLAGS")
+    use_llm_intel: bool = Field(default=False, alias="BASELINE_USE_LLM_INTEL")
 
     @field_validator("callsigns", mode="before")
     @classmethod
@@ -175,6 +176,13 @@ class BaselineConfig(BaseSettings):
     @field_validator("use_notion_flags", mode="before")
     @classmethod
     def parse_use_notion_flags(cls, v):  # noqa: D102
+        if isinstance(v, str):
+            return v.lower() in ("1", "true", "yes")
+        return bool(v)
+
+    @field_validator("use_llm_intel", mode="before")
+    @classmethod
+    def parse_use_llm_intel(cls, v):  # noqa: D102
         if isinstance(v, str):
             return v.lower() in ("1", "true", "yes")
         return bool(v)

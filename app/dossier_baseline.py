@@ -20,6 +20,7 @@ from app.gmail_client import (
     search_messages,
     send_html_email,
 )
+from app.intelligence.llm_enrichment import LLMCompanyIntel, resolve_company_intel
 from app.news_job import (
     build_queries,
     dedupe,
@@ -870,6 +871,20 @@ def main():
     else:
         use_notion_flags = env_use_flags.lower() in ("1", "true", "yes", "y")
 
+    llm_env_raw = os.getenv("BASELINE_USE_LLM_INTEL")
+    use_llm_intel = (llm_env_raw or "false").lower() in (
+        "1",
+        "true",
+        "yes",
+        "y",
+    )
+    if llm_env_raw is None:
+        print(
+            "[PROMPT] Set BASELINE_USE_LLM_INTEL=true (and OPENAI_API_KEY) before running to enable LLM enrichment."
+        )
+    if use_llm_intel:
+        print("[LLM MODE] Kickoff will use OpenAI enrichment for domain and funding")
+
     if use_notion_flags and companies_db:
         print("[NOTION MODE] Using Notion 'Needs Dossier' flags to determine targets")
 
@@ -947,27 +962,53 @@ def main():
         org = prof.get(cs, {"callsign": cs, "dba": cs, "owners": []})
 
         try:
+            llm_result: Optional[LLMCompanyIntel] = None
+            if use_llm_intel:
+                try:
+                    llm_result = resolve_company_intel(org)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[LLM] {cs} enrichment failed, falling back: {exc}")
+                    llm_result = None
+
+            if llm_result:
+                if llm_result.domain.domain_root:
+                    org["domain_root"] = llm_result.domain.domain_root
+                    org["domain"] = llm_result.domain.domain_root
+                if llm_result.domain.website:
+                    org["website"] = (
+                        ensure_http(llm_result.domain.website) or llm_result.domain.website
+                    )
+                org["llm_confidence"] = llm_result.confidence
+                if llm_result.sources:
+                    org["llm_sources"] = llm_result.sources
+                if llm_result.summary:
+                    org["llm_summary"] = llm_result.summary
 
             # Always resolve domain - function will prioritize CSV data or search as needed
-            dr, url = resolve_domain_for_org(org, g_api_key, g_cse_id)
+            if not org.get("domain_root") or not org.get("website"):
+                dr, url = resolve_domain_for_org(org, g_api_key, g_cse_id)
 
-            if dr and not org.get("domain_root"):
-                org["domain_root"] = dr
-                org["domain"] = dr
-            if url and not org.get("website"):
-                org["website"] = url
+                if dr and not org.get("domain_root"):
+                    org["domain_root"] = dr
+                    org["domain"] = dr
+                if url and not org.get("website"):
+                    org["website"] = url
 
             # Collect intelligence data
             news_items = collect_recent_news(org, lookback_days, g_api_key, g_cse_id)
             people_bg = collect_people_background(org, lookback_days, g_api_key, g_cse_id)
 
-            # Skip funding collection if we have recent data
-            if should_skip_processing(org, "funding_collection"):
-                funding_data = org.get("cached_funding_data", {})
+            if llm_result:
+                funding_data = llm_result.funding_payload()
+                org["cached_funding_data"] = funding_data
             else:
-                funding_data = collect_funding_data(
-                    org, lookback_days=540
-                )  # 18 months for funding searches
+                # Skip funding collection if we have recent data
+                if should_skip_processing(org, "funding_collection"):
+                    funding_data = org.get("cached_funding_data", {})
+                else:
+                    funding_data = collect_funding_data(
+                        org, lookback_days=540
+                    )  # 18 months for funding searches
 
             if isinstance(funding_data, str):
                 try:
