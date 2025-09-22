@@ -398,6 +398,114 @@ def page_has_dossier(page_id: str) -> bool:
         return False
 
 
+def remove_existing_dossier_blocks(page_id: str) -> None:
+    """Delete any existing Dossier heading/paragraph blocks from a page."""
+    try:
+        blocks = _list_block_children(page_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "Unable to load blocks while clearing dossier",
+            page_id=page_id,
+            error=str(exc),
+        )
+        return
+
+    stop_types = {
+        "heading_1",
+        "heading_2",
+        "heading_3",
+        "divider",
+        "column_list",
+        "column",
+        "toggle",
+        "synced_block",
+        "table",
+        "table_row",
+        "child_page",
+        "child_database",
+        "table_of_contents",
+        "quote",
+        "callout",
+    }
+
+    collecting = False
+    to_delete: List[str] = []
+
+    for block in blocks:
+        block_id = block.get("id")
+        block_type = block.get("type")
+        if not block_id or not block_type:
+            continue
+
+        if block_type == "heading_2":
+            rich_text = block.get("heading_2", {}).get("rich_text", [])
+            heading_text = "".join(rt.get("plain_text", "") for rt in rich_text).strip().lower()
+            if "dossier" in heading_text:
+                collecting = True
+                to_delete.append(block_id)
+                continue
+
+        if collecting:
+            if block_type in stop_types:
+                collecting = False
+                continue
+            to_delete.append(block_id)
+
+    for block_id in to_delete:
+        try:
+            notion_delete(f"/blocks/{block_id}")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "Failed to delete existing dossier block",
+                page_id=page_id,
+                block_id=block_id,
+                error=str(exc),
+            )
+
+
+def replace_dossier_blocks(page_id: str, markdown_body: str) -> None:
+    """Replace the dossier section on a page with the provided markdown body."""
+    remove_existing_dossier_blocks(page_id)
+
+    text = markdown_body or ""
+    chunks = [text[i : i + 1800] for i in range(0, len(text), 1800)] or [text]
+
+    header_block = {
+        "object": "block",
+        "type": "heading_2",
+        "heading_2": {"rich_text": [{"type": "text", "text": {"content": "Dossier"}}]},
+    }
+
+    paragraph_blocks = [
+        {
+            "object": "block",
+            "type": "paragraph",
+            "paragraph": {
+                "rich_text": [
+                    {
+                        "type": "text",
+                        "text": {"content": chunk},
+                    }
+                ]
+            },
+        }
+        for chunk in chunks
+    ]
+
+    try:
+        notion_patch(
+            f"/blocks/{page_id}/children",
+            {"children": [header_block, *paragraph_blocks]},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to append dossier blocks",
+            page_id=page_id,
+            error=str(exc),
+        )
+        raise
+
+
 # -------------------- Intel Archive (timeline-only) --------------------
 
 

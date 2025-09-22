@@ -31,6 +31,7 @@ from app.news_job import (
 from app.notion_client import (
     get_companies_needing_dossiers,
     page_has_dossier,
+    replace_dossier_blocks,
     set_needs_dossier,
     upsert_company_page,
 )
@@ -655,43 +656,6 @@ def generate_narrative(
     return "\n".join(lines)
 
 
-# ---------- Notion push ----------
-
-
-def _notion_headers() -> Dict[str, str]:
-    return {
-        "Authorization": f"Bearer {os.environ['NOTION_API_KEY']}",
-        "Notion-Version": os.getenv("NOTION_VERSION", "2022-06-28"),
-        "Content-Type": "application/json",
-    }
-
-
-def append_dossier_blocks(page_id: str, markdown_body: str):
-    chunks = [markdown_body[i : i + 1800] for i in range(0, len(markdown_body), 1800)] or [
-        markdown_body
-    ]
-    hdr = {
-        "object": "block",
-        "type": "heading_2",
-        "heading_2": {"rich_text": [{"type": "text", "text": {"content": "Dossier"}}]},
-    }
-    paras = [
-        {
-            "object": "block",
-            "type": "paragraph",
-            "paragraph": {"rich_text": [{"type": "text", "text": {"content": ch}}]},
-        }
-        for ch in chunks
-    ]
-    r = requests.patch(
-        f"https://api.notion.com/v1/blocks/{page_id}/children",
-        headers=_notion_headers(),
-        json={"children": [hdr] + paras},
-        timeout=30,
-    )
-    r.raise_for_status()
-
-
 def push_dossier_to_notion(
     callsign: str, org: dict, markdown_body: str, throttle_sec: float = 0.35
 ):
@@ -716,9 +680,9 @@ def push_dossier_to_notion(
 
     page_id = upsert_company_page(companies_db, payload)
     try:
-        append_dossier_blocks(page_id, markdown_body)
+        replace_dossier_blocks(page_id, markdown_body)
     except Exception as e:
-        print("[Notion] append blocks warning:", repr(e))
+        print("[Notion] dossier write warning:", repr(e))
     try:
         set_needs_dossier(page_id, False)
     except Exception:
@@ -891,13 +855,20 @@ def main():
             prof[cs] = base
 
     # Determine target selection mode
-    use_notion_flags = getenv("BASELINE_USE_NOTION_FLAGS", "false").lower() in (
-        "1",
-        "true",
-        "yes",
-        "y",
-    )
     companies_db = getenv("NOTION_COMPANIES_DB_ID")
+    requested_raw = (getenv("BASELINE_CALLSIGNS") or "").strip()
+    manual_override = bool(requested_raw)
+    manual_filter = []
+    if requested_raw and requested_raw.upper() != "ALL":
+        manual_filter = [c.strip().lower() for c in requested_raw.split(",") if c.strip()]
+
+    env_use_flags = getenv("BASELINE_USE_NOTION_FLAGS")
+    if manual_override:
+        use_notion_flags = False
+    elif env_use_flags is None:
+        use_notion_flags = bool(companies_db)
+    else:
+        use_notion_flags = env_use_flags.lower() in ("1", "true", "yes", "y")
 
     if use_notion_flags and companies_db:
         print("[NOTION MODE] Using Notion 'Needs Dossier' flags to determine targets")
@@ -936,13 +907,13 @@ def main():
             print("[NOTION MODE] Falling back to CSV-based mode")
             base_list = sorted(prof.keys())
     else:
-        # Traditional CSV-based mode
-        print("[CSV MODE] Using CSV data and BASELINE_CALLSIGNS for targeting")
+        if manual_override:
+            print("[CSV MODE] Using explicit BASELINE_CALLSIGNS selection for targeting")
+        else:
+            print("[CSV MODE] Using CSV roster for targeting (no Notion flags available)")
         base_list = sorted(prof.keys())
-        requested = (getenv("BASELINE_CALLSIGNS") or "").strip()
-        if requested and requested.upper() != "ALL":
-            want = [c.strip().lower() for c in requested.split(",") if c.strip()]
-            base_list = [c for c in base_list if c in want]
+        if manual_filter:
+            base_list = [c for c in base_list if c in manual_filter]
 
     batch_size = int(getenv("BATCH_SIZE", "0") or "0") or None
     batch_index = int(getenv("BATCH_INDEX", "0") or "0") if batch_size else None
@@ -997,6 +968,23 @@ def main():
                 funding_data = collect_funding_data(
                     org, lookback_days=540
                 )  # 18 months for funding searches
+
+            if isinstance(funding_data, str):
+                try:
+                    import json
+
+                    funding_data = json.loads(funding_data)
+                except Exception:
+                    funding_data = {}
+
+            if isinstance(funding_data, list):
+                # Some cached payloads store a single funding dict in a list; take the first
+                funding_data = (
+                    funding_data[0] if funding_data and isinstance(funding_data[0], dict) else {}
+                )
+
+            if not isinstance(funding_data, dict):
+                funding_data = {}
 
             # Generate narrative
             narr = generate_narrative(org, news_items, people_bg, funding_data)
