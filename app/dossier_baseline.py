@@ -318,7 +318,8 @@ def collect_recent_news(
     site_for_rss = ensure_http(org.get("blog_url") or org.get("website"))
     if site_for_rss:
         try:
-            items += try_rss_feeds(site_for_rss)
+            rss_items, _feeds = try_rss_feeds(site_for_rss)
+            items += rss_items
         except Exception:
             pass
     if (g_api_key and g_cse_id) and str(getenv("BASELINE_DISABLE_CSE", "false")).lower() not in (
@@ -1046,7 +1047,12 @@ def main():
             }
 
         except Exception as e:
-            print(f"Error processing company {cs}: {e}")
+            debug_info = {
+                "funding_type": type(locals().get("funding_data")),
+                "news_type": type(locals().get("news_items")),
+                "people_type": type(locals().get("people_bg")),
+            }
+            print(f"Error processing company {cs}: {e} :: {debug_info}")
             return {
                 "callsign": cs,
                 "body_md": f"Error processing {cs}: {e}",
