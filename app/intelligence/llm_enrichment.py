@@ -240,7 +240,17 @@ def resolve_company_intel(org: Dict[str, Any], *, force_refresh: bool = False) -
             kwargs["temperature"] = temperature
         response = client.responses.create(**kwargs)
     except Exception as exc:  # noqa: BLE001
-        raise OpenAIError("OpenAI Responses call failed", {"error": str(exc)}) from exc
+        error_payload = {"error": str(exc), "model": model}
+        try:
+            extra = getattr(exc, "response", None) or getattr(exc, "body", None)
+            if extra:
+                error_payload["details"] = str(extra)
+        except Exception:  # pragma: no cover - defensive
+            pass
+        logger.warning(
+            "OpenAI enrichment call failed", callsign=org.get("callsign"), payload=error_payload
+        )
+        raise OpenAIError("OpenAI Responses call failed", error_payload) from exc
 
     raw_text = getattr(response, "output_text", None)
     if not raw_text:
