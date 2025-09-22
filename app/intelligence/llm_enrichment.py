@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -195,7 +196,27 @@ def _build_prompt(org: Dict[str, Any]) -> str:
     ]
     if aka:
         info_lines.append(f"Also known as: {aka}")
-    info_lines.append("Respond in JSON matching the provided schema and include citations.")
+    info_lines.extend(
+        [
+            "Output strictly one JSON object matching this schema (no extra text):",
+            "{",
+            '  "confidence": "high|medium|low",',
+            '  "domain": {"domain_root": string?, "website": string?, "notes": string?},',
+            (
+                '  "funding": {'
+                '"stage": string?, '
+                '"latest_round": string?, '
+                '"latest_amount_usd": number?, '
+                '"lead_investors": [string], '
+                '"summary": string?, '
+                '"notes": string?},'
+            ),
+            '  "sources": [string],',
+            '  "summary": string?',
+            "}",
+            "Do not include explanations outside the JSON.",
+        ]
+    )
     return "\n".join(info_lines)
 
 
@@ -217,6 +238,33 @@ def _parse_amount(value: Any) -> Optional[float]:
 _CACHE: Dict[str, LLMCompanyIntel] = {}
 
 
+def _coerce_json_payload(text: Optional[str]) -> Dict[str, Any]:
+    if not text:
+        raise ValueError("Empty payload")
+
+    candidate = text.strip()
+
+    if candidate.startswith("```"):
+        parts = candidate.split("```")
+        for part in parts:
+            part = part.strip()
+            if part.startswith("{"):
+                candidate = part
+                break
+
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", candidate, re.DOTALL)
+        if match:
+            snippet = match.group(0)
+            try:
+                return json.loads(snippet)
+            except json.JSONDecodeError:
+                pass
+        raise ValueError("Could not extract JSON from payload")
+
+
 def resolve_company_intel(org: Dict[str, Any], *, force_refresh: bool = False) -> LLMCompanyIntel:
     """Resolve domain and funding using the OpenAI Responses API with web search."""
     cache_key = (org.get("callsign") or org.get("dba") or "").strip().lower()
@@ -234,7 +282,6 @@ def resolve_company_intel(org: Dict[str, Any], *, force_refresh: bool = False) -
             "model": model,
             "input": prompt,
             "tools": [{"type": "web_search"}],
-            "response_format": {"type": "json_schema", "json_schema": _RESPONSE_SCHEMA},
         }
         if temperature is not None:
             kwargs["temperature"] = temperature
@@ -257,8 +304,8 @@ def resolve_company_intel(org: Dict[str, Any], *, force_refresh: bool = False) -
         raise OpenAIError("Empty response from OpenAI", {"model": model})
 
     try:
-        data = json.loads(raw_text)
-    except json.JSONDecodeError as exc:  # noqa: BLE001
+        data = _coerce_json_payload(raw_text)
+    except ValueError as exc:  # noqa: BLE001
         raise OpenAIError("Failed to parse OpenAI JSON payload", {"payload": raw_text}) from exc
 
     confidence = str(data.get("confidence") or "unknown").lower()
