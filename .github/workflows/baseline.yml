@@ -7,10 +7,6 @@ on:
         description: "ALL or comma-separated callsigns"
         required: false
         default: "ALL"
-      batch_size:
-        description: "Companies per batch"
-        required: false
-        default: "25"
       lookback_days:
         description: "Evidence lookback window (days)"
         required: false
@@ -19,6 +15,12 @@ on:
         description: "Optional JSON overrides (see comments in file)"
         required: false
         default: ""
+      use_llm_intel:
+        description: "Enable LLM enrichment (true/false)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["true", "false"]
 
 permissions:
   contents: read
@@ -53,7 +55,7 @@ jobs:
 
           # Inputs
           SCOPE: ${{ inputs.scope }}
-          BATCH_SIZE: ${{ inputs.batch_size }}
+          OPTIONS_JSON: ${{ inputs.options_json }}
         run: |
           python - <<'PY'
           import os, json
@@ -84,10 +86,38 @@ jobs:
               want = [c.strip().lower() for c in scope.split(",") if c.strip()]
               calls = [c for c in calls if c in want]
 
-          batch_size = max(1, int(os.environ.get("BATCH_SIZE","25") or "25"))
+          raw_opts = os.environ.get("OPTIONS_JSON", "").strip()
+          try:
+              opts = json.loads(raw_opts) if raw_opts else {}
+          except Exception:
+              opts = {}
+
+          try:
+              batch_size = int(opts.get("batch_size") or 25)
+          except (TypeError, ValueError):
+              batch_size = 25
+          if batch_size < 1:
+              batch_size = 1
           n = len(calls)
-          num_batches = (n + batch_size - 1) // batch_size
-          batch_list = list(range(num_batches))
+          num_batches = (n + batch_size - 1) // batch_size if batch_size else 0
+          batch_idx = opts.get("batch_index")
+          if isinstance(batch_idx, str) and batch_idx.strip():
+              try:
+                  batch_idx = int(batch_idx)
+              except ValueError:
+                  batch_idx = None
+          elif isinstance(batch_idx, (int, float)):
+              batch_idx = int(batch_idx)
+          else:
+              batch_idx = None
+
+          if batch_idx is not None and num_batches > 0:
+              selected = max(0, min(batch_idx, num_batches - 1))
+              batch_list = [selected]
+          elif batch_idx is not None and num_batches == 0:
+              batch_list = []
+          else:
+              batch_list = list(range(num_batches))
 
           print(f"Found {n} callsigns -> {num_batches} batches of size {batch_size}")
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
@@ -140,7 +170,8 @@ jobs:
       #   "llm_model_dossier": "gpt-5-mini", "llm_temperature_dossier": "auto",
       #   "llm_delay_sec": 0, "notion_throttle_sec": 0.35,
       #   "preview_only": false, "send_email": false,
-      #   "debug": false, "force_patch": false
+      #   "debug": false, "force_patch": false,
+      #   "batch_size": 25, "batch_index": null
       # }
       - name: Parse options
         env:
@@ -171,6 +202,8 @@ jobs:
             "send_email": cfg.get("send_email", False),
             "debug": cfg.get("debug", False),
             "force_patch": cfg.get("force_patch", False),
+            "batch_size": cfg.get("batch_size", 25),
+            "batch_index": cfg.get("batch_index"),
           }
 
           envset("BASELINE_DISABLE_CSE", str(cfg["disable_cse"]).lower())
@@ -185,6 +218,14 @@ jobs:
           envset("SEND_EMAIL", str(cfg["send_email"]).lower())
           envset("BASELINE_DEBUG", str(cfg["debug"]).lower())
           envset("BASELINE_NOTION_FORCE_PATCH", str(cfg["force_patch"]).lower())
+
+          try:
+              batch_size_val = int(cfg.get("batch_size") or 25)
+          except (TypeError, ValueError):
+              batch_size_val = 25
+          if batch_size_val < 1:
+              batch_size_val = 1
+          envset("BATCH_SIZE", str(batch_size_val))
           PY
 
       - name: Run dossier baseline (batch ${{ matrix.batch }})
@@ -225,8 +266,8 @@ jobs:
           BASELINE_DEBUG: ${{ env.BASELINE_DEBUG }}
           BASELINE_NOTION_FORCE_PATCH: ${{ env.BASELINE_NOTION_FORCE_PATCH }}
 
-          # batching
-          BATCH_SIZE: ${{ inputs.batch_size }}
+          # batching & enrichment
+          BASELINE_USE_LLM_INTEL: ${{ inputs.use_llm_intel }}
           BATCH_INDEX: ${{ matrix.batch }}
         run: |
           python -m app.dossier_baseline
