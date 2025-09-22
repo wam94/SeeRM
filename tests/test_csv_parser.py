@@ -63,6 +63,23 @@ testco,Test Company,test.com,"[""John Doe""]"
         assert test_co.domain_root == "test.com"
         assert test_co.beneficial_owners == ["John Doe"]
 
+    def test_numeric_field_parsing_handles_currency_and_percent(self):
+        """Parse numeric columns that include currency formatting or percent signs."""
+        csv_data = StringIO(
+            """CALLSIGN,balance_delta,balance_pct_delta_pct,curr_balance,prev_balance\n"
+            "foo,\"$12,345.67\",+45.5%,\"15,000\",\"2,654.33\"\n"""
+        )
+        df = pd.read_csv(csv_data)
+
+        companies = self.processor.parse_companies_csv(df)
+
+        assert len(companies) == 1
+        company = companies[0]
+        assert company.balance_delta == pytest.approx(12345.67)
+        assert company.curr_balance == pytest.approx(15000.0)
+        assert company.prev_balance == pytest.approx(2654.33)
+        assert company.balance_pct_delta_pct == pytest.approx(45.5)
+
     def test_digest_calculation(self):
         """Validate digest statistics calculation."""
         df = pd.read_csv(StringIO(self.sample_csv))

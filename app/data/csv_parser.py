@@ -6,6 +6,7 @@ Provides robust CSV parsing with validation, normalization, and error handling.
 
 import io
 import json
+import math
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -141,6 +142,46 @@ class CSVProcessor:
 
         return pd.to_numeric(cleaned, errors="coerce")
 
+    def coerce_numeric_value(self, value: Any, *, allow_percent: bool = False) -> Optional[float]:
+        """Convert CSV scalar values to floats, handling currency/percent formatting."""
+        if value is None:
+            return None
+
+        # Handle pandas-specific missing values and numpy NaNs up front
+        try:
+            if pd.isna(value):  # type: ignore[arg-type]
+                return None
+        except TypeError:
+            # pd.isna raises on some non-scalar inputs; fall back to string cleaning below
+            pass
+
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if not cleaned:
+                return None
+            if cleaned.lower() in {"nan", "none", "null"}:
+                return None
+
+            # Remove common formatting artifacts
+            cleaned = cleaned.replace(",", "").replace("$", "")
+            if allow_percent:
+                cleaned = cleaned.replace("%", "")
+
+            try:
+                numeric = float(cleaned)
+            except ValueError:
+                return None
+        else:
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                return None
+
+        if math.isnan(numeric):
+            return None
+
+        return numeric
+
     def parse_json_field(self, value: Any) -> List[str]:
         """
         Parse JSON field that might be a string or actual JSON.
@@ -258,17 +299,12 @@ class CSVProcessor:
                         owners_changed=bool(row.get(cols.get("owners_changed"), False)),
                         balance_changed=bool(row.get(cols.get("balance_changed"), False)),
                         # Financial data
-                        curr_balance=pd.to_numeric(
-                            row.get(cols.get("curr_balance")), errors="coerce"
-                        ),
-                        prev_balance=pd.to_numeric(
-                            row.get(cols.get("prev_balance")), errors="coerce"
-                        ),
-                        balance_delta=pd.to_numeric(
-                            row.get(cols.get("balance_delta")), errors="coerce"
-                        ),
-                        balance_pct_delta_pct=pd.to_numeric(
-                            row.get(cols.get("balance_pct_delta_pct")), errors="coerce"
+                        curr_balance=self.coerce_numeric_value(row.get(cols.get("curr_balance"))),
+                        prev_balance=self.coerce_numeric_value(row.get(cols.get("prev_balance"))),
+                        balance_delta=self.coerce_numeric_value(row.get(cols.get("balance_delta"))),
+                        balance_pct_delta_pct=self.coerce_numeric_value(
+                            row.get(cols.get("balance_pct_delta_pct")),
+                            allow_percent=True,
                         ),
                         # Product changes
                         product_flips_json=self.safe_string_conversion(
