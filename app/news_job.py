@@ -925,9 +925,7 @@ def process_company_notion(
                     collected_items,
                 )
             else:
-                archived = news_store.archive_recent_items(company_callsign, lookback_days)
-                if archived:
-                    print(f"[ARCHIVE] {cs} archived {archived} stale items")
+                print(f"[NO-UPDATE] {cs} no new intel items; skipping archive")
                 summary_items = []
         else:
             summary_items = collected_items
@@ -945,24 +943,29 @@ def process_company_notion(
                 summary = ai_summary + "\n\nSources:\n" + "\n".join(source_links)
             else:
                 summary = ai_summary
+            should_update_latest_intel = True
         else:
             summary = ""
+            should_update_latest_intel = False
 
         # Set Latest Intel + update Intel archive with new system
-        today_iso = datetime.utcnow().date().isoformat()
-        latest_intel_date = today_iso if summary else None
+        if should_update_latest_intel:
+            today_iso = datetime.utcnow().date().isoformat()
+            latest_intel_date = today_iso if summary else None
 
-        # Keep slim "Latest Intel" on Companies DB
-        try:
-            DEFAULT_RATE_LIMITER.wait_if_needed()
-            set_latest_intel(
-                page_id,
-                summary_text=summary,
-                date_iso=latest_intel_date,
-                companies_db_id=companies_db,
-            )
-        except Exception as e:
-            print(f"WARN set_latest_intel for {cs}: {e}")
+            # Keep slim "Latest Intel" on Companies DB
+            try:
+                DEFAULT_RATE_LIMITER.wait_if_needed()
+                set_latest_intel(
+                    page_id,
+                    summary_text=summary,
+                    date_iso=latest_intel_date,
+                    companies_db_id=companies_db,
+                )
+            except Exception as e:
+                print(f"WARN set_latest_intel for {cs}: {e}")
+        else:
+            print(f"[NO-UPDATE] {cs} leaving Latest Intel unchanged (no new items)")
 
         return {"status": "success", "items": len(intel_items)}
 
