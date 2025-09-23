@@ -185,6 +185,15 @@ def _build_prompt(org: Dict[str, Any]) -> str:
         "Using the following internal profile fields, determine the company's identity,",
         "confirm or update the canonical website (with domain root),",
         "and summarize the latest funding stage and lead investors.",
+        ("Report the most recent funding round amount in USD " "as a pure number (no commas)."),
+        (
+            "If the exact figure is unavailable, provide the best published estimate "
+            "and note it as such."
+        ),
+        (
+            "When only total funding to date is known, supply that amount "
+            "and explain the context in notes."
+        ),
         "If information is ambiguous, say so and lower confidence.",
         "Always provide at least one source URL.",
         "",
@@ -220,18 +229,70 @@ def _build_prompt(org: Dict[str, Any]) -> str:
     return "\n".join(info_lines)
 
 
+_AMOUNT_UNIT_MULTIPLIERS = {
+    "k": 1_000.0,
+    "thousand": 1_000.0,
+    "m": 1_000_000.0,
+    "mm": 1_000_000.0,
+    "mn": 1_000_000.0,
+    "million": 1_000_000.0,
+    "millions": 1_000_000.0,
+    "b": 1_000_000_000.0,
+    "bn": 1_000_000_000.0,
+    "billion": 1_000_000_000.0,
+    "billions": 1_000_000_000.0,
+    "t": 1_000_000_000_000.0,
+    "trillion": 1_000_000_000_000.0,
+    "trillions": 1_000_000_000_000.0,
+}
+
+_AMOUNT_REGEX = re.compile(
+    (
+        r"(?P<amount>\d+(?:[,\s]\d{3})*(?:\.\d+)?)"
+        r"(?:\s*(?P<unit>"
+        r"k|m|b|bn|mm|mn|thousand|million|millions|billion|billions|t|trillion|trillions"
+        r")\b)?"
+    ),
+    re.IGNORECASE,
+)
+
+_NEGATIVE_AMOUNT_PATTERN = re.compile(
+    r"\b(undisclosed|unknown|n/?a|not available|none|not disclosed)\b"
+)
+
+
 def _parse_amount(value: Any) -> Optional[float]:
     if value is None:
         return None
     if isinstance(value, (int, float)):
         return float(value)
     if isinstance(value, str):
-        digits = "".join(ch for ch in value if ch.isdigit())
-        if digits:
-            try:
-                return float(digits)
-            except ValueError:
-                return None
+        raw = value.strip()
+        if not raw:
+            return None
+        lowered = raw.lower()
+        if _NEGATIVE_AMOUNT_PATTERN.search(lowered):
+            return None
+
+        cleaned = re.sub(r"[\$€£¥]", "", lowered)
+        match = _AMOUNT_REGEX.search(cleaned)
+        if not match:
+            return None
+
+        amount_token = match.group("amount")
+        if not amount_token:
+            return None
+
+        normalized = amount_token.replace(",", "").replace(" ", "")
+        try:
+            amount = float(normalized)
+        except ValueError:
+            return None
+
+        unit = match.group("unit") or ""
+        unit = re.sub(r"[^a-z]", "", unit.lower())
+        multiplier = _AMOUNT_UNIT_MULTIPLIERS.get(unit, 1.0)
+        return amount * multiplier
     return None
 
 

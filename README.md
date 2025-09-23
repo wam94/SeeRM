@@ -32,6 +32,7 @@ SeeRM is an enterprise-grade client intelligence platform that automates portfol
 - [Development](#-development)
 - [Testing](#-testing)
 - [Deployment](#-deployment)
+ - [Mac Onboarding](#-mac-onboarding)
 - [Contributing](#-contributing)
  - [Releases](#-releases)
 
@@ -289,6 +290,23 @@ pre-commit install
 # Run in development mode
 python -m app.main --debug --dry-run digest-dry-run
 ```
+
+## 💻 Mac Onboarding
+
+For a zero-terminal teammate experience on macOS, the repository ships
+scaffolding in `scripts/onboarding/` plus a detailed playbook in
+[`docs/mac_onboarding.md`](docs/mac_onboarding.md). The flow covers:
+
+- Pulling secrets from 1Password via a double-clickable bootstrapper
+- Guiding teammates through the Gmail OAuth consent screen
+- Providing a Tkinter-based “Control Center” for common SeeRM jobs
+- Publishing update manifests so non-technical users can self-service upgrades
+
+Generate the `.app` bundles with `python scripts/onboarding/build_mac_apps.py`
+before packaging the release DMG or zip.
+
+Use this alongside the regular GitHub Actions deployment so teammates can run
+local dry runs while production continues in your central automation.
 
 ## 🧪 Testing
 
