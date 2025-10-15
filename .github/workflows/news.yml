@@ -282,6 +282,33 @@ jobs:
               f.write(",".join(part))
           PY
 
+      - name: Compute intel defaults
+        id: intel_defaults
+        run: |
+          LOOKBACK="${INPUT_LOOKBACK:-}"
+          if [ -z "$LOOKBACK" ]; then
+            LOOKBACK="${VAR_LOOKBACK:-}"
+          fi
+          if [ -z "$LOOKBACK" ]; then
+            LOOKBACK="10"
+          fi
+
+          MAX="${INPUT_MAX_PER_ORG:-}"
+          if [ -z "$MAX" ]; then
+            MAX="${VAR_MAX_PER_ORG:-}"
+          fi
+          if [ -z "$MAX" ]; then
+            MAX="5"
+          fi
+
+          echo "lookback=$LOOKBACK" >> "$GITHUB_OUTPUT"
+          echo "max_per_org=$MAX" >> "$GITHUB_OUTPUT"
+        env:
+          INPUT_LOOKBACK: ${{ inputs.lookback_days }}
+          VAR_LOOKBACK: ${{ vars.NEWS_LOOKBACK_DAYS }}
+          INPUT_MAX_PER_ORG: ${{ inputs.max_per_org }}
+          VAR_MAX_PER_ORG: ${{ vars.NEWS_MAX_PER_ORG }}
+
       - name: Run external intel for this batch
         env:
           PYTHONPATH: ${{ github.workspace }}
@@ -311,8 +338,8 @@ jobs:
           NEWS_PROFILE_SUBJECT: ${{ vars.NEWS_PROFILE_SUBJECT }}
           ATTACHMENT_REGEX: '.*\.csv$'
           PREVIEW_ONLY: ${{ inputs.preview_only || 'true' }}
-          INTEL_LOOKBACK_DAYS: ${{ inputs.lookback_days }}
-          INTEL_MAX_PER_ORG: ${{ inputs.max_per_org }}
+          INTEL_LOOKBACK_DAYS: ${{ steps.intel_defaults.outputs.lookback }}
+          INTEL_MAX_PER_ORG: ${{ steps.intel_defaults.outputs.max_per_org }}
           DIGEST_TO: ${{ inputs.send_to || secrets.DIGEST_TO }}
           DIGEST_CC: ${{ secrets.DIGEST_CC }}
           DIGEST_BCC: ${{ secrets.DIGEST_BCC }}
@@ -390,8 +417,85 @@ jobs:
             echo "callsigns=" >> $GITHUB_OUTPUT
           fi
 
+      - name: Check Notion dossier flags
+        id: notion_flags
+        env:
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_COMPANIES_DB_ID: ${{ secrets.NOTION_COMPANIES_DB_ID }}
+        run: |
+          python - <<'PY'
+          import os
+          callsigns: list[str] = []
+          token = os.environ.get("NOTION_API_KEY")
+          db_id = os.environ.get("NOTION_COMPANIES_DB_ID")
+
+          if not token or not db_id:
+              print("Skipping Notion flag check (credentials missing)")
+          else:
+              try:
+                  from app.notion_client import get_companies_needing_dossiers
+
+                  callsigns = [
+                      cs.strip()
+                      for cs, _ in get_companies_needing_dossiers(db_id)
+                      if cs and cs.strip()
+                  ]
+              except Exception as exc:  # noqa: BLE001
+                  print(f"Failed to fetch Notion dossier flags: {exc}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"callsigns={','.join(callsigns)}\n")
+              fh.write(f"count={len(callsigns)}\n")
+
+          if callsigns:
+              preview = ", ".join(callsigns[:5])
+              remaining = len(callsigns) - len(callsigns[:5])
+              tail = f" … (+{remaining} more)" if remaining > 0 else ""
+              print(f"Notion flags: {len(callsigns)} company(ies) -> {preview}{tail}")
+          else:
+              print("No Notion dossier flags detected")
+          PY
+
+      - name: Merge baseline targets
+        id: baseline_targets
+        env:
+          COLLECT_CALLSIGNS: ${{ steps.collect.outputs.callsigns }}
+          NOTION_CALLSIGNS: ${{ steps.notion_flags.outputs.callsigns }}
+        run: |
+          python - <<'PY'
+          import os
+
+          def parse(raw: str | None) -> list[str]:
+              if not raw:
+                  return []
+              return [c.strip() for c in raw.split(",") if c.strip()]
+
+          combined = []
+          seen = set()
+
+          for source in (os.environ.get("COLLECT_CALLSIGNS"), os.environ.get("NOTION_CALLSIGNS")):
+              for callsign in parse(source):
+                  key = callsign.lower()
+                  if key in seen:
+                      continue
+                  seen.add(key)
+                  combined.append(callsign)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"callsigns={','.join(combined)}\n")
+              fh.write(f"count={len(combined)}\n")
+
+          if combined:
+              head = ", ".join(combined[:5])
+              rest = len(combined) - len(combined[:5])
+              suffix = f" … (+{rest} more)" if rest > 0 else ""
+              print(f"Baseline targets identified: {len(combined)} -> {head}{suffix}")
+          else:
+              print("No baseline targets identified")
+          PY
+
       - name: Generate baselines for new accounts
-        if: ${{ steps.collect.outputs.callsigns != '' }}
+        if: ${{ steps.baseline_targets.outputs.count != '0' }}
         env:
           PYTHONPATH: ${{ github.workspace }}
 
@@ -410,7 +514,7 @@ jobs:
           NEWS_PROFILE_SUBJECT: ${{ vars.BASELINE_PROFILE_SUBJECT || vars.NEWS_PROFILE_SUBJECT }}
           ATTACHMENT_REGEX: '.*\.csv$'
 
-          BASELINE_CALLSIGNS: ${{ steps.collect.outputs.callsigns }}
+          BASELINE_CALLSIGNS: ${{ steps.baseline_targets.outputs.callsigns }}
           PREVIEW_ONLY: 'false'
           BASELINE_LOOKBACK_DAYS: ${{ vars.BASELINE_LOOKBACK_DAYS || '180' }}
 
