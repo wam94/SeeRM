@@ -97,13 +97,16 @@ class LLMSynthesisAgent:
         )
 
         try:
-            response = self.client.chat.completions.create(
+            response = self.client.responses.create(
                 model=self.model,
-                messages=[{"role": "user", "content": prompt}],
+                input=prompt,
                 temperature=self.temperature,
             )
 
-            content = response.choices[0].message.content
+            content = getattr(response, "output_text", None)
+            if not content:
+                raise ValueError("Empty response payload from synthesis agent")
+
             dossier = self._parse_response(content)
 
             logger.info("dossier_synthesis_completed", dba=dba)

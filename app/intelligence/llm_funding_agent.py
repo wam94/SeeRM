@@ -162,7 +162,7 @@ class LLMFundingAgent:
                 model=self.model,
                 input=prompt,
                 tools=[{"type": "web_search"}],
-                response_format={"type": "json_object"},
+                text={"format": {"type": "json_object"}},
                 temperature=self.temperature,
             )
 
