@@ -98,11 +98,18 @@ class LLMSynthesisAgent:
 
         try:
             model_name = (self.model or "").strip()
+            tools = [{"type": "web_search"}]
             request_kwargs = {
                 "model": model_name,
                 "input": prompt,
+                "tools": tools,
+                "tool_choice": {
+                    "type": "allowed_tools",
+                    "mode": "required",
+                    "tools": tools,
+                },
             }
-            if self.temperature is not None and model_name.lower() != "gpt-5":
+            if self.temperature is not None and not model_name.lower().startswith("gpt-5"):
                 request_kwargs["temperature"] = self.temperature
 
             response = self.client.responses.create(**request_kwargs)

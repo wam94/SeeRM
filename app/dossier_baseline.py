@@ -598,10 +598,15 @@ def _openai_write_narrative(prompt: str) -> Optional[str]:
         temperature = None if temp_env in ("", "auto", "none") else float(temp_env)
 
         def try_call(send_temperature: bool):
-            if model.startswith("gpt-5"):
-                kwargs = {"model": model, "input": prompt}
-                if send_temperature and temperature is not None:
-                    kwargs["temperature"] = temperature
+            is_gpt5 = model.lower().startswith("gpt-5")
+            if is_gpt5:
+                tools = [{"type": "web_search"}]
+                kwargs = {
+                    "model": model,
+                    "input": prompt,
+                    "tools": tools,
+                    "tool_choice": {"type": "allowed_tools", "mode": "required", "tools": tools},
+                }
                 r = client.responses.create(**kwargs)
                 return r.output_text
             else:
