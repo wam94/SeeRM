@@ -14,7 +14,7 @@ Instead of rigid rules and regex parsing, the system now relies on GPT-4o-mini/G
 
 ```
 ┌──────────────────────────────────────────────────┐
-│  TIER 1: Identity Resolution (gpt-4o-mini)       │
+│  TIER 1: Identity Resolution (gpt-5-mini)        │
 │  - Verify CSV domain or find current domain      │
 │  - Handle redirects, inactive domains            │
 │  - Fallback to LinkedIn/Twitter if needed        │
@@ -24,7 +24,7 @@ Instead of rigid rules and regex parsing, the system now relies on GPT-4o-mini/G
                  │
                  ▼
 ┌──────────────────────────────────────────────────┐
-│  TIER 2: Funding Intelligence (gpt-4o-mini)      │
+│  TIER 2: Funding Intelligence (gpt-5-mini)       │
 │  - Search for funding announcements              │
 │  - Extract structured data (amount, round, etc)  │
 │  - Skip if identity confidence < 0.3             │
@@ -33,7 +33,7 @@ Instead of rigid rules and regex parsing, the system now relies on GPT-4o-mini/G
                  │
                  ▼
 ┌──────────────────────────────────────────────────┐
-│  TIER 3: Profile Intelligence (gpt-4o-mini)      │
+│  TIER 3: Profile Intelligence (gpt-5-mini)       │
 │  - Map products, ICP, GTM, headcount             │
 │  - Surfaces open questions + differentiation     │
 │  Output: CompanyProfileIntel (confidence 0.0-1.0)│
@@ -41,7 +41,7 @@ Instead of rigid rules and regex parsing, the system now relies on GPT-4o-mini/G
                  │
                  ▼
 ┌──────────────────────────────────────────────────┐
-│  TIER 4: Dossier Synthesis (gpt-4o)              │
+│  TIER 4: Dossier Synthesis (gpt-5)               │
 │  - Generate consistent fact-based dossier        │
 │  - Adapt depth to confidence level               │
 │  - Include "what would improve intelligence"     │
@@ -134,10 +134,10 @@ use_llm_intel: "false"  # Legacy mode, disabled
 export OPENAI_API_KEY=your-key-here
 
 # Optional: customize models
-export OPENAI_LLM_IDENTITY_MODEL=gpt-4o-mini
-export OPENAI_LLM_FUNDING_MODEL=gpt-4o-mini
-export OPENAI_LLM_PROFILE_MODEL=gpt-4o-mini
-export OPENAI_LLM_SYNTHESIS_MODEL=gpt-4o
+export OPENAI_LLM_IDENTITY_MODEL=gpt-5-mini
+export OPENAI_LLM_FUNDING_MODEL=gpt-5-mini
+export OPENAI_LLM_PROFILE_MODEL=gpt-5-mini
+export OPENAI_LLM_SYNTHESIS_MODEL=gpt-5
 
 python -m app.dossier_baseline
 ```
@@ -181,17 +181,17 @@ Look for these log messages:
 ### Model Selection
 
 **Identity Agent** (`OPENAI_LLM_IDENTITY_MODEL`):
-- Default: `gpt-4o-mini`
+- Default: `gpt-5-mini`
 - Cost: ~$0.03/company
 - Task: Verify domains, handle redirects, find alternatives
 
 **Funding Agent** (`OPENAI_LLM_FUNDING_MODEL`):
-- Default: `gpt-4o-mini`
+- Default: `gpt-5-mini`
 - Cost: ~$0.02/company
 - Task: Search funding announcements, extract data
 
 **Synthesis Agent** (`OPENAI_LLM_SYNTHESIS_MODEL`):
-- Default: `gpt-4o` (needs better reasoning)
+- Default: `gpt-5` (higher reasoning quality)
 - Cost: ~$0.04-0.06/company
 - Task: Generate adaptive dossier, determine appropriate depth
 
@@ -216,7 +216,7 @@ All agents use low temperature (0.2-0.3) for factual accuracy.
 
 ### "Identity resolution failed"
 - Check `OPENAI_API_KEY` is set
-- Verify model name is correct (`gpt-4o-mini` not `gpt-5-mini`)
+- Verify model name is correct (`gpt-5-mini` not `gpt-4o-mini`)
 - Check API rate limits
 
 ### "Funding research skipped"

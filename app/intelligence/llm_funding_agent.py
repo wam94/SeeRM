@@ -1,7 +1,7 @@
 """
 LLM-powered funding intelligence agent.
 
-This module uses GPT-4o-mini with web search to research company funding,
+This module uses GPT-5-mini with web search to research company funding,
 handling various scenarios:
 - Public funding announcements
 - Stealth/undisclosed rounds
@@ -83,7 +83,7 @@ class LLMFundingAgent:
         Initialize the funding agent.
 
         Args:
-            model: OpenAI model to use (defaults to gpt-4o-mini)
+            model: OpenAI model to use (defaults to gpt-5-mini)
             temperature: Sampling temperature (lower = more factual)
         """
         if OpenAI is None:
@@ -94,7 +94,7 @@ class LLMFundingAgent:
             raise ValueError("OPENAI_API_KEY environment variable required")
 
         self.client = OpenAI(api_key=api_key)
-        self.model = model or os.getenv("OPENAI_LLM_FUNDING_MODEL", "gpt-4o-mini")
+        self.model = model or os.getenv("OPENAI_LLM_FUNDING_MODEL", "gpt-5-mini")
         self.temperature = temperature
 
     def research(
@@ -162,7 +162,7 @@ class LLMFundingAgent:
                 model=self.model,
                 input=prompt,
                 tools=[{"type": "web_search"}],
-                response_format={"type": "json_object"},
+                text={"format": {"type": "json_object"}},
                 temperature=self.temperature,
             )
 

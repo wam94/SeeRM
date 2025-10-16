@@ -40,7 +40,7 @@ class LLMProfileAgent:
             raise ValueError("OPENAI_API_KEY environment variable required")
 
         self.client = OpenAI(api_key=api_key)
-        self.model = model or os.getenv("OPENAI_LLM_PROFILE_MODEL", "gpt-4o-mini")
+        self.model = model or os.getenv("OPENAI_LLM_PROFILE_MODEL", "gpt-5-mini")
         self.temperature = temperature
 
     def profile(
@@ -65,7 +65,7 @@ class LLMProfileAgent:
                 model=self.model,
                 input=prompt,
                 tools=[{"type": "web_search"}],
-                response_format={"type": "json_object"},
+                text={"format": {"type": "json_object"}},
                 temperature=self.temperature,
             )
 

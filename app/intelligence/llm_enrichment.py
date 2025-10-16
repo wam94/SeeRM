@@ -158,7 +158,7 @@ def _default_model() -> str:
         os.getenv("OPENAI_LLM_INTEL_MODEL")
         or os.getenv("OPENAI_CHAT_MODEL_DOSSIER")
         or os.getenv("OPENAI_CHAT_MODEL")
-        or "gpt-4.1-mini"
+        or "gpt-5-mini"
     ).strip()
 
 

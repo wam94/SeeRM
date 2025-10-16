@@ -899,13 +899,13 @@ def main():
             "[TIERED LLM MODE] Using multi-stage LLM intelligence system (identity → funding → profile → synthesis)"
         )
         print(
-            f"[TIERED LLM MODE] Identity model: {os.getenv('OPENAI_LLM_IDENTITY_MODEL', 'gpt-4o-mini')}"
+            f"[TIERED LLM MODE] Identity model: {os.getenv('OPENAI_LLM_IDENTITY_MODEL', 'gpt-5-mini')}"
         )
         print(
-            f"[TIERED LLM MODE] Funding model: {os.getenv('OPENAI_LLM_FUNDING_MODEL', 'gpt-4o-mini')}"
+            f"[TIERED LLM MODE] Funding model: {os.getenv('OPENAI_LLM_FUNDING_MODEL', 'gpt-5-mini')}"
         )
         print(
-            f"[TIERED LLM MODE] Synthesis model: {os.getenv('OPENAI_LLM_SYNTHESIS_MODEL', 'gpt-4o')}"
+            f"[TIERED LLM MODE] Synthesis model: {os.getenv('OPENAI_LLM_SYNTHESIS_MODEL', 'gpt-5')}"
         )
     elif use_llm_intel:
         print("[LLM MODE] Kickoff will use OpenAI enrichment for domain and funding (legacy mode)")

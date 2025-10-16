@@ -1,7 +1,7 @@
 """
 LLM-powered company identity resolution agent.
 
-This module uses GPT-4o-mini with web search to intelligently determine
+This module uses GPT-5-mini with web search to intelligently determine
 a company's current online identity, handling edge cases like:
 - Domain redirects/changes
 - Stealth companies (pre-launch)
@@ -75,7 +75,7 @@ class LLMIdentityAgent:
         Initialize the identity agent.
 
         Args:
-            model: OpenAI model to use (defaults to gpt-4o-mini)
+            model: OpenAI model to use (defaults to gpt-5-mini)
             temperature: Sampling temperature (lower = more factual)
         """
         if OpenAI is None:
@@ -86,7 +86,7 @@ class LLMIdentityAgent:
             raise ValueError("OPENAI_API_KEY environment variable required")
 
         self.client = OpenAI(api_key=api_key)
-        self.model = model or os.getenv("OPENAI_LLM_IDENTITY_MODEL", "gpt-4o-mini")
+        self.model = model or os.getenv("OPENAI_LLM_IDENTITY_MODEL", "gpt-5-mini")
         self.temperature = temperature
 
     def resolve(
@@ -149,7 +149,7 @@ class LLMIdentityAgent:
                 model=self.model,
                 input=prompt,
                 tools=[{"type": "web_search"}],
-                response_format={"type": "json_object"},
+                text={"format": {"type": "json_object"}},
                 temperature=self.temperature,
             )
 

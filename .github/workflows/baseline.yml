@@ -16,9 +16,15 @@ on:
         required: false
         default: ""
       use_llm_intel:
-        description: "Enable LLM enrichment (true/false)"
+        description: "Enable LLM enrichment - legacy mode (true/false)"
         required: false
         default: "false"
+        type: choice
+        options: ["true", "false"]
+      use_tiered_llm:
+        description: "Enable 3-tier LLM system - RECOMMENDED (true/false)"
+        required: false
+        default: "true"
         type: choice
         options: ["true", "false"]
 
@@ -268,6 +274,7 @@ jobs:
 
           # batching & enrichment
           BASELINE_USE_LLM_INTEL: ${{ inputs.use_llm_intel }}
+          BASELINE_USE_TIERED_LLM: ${{ inputs.use_tiered_llm }}
           BATCH_INDEX: ${{ matrix.batch }}
         run: |
           python -m app.dossier_baseline
