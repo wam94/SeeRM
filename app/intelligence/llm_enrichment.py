@@ -339,12 +339,18 @@ def resolve_company_intel(org: Dict[str, Any], *, force_refresh: bool = False) -
     prompt = _build_prompt(org)
 
     try:
+        tools = [{"type": "web_search"}]
         kwargs: Dict[str, Any] = {
             "model": model,
             "input": prompt,
-            "tools": [{"type": "web_search"}],
+            "tools": tools,
+            "tool_choice": {
+                "type": "allowed_tools",
+                "mode": "required",
+                "tools": tools,
+            },
         }
-        if temperature is not None:
+        if temperature is not None and not model.lower().startswith("gpt-5"):
             kwargs["temperature"] = temperature
         response = client.responses.create(**kwargs)
     except Exception as exc:  # noqa: BLE001
