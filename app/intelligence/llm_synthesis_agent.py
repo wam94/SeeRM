@@ -1,7 +1,7 @@
 """
 LLM-powered dossier synthesis agent.
 
-This module uses GPT-4o to generate comprehensive company dossiers
+This module uses GPT-5 to generate comprehensive company dossiers
 that answer consistent questions regardless of confidence level,
 adapting tone and depth based on available information.
 """
@@ -41,7 +41,7 @@ class LLMSynthesisAgent:
         Initialize the synthesis agent.
 
         Args:
-            model: OpenAI model to use (defaults to gpt-4o for better reasoning)
+            model: OpenAI model to use (defaults to gpt-5 for better reasoning)
             temperature: Sampling temperature (slightly higher for natural writing)
         """
         if OpenAI is None:
@@ -52,7 +52,7 @@ class LLMSynthesisAgent:
             raise ValueError("OPENAI_API_KEY environment variable required")
 
         self.client = OpenAI(api_key=api_key)
-        self.model = model or os.getenv("OPENAI_LLM_SYNTHESIS_MODEL", "gpt-4o")
+        self.model = model or os.getenv("OPENAI_LLM_SYNTHESIS_MODEL", "gpt-5")
         self.temperature = temperature
 
     def generate_dossier(

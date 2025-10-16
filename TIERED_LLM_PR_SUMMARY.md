@@ -68,7 +68,7 @@ External vendor analysis of our 220 portfolio companies revealed gaps in current
 ## Architecture
 
 ```
-CSV Input → Tier 1: Identity (gpt-4o-mini) → Tier 2: Funding (gpt-4o-mini) → Tier 3: Synthesis (gpt-4o) → Notion
+CSV Input → Tier 1: Identity (gpt-5-mini) → Tier 2: Funding (gpt-5-mini) → Tier 3: Synthesis (gpt-5) → Notion
                      ↓                              ↓                              ↓
                CompanyIdentity                FundingIntelligence            Markdown Dossier
                (confidence 0.0-1.0)           (confidence 0.0-1.0)          (adapted to confidence)
@@ -207,9 +207,9 @@ OPENAI_API_KEY=sk-...
 
 **Optional (with defaults):**
 ```bash
-OPENAI_LLM_IDENTITY_MODEL=gpt-4o-mini  # Tier 1
-OPENAI_LLM_FUNDING_MODEL=gpt-4o-mini   # Tier 2
-OPENAI_LLM_SYNTHESIS_MODEL=gpt-4o      # Tier 3 (needs reasoning)
+  OPENAI_LLM_IDENTITY_MODEL=gpt-5-mini   # Tier 1
+  OPENAI_LLM_FUNDING_MODEL=gpt-5-mini    # Tier 2
+  OPENAI_LLM_SYNTHESIS_MODEL=gpt-5       # Tier 3 (needs reasoning)
 ```
 
 ### Feature Flags

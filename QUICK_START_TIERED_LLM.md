@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-1. **OpenAI API Key** with access to `gpt-4o-mini` and `gpt-4o`
+1. **OpenAI API Key** with access to `gpt-5-mini` (and `gpt-5` for synthesis)
 2. **Python environment** with dependencies installed
 3. **Test company data** in your CSV roster
 
@@ -45,9 +45,9 @@ python -m app.dossier_baseline
 You should see:
 ```
 [TIERED LLM MODE] Using multi-stage LLM intelligence system (identity → funding → profile → synthesis)
-[TIERED LLM MODE] Identity model: gpt-4o-mini
-[TIERED LLM MODE] Funding model: gpt-4o-mini
-[TIERED LLM MODE] Synthesis model: gpt-4o
+[TIERED LLM MODE] Identity model: gpt-5-mini
+[TIERED LLM MODE] Funding model: gpt-5-mini
+[TIERED LLM MODE] Synthesis model: gpt-5
 ...
 [TIERED LLM] test-company: Resolving identity...
 [TIERED LLM] test-company: Identity resolved (confidence=0.85, status=active)
@@ -234,8 +234,8 @@ export OPENAI_API_KEY="your-key"
 ```
 
 ### Error: "Identity resolution failed: 404"
-- Check that you have access to `gpt-4o-mini` in your OpenAI account
-- Try with older model: `export OPENAI_LLM_IDENTITY_MODEL=gpt-4o-mini`
+- Check that you have access to `gpt-5-mini` in your OpenAI account
+- Try with older model: `export OPENAI_LLM_IDENTITY_MODEL=gpt-5-mini`
 
 ### Fallback to Legacy Mode
 If you see:

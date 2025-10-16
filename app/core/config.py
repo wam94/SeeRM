@@ -85,7 +85,7 @@ class IntelligenceConfig(BaseSettings):
 
     # OpenAI for summaries
     openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
-    openai_model: str = Field(default="gpt-4o-mini", alias="OPENAI_CHAT_MODEL")
+    openai_model: str = Field(default="gpt-5-mini", alias="OPENAI_CHAT_MODEL")
     openai_temperature: Optional[float] = Field(default=0.2, alias="OPENAI_TEMPERATURE")
 
     # News quality tuning
