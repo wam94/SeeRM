@@ -145,13 +145,23 @@ class LLMIdentityAgent:
                 prior_findings=prior_findings,
             )
 
-            response = self.client.responses.create(
-                model=self.model,
-                input=prompt,
-                tools=[{"type": "web_search"}],
-                text={"format": {"type": "json_object"}},
-                temperature=self.temperature,
-            )
+            model_name = (self.model or "").strip()
+            tools = [{"type": "web_search"}]
+            request_kwargs = {
+                "model": model_name,
+                "input": prompt,
+                "tools": tools,
+                "text": {"format": {"type": "json_object"}},
+                "tool_choice": {
+                    "type": "allowed_tools",
+                    "mode": "required",
+                    "tools": tools,
+                },
+            }
+            if self.temperature is not None and not model_name.lower().startswith("gpt-5"):
+                request_kwargs["temperature"] = self.temperature
+
+            response = self.client.responses.create(**request_kwargs)
 
             payload = getattr(response, "output_text", None)
             if not payload:

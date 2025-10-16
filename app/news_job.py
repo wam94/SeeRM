@@ -798,10 +798,15 @@ def _openai_summarize(text: str) -> Optional[str]:
         )
 
         def try_call(send_temperature: bool):
-            if model.startswith("gpt-5"):
-                kwargs = {"model": model, "input": prompt}
-                if send_temperature and temperature is not None:
-                    kwargs["temperature"] = temperature
+            is_gpt5 = model.lower().startswith("gpt-5")
+            if is_gpt5:
+                tools = [{"type": "web_search"}]
+                kwargs = {
+                    "model": model,
+                    "input": prompt,
+                    "tools": tools,
+                    "tool_choice": {"type": "allowed_tools", "mode": "required", "tools": tools},
+                }
                 r = client.responses.create(**kwargs)
                 return r.output_text
             else:

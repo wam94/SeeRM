@@ -97,11 +97,22 @@ class LLMSynthesisAgent:
         )
 
         try:
-            response = self.client.responses.create(
-                model=self.model,
-                input=prompt,
-                temperature=self.temperature,
-            )
+            model_name = (self.model or "").strip()
+            tools = [{"type": "web_search"}]
+            request_kwargs = {
+                "model": model_name,
+                "input": prompt,
+                "tools": tools,
+                "tool_choice": {
+                    "type": "allowed_tools",
+                    "mode": "required",
+                    "tools": tools,
+                },
+            }
+            if self.temperature is not None and not model_name.lower().startswith("gpt-5"):
+                request_kwargs["temperature"] = self.temperature
+
+            response = self.client.responses.create(**request_kwargs)
 
             content = getattr(response, "output_text", None)
             if not content:
@@ -155,7 +166,9 @@ COMPANY DATA:
 TASK:
 Write a comprehensive company dossier that attempts to answer ALL of the following questions,
 regardless of confidence level. The dossier should consist of FACTS about the business, not
-strategy or recommendations.
+strategy or recommendations. Cite every external fact using Markdown footnotes: add the reference
+inline as [^n] and list the corresponding entry in a final "Sources" section formatted as
+`[^n]: URL`.
 
 STRUCTURE (use these exact section headers):
 
@@ -205,6 +218,9 @@ STRUCTURE (use these exact section headers):
   updates", "Request updated domain from relationship manager"
 - List 2-4 concrete steps
 
+## Sources
+- List each citation as `[^n]: URL` (one per line), matching the footnotes used above.
+
 IMPORTANT INSTRUCTIONS:
 - Stick to FACTS found in the data - do not suggest strategy or recommendations beyond
   intelligence gathering
@@ -217,6 +233,7 @@ IMPORTANT INSTRUCTIONS:
 - For stealth/low-confidence companies, provide information about owners if that's all we have
 - Write in a professional but concise tone (200-400 words total depending on available information)
 - Use markdown formatting for sections and emphasis
+- Do not include bare URLs in the body—use footnote markers exclusively for citations
 
 Return ONLY the markdown-formatted dossier (no JSON, no preamble)."""
 
