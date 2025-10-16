@@ -21,6 +21,9 @@ from app.gmail_client import (
     send_html_email,
 )
 from app.intelligence.llm_enrichment import LLMCompanyIntel, resolve_company_intel
+from app.intelligence.llm_research_pipeline import LLMResearchPipeline
+from app.intelligence.llm_synthesis_agent import LLMSynthesisAgent
+from app.intelligence.research_models import CompanyProfileIntel
 from app.news_job import (
     build_queries,
     dedupe,
@@ -879,12 +882,33 @@ def main():
         "yes",
         "y",
     )
-    if llm_env_raw is None:
+
+    # NEW: Tiered LLM system (identity → funding → synthesis)
+    tiered_llm_env = os.getenv("BASELINE_USE_TIERED_LLM")
+    if tiered_llm_env is None:
+        use_tiered_llm = True
+        if llm_env_raw is None:
+            print(
+                "[TIERED LLM MODE] Defaulting to tiered workflow (set BASELINE_USE_TIERED_LLM=false to disable)."
+            )
+    else:
+        use_tiered_llm = tiered_llm_env.lower() in ("1", "true", "yes", "y")
+
+    if use_tiered_llm:
         print(
-            "[PROMPT] Set BASELINE_USE_LLM_INTEL=true (and OPENAI_API_KEY) before running to enable LLM enrichment."
+            "[TIERED LLM MODE] Using multi-stage LLM intelligence system (identity → funding → profile → synthesis)"
         )
-    if use_llm_intel:
-        print("[LLM MODE] Kickoff will use OpenAI enrichment for domain and funding")
+        print(
+            f"[TIERED LLM MODE] Identity model: {os.getenv('OPENAI_LLM_IDENTITY_MODEL', 'gpt-4o-mini')}"
+        )
+        print(
+            f"[TIERED LLM MODE] Funding model: {os.getenv('OPENAI_LLM_FUNDING_MODEL', 'gpt-4o-mini')}"
+        )
+        print(
+            f"[TIERED LLM MODE] Synthesis model: {os.getenv('OPENAI_LLM_SYNTHESIS_MODEL', 'gpt-4o')}"
+        )
+    elif use_llm_intel:
+        print("[LLM MODE] Kickoff will use OpenAI enrichment for domain and funding (legacy mode)")
 
     if use_notion_flags and companies_db:
         print("[NOTION MODE] Using Notion 'Needs Dossier' flags to determine targets")
@@ -961,17 +985,119 @@ def main():
 
     def process_single_company(cs):
         org = prof.get(cs, {"callsign": cs, "dba": cs, "owners": []})
+        use_tiered_llm_local = False
 
         try:
-            llm_result: Optional[LLMCompanyIntel] = None
-            if use_llm_intel:
+            # TIERED LLM WORKFLOW (identity → funding → profile → synthesis)
+            if use_tiered_llm:
                 try:
-                    llm_result = resolve_company_intel(org)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[LLM] {cs} enrichment failed, falling back: {exc}")
-                    llm_result = None
+                    pipeline = LLMResearchPipeline()
+                    synthesis_agent = LLMSynthesisAgent()
 
-            if llm_result:
+                    hints = {}
+                    if org.get("cached_funding_data"):
+                        hints["crunchbase_hint"] = org.get("cached_funding_data")
+
+                    print(f"[TIERED LLM] {cs}: Resolving identity...")
+                    bundle = pipeline.run(org, deterministic_hints=hints, run_profile=False)
+                    identity = bundle.identity
+                    funding_intel = bundle.funding
+                    funding_data = funding_intel.to_dict()
+
+                    print(
+                        f"[TIERED LLM] {cs}: Identity resolved (confidence={identity.confidence:.2f}, status={identity.status})"
+                    )
+                    print(
+                        f"[TIERED LLM] {cs}: Funding researched (confidence={funding_intel.confidence:.2f}, stage={funding_intel.funding_stage})"
+                    )
+
+                    if identity.status != "stealth" and identity.confidence >= 0.6:
+                        print(f"[TIERED LLM] {cs}: Collecting news and background...")
+                        news_items = collect_recent_news(org, lookback_days, g_api_key, g_cse_id)
+                        people_bg = collect_people_background(
+                            org, lookback_days, g_api_key, g_cse_id
+                        )
+                    else:
+                        print(
+                            f"[TIERED LLM] {cs}: Skipping news/background collection (stealth or low confidence)"
+                        )
+                        news_items = []
+                        people_bg = []
+
+                    profile_hints = {"news_items": news_items, "people_background": people_bg}
+                    profile_intel: Optional[CompanyProfileIntel] = None
+                    try:
+                        print(f"[TIERED LLM] {cs}: Building structured profile...")
+                        profile_intel = pipeline.profile_agent.profile(
+                            context=bundle.context,
+                            identity=identity,
+                            funding=funding_intel,
+                            deterministic_hints=profile_hints,
+                        )
+                    except Exception as profile_exc:  # noqa: BLE001
+                        profile_intel = CompanyProfileIntel(
+                            confidence=0.0,
+                            reasoning=f"Profile agent error: {profile_exc}",
+                            raw_response={"error": str(profile_exc)},
+                        )
+
+                    if profile_intel:
+                        org["profile_confidence"] = profile_intel.confidence
+                        org["profile_sources"] = profile_intel.sources
+                        org["profile_reasoning"] = profile_intel.reasoning
+
+                    profile_payload = profile_intel.to_dict() if profile_intel else {}
+
+                    print(f"[TIERED LLM] {cs}: Generating dossier...")
+                    dossier = synthesis_agent.generate_dossier(
+                        identity=identity.to_dict(),
+                        funding=funding_data,
+                        profile=profile_payload,
+                        news_items=news_items,
+                        people_background=people_bg,
+                        dba=org.get("dba") or cs,
+                        owners=org.get("owners", []),
+                    )
+                    narr = dossier.markdown_content
+
+                    print(f"[TIERED LLM] {cs}: Dossier generated successfully")
+
+                    push_dossier_to_notion(
+                        (org.get("callsign") or "").strip(), org, narr, throttle_sec=0
+                    )
+                    DEFAULT_RATE_LIMITER.wait_if_needed()
+
+                    return {
+                        "callsign": cs,
+                        "status": "success",
+                        "mode": "tiered_llm",
+                        "identity_confidence": identity.confidence,
+                        "funding_confidence": funding_intel.confidence,
+                        "profile_confidence": profile_intel.confidence if profile_intel else 0.0,
+                    }
+
+                except Exception as exc:
+                    print(f"[TIERED LLM] {cs}: Failed, falling back to legacy mode: {exc}")
+                    import traceback
+
+                    traceback.print_exc()
+                    # Fall through to legacy LLM or deterministic mode
+                    use_tiered_llm_local = False
+                else:
+                    # Success, skip legacy modes
+                    use_tiered_llm_local = True
+
+            # LEGACY LLM WORKFLOW (single-pass enrichment)
+            if not use_tiered_llm or not use_tiered_llm_local:
+                llm_result: Optional[LLMCompanyIntel] = None
+                if use_llm_intel:
+                    try:
+                        llm_result = resolve_company_intel(org)
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[LLM] {cs} enrichment failed, falling back: {exc}")
+                        llm_result = None
+
+            if not use_tiered_llm and llm_result:
                 if llm_result.domain.domain_root:
                     org["domain_root"] = llm_result.domain.domain_root
                     org["domain"] = llm_result.domain.domain_root
