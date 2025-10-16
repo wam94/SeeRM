@@ -265,6 +265,7 @@ class NewsQualityScorer:
             seen_terms.add(key)
             terms.append(value)
 
+        add_term(getattr(company, "dba", None))
         add_term(company.callsign)
         for term in base_terms:
             add_term(term)

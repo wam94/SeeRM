@@ -112,15 +112,18 @@ class NewsCollector:
         for name in raw_names:
             if not name:
                 continue
-            cleaned = strip_suffix(name)
-            cleaned = cleaned.strip()
-            if not cleaned:
+            original = name.strip()
+            if not original:
                 continue
-            key = cleaned.lower()
-            if key in seen_names:
-                continue
-            seen_names.add(key)
-            names.append(cleaned)
+            orig_key = original.lower()
+            if orig_key not in seen_names:
+                seen_names.add(orig_key)
+                names.append(original)
+
+            cleaned = strip_suffix(original).strip()
+            if cleaned and cleaned.lower() not in seen_names:
+                seen_names.add(cleaned.lower())
+                names.append(cleaned)
 
         if not names and company.callsign:
             names.append(company.callsign)

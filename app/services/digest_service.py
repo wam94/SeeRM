@@ -191,8 +191,22 @@ class DigestService:
             notion_company_data = self._fetch_notion_company_data(companies)
 
         if notion_company_data is None:
-            logger.debug("Notion metadata unavailable; skipping Notion-based new account detection")
-            return []
+            logger.debug(
+                "Notion metadata unavailable; falling back to CSV new-account flags",
+                company_count=len(companies),
+            )
+            fallback_callsigns = [
+                c.callsign
+                for c in companies
+                if getattr(c, "callsign", None) and getattr(c, "is_new_account", False)
+            ]
+            if fallback_callsigns:
+                logger.info(
+                    "New accounts detected via CSV fallback",
+                    count=len(fallback_callsigns),
+                    callsigns=fallback_callsigns[:5],
+                )
+            return fallback_callsigns
 
         new_callsigns: List[str] = []
         for company in companies:
