@@ -491,6 +491,7 @@ Process to follow:
 2) Pull key company info: what they do, products/services and use cases, any publicly mentioned key customers.
 3) Find recent announcements (last 6 months): launches, partnerships, product releases. Summarize the 1–2 most relevant.
 4) Add short background notes on key people (the provided contacts and any clearly relevant leaders): prior roles/companies/startups.
+5) Cite every external fact using Markdown footnotes (e.g. add [^1] inline, then list [^1]: URL in a Sources section at the end). Avoid inline URLs.
 
 Output format: Markdown. Keep it tight (~400–600 words), crisp, factual, and skimmable. Avoid hype.
 Use the following sections and headings exactly:
@@ -505,13 +506,16 @@ Use the following sections and headings exactly:
 - 3–6 bullets: product, core capabilities, typical users, high-level use cases.
 
 📰 Recent Announcements (last ~6 months)
-- 1–2 bullets with a date, 1–2 sentence summary, and source name. Prefer company sources; include one credible external if useful.
+- 1–2 bullets with a date, 1–2 sentence summary, and a footnote reference to the source. Prefer company sources; include one credible external if useful.
 
 👥 Your Contacts & Key Team
 - 2–4 bullets: each person, role, most relevant prior roles/companies/startups.
 
 (Optional) Risks/Unknowns
 - 1–3 bullets for uncertainty, gaps, or identity ambiguities that need confirmation.
+
+Sources
+- List each citation as a footnote in the form [^n]: URL (one per line).
 """
 
 
@@ -641,28 +645,63 @@ def generate_narrative(
         return text
 
     # Fallback
-    lines = []
+    footnotes: List[str] = []
+
+    def add_ref(url: Optional[str]) -> str:
+        if not url:
+            return ""
+        footnotes.append(url)
+        return f"[^{len(footnotes)}]"
+
+    lines: List[str] = []
     lines.append("🔍 Company & Identity")
-    lines.append(f"- DBA: {org.get('dba') or org.get('domain_root') or org.get('callsign')}")
-    lines.append(f"- Website: {org.get('website') or '—'}\n")
+    name = org.get("dba") or org.get("domain_root") or org.get("callsign")
+    lines.append(f"- DBA: {name}")
+    website = org.get("website")
+    website_ref = add_ref(website) if website else ""
+    if website:
+        suffix = f" {website_ref}" if website_ref else ""
+        lines.append(f"- Website: {website}{suffix}\n")
+    else:
+        lines.append("- Website: —\n")
+
     lines.append("🏢 Company Overview")
     lines.append("- (LLM not available) See recent items and people notes below.\n")
+
     lines.append("🚀 Product & Use Cases")
     lines.append("- (summarize after LLM is enabled)\n")
+
     lines.append("📰 Recent Announcements (last ~6 months)")
     if news_items:
-        for n in news_items[:4]:
+        for idx, n in enumerate(news_items[:4], start=1):
             date = n.get("published_at", "")
             src = n.get("source", "")
-            lines.append(f"- {date} — {n.get('title','')} — {src} {n.get('url','')}")
+            title = n.get("title", "")
+            ref = add_ref(n.get("url"))
+            ref_str = f" {ref}" if ref else ""
+            lines.append(f"- {date} — {title} — {src}{ref_str}")
     else:
         lines.append("- None found")
+
     lines.append("\n👥 Your Contacts & Key Team")
     if people_bg:
-        for p in people_bg:
-            lines.append(f"- {p.get('name')}")
+        for person in people_bg[:4]:
+            name = person.get("name") or "Unknown"
+            lines.append(f"- {name}")
+            for finding in person.get("findings", [])[:2]:
+                ref = add_ref(finding.get("url"))
+                ref_str = f" {ref}" if ref else ""
+                summary = finding.get("title", "")
+                source = finding.get("source", "")
+                lines.append(f"  - {summary} — {source}{ref_str}")
     else:
         lines.append("- (no background findings)")
+
+    if footnotes:
+        lines.append("\nSources")
+        for idx, url in enumerate(footnotes, start=1):
+            lines.append(f"[^{idx}]: {url}")
+
     return "\n".join(lines)
 
 
