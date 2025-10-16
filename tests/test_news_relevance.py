@@ -58,3 +58,23 @@ def test_relevance_filter_sets_metadata_on_accept():
     assert accepted[0].relevance_score is not None
     assert accepted[0].relevance_verdict == "accept"
     assert accepted[0].relevance_snapshot_id == snapshot.snapshot_id
+
+
+def test_dossier_builder_merges_enhanced_aliases_and_products():
+    """Enhanced Notion data should populate snapshot aliases and product terms."""
+    builder = CompanyDossierBuilder()
+    company = Company(callsign="uniswapfoundation")
+    snapshot = builder.build(
+        company,
+        {
+            "company": "Uniswap Foundation",
+            "aliases": ["Uniswap Foundation"],
+            "owners": ["Alice Example"],
+            "products": ["DeFi Grants"],
+            "tags": ["Protocol"],
+        },
+    )
+
+    assert "Uniswap Foundation" in snapshot.aliases
+    assert "Alice Example" in snapshot.executives
+    assert "defi grants" in snapshot.product_terms

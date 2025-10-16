@@ -29,6 +29,7 @@ from app.core.models import (
 from app.data.csv_parser import CSVProcessor, filter_dataframe_by_relationship_manager
 from app.data.gmail_client import EnhancedGmailClient
 from app.data.notion_client import EnhancedNotionClient
+from app.intelligence.dossier_onboarding import DossierOnboardingService
 from app.intelligence.news_quality import NewsQualityScorer
 from app.intelligence.news_relevance import CompanyDossierBuilder, NewsRelevanceScorer
 from app.utils.reliability import ParallelProcessor, with_circuit_breaker, with_retry
@@ -511,6 +512,10 @@ class NewsService:
         self.notion_client = notion_client
         self.config = config
         self.collector = NewsCollector(config)
+        self.dossier_service = DossierOnboardingService(
+            notion_client,
+            config.companies_db_id,
+        )
         self.dossier_builder = CompanyDossierBuilder(notion_client)
         self.relevance_scorer = NewsRelevanceScorer(config)
 
@@ -618,6 +623,41 @@ class NewsService:
         except Exception as e:
             logger.error("Failed to enhance companies with Notion data", error=str(e))
             return {}
+
+    def _ensure_dossiers_for_new_companies(
+        self,
+        companies: List[Company],
+        enhanced_data: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Dict[str, Any]]:
+        """Generate dossiers for companies missing Notion coverage."""
+        if not enhanced_data:
+            enhanced_data = {}
+        if not self.dossier_service or not self.dossier_service.is_available():
+            return enhanced_data
+
+        updates = 0
+        for company in companies:
+            key = (company.callsign or "").lower()
+            if not key:
+                continue
+            entry = enhanced_data.get(key)
+            is_new = not (entry and entry.get("page_id"))
+            needs_dossier = bool(entry and entry.get("needs_dossier"))
+
+            if not (is_new or needs_dossier):
+                continue
+
+            updated_entry = self.dossier_service.generate_dossier(company, entry)
+            if updated_entry:
+                enhanced_data[key] = {**(entry or {}), **updated_entry}
+                updates += 1
+
+        if updates:
+            logger.info(
+                "dossiers_generated_for_new_companies",
+                total=updates,
+            )
+        return enhanced_data
 
     def summarize_intelligence(self, items: List[NewsItem]) -> Optional[str]:
         """
@@ -783,6 +823,7 @@ class NewsService:
 
             # Step 2: Enhance with Notion data
             enhanced_data = self.enhance_companies_with_notion_data(companies)
+            enhanced_data = self._ensure_dossiers_for_new_companies(companies, enhanced_data)
 
             # Step 3: Process companies in parallel
             def process_company_wrapper(company: Company) -> CompanyIntelligence:

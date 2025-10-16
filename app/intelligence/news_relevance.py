@@ -78,9 +78,26 @@ class CompanyDossierBuilder:
             alias_candidates.append(company.dba)
         if company.callsign:
             alias_candidates.append(company.callsign)
-        aka_names = getattr(company, "aka_names", None) or (enhanced_data or {}).get("aka_names")
-        if aka_names:
-            alias_candidates.extend([name.strip() for name in aka_names.split(",") if name.strip()])
+        aka_names_company = getattr(company, "aka_names", None)
+        enhanced = enhanced_data or {}
+
+        if aka_names_company:
+            alias_candidates.extend(
+                [name.strip() for name in str(aka_names_company).split(",") if name.strip()]
+            )
+
+        enhanced_aliases = enhanced.get("aliases") or []
+        if isinstance(enhanced_aliases, str):
+            enhanced_aliases = [enhanced_aliases]
+        alias_candidates.extend([alias for alias in enhanced_aliases if alias])
+
+        enhanced_aka = enhanced.get("aka_names")
+        if isinstance(enhanced_aka, str):
+            alias_candidates.extend(
+                [name.strip() for name in enhanced_aka.split(",") if name.strip()]
+            )
+        elif isinstance(enhanced_aka, list):
+            alias_candidates.extend([name for name in enhanced_aka if name])
 
         aliases: List[str] = []
         seen_aliases: set[str] = set()
@@ -94,16 +111,34 @@ class CompanyDossierBuilder:
             seen_aliases.add(key)
             aliases.append(cleaned)
 
+        executives = [owner for owner in (company.beneficial_owners or []) if owner]
+        enhanced_owners = enhanced.get("owners") or []
+        if isinstance(enhanced_owners, str):
+            enhanced_owners = [enhanced_owners]
+        executives.extend([owner for owner in enhanced_owners if owner])
+
+        product_terms = []
+        enhanced_products = enhanced.get("products") or []
+        if isinstance(enhanced_products, str):
+            enhanced_products = [enhanced_products]
+        product_terms.extend([prod for prod in enhanced_products if prod])
+
+        enhanced_tags = enhanced.get("tags") or []
+        if isinstance(enhanced_tags, str):
+            enhanced_tags = [enhanced_tags]
+        product_terms.extend([tag for tag in enhanced_tags if tag])
+
         snapshot = CompanyDossierSnapshot(
             callsign=company.callsign,
             snapshot_id=_generate_snapshot_id(company.callsign),
-            primary_name=company.dba or company.callsign,
+            primary_name=(enhanced.get("company") or company.dba or company.callsign),
             aliases=aliases,
             domains=sorted({d for d in domains if d}),
-            executives=[owner for owner in (company.beneficial_owners or []) if owner],
+            executives=sorted({owner.strip() for owner in executives if owner}),
+            product_terms=sorted({term.strip().lower() for term in product_terms if term}),
             metadata={
-                "source": "minimal",
-                "has_enhanced_data": bool(enhanced_data),
+                "source": "enhanced" if enhanced else "minimal",
+                "has_enhanced_data": bool(enhanced),
             },
         )
 
