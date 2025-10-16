@@ -97,11 +97,15 @@ class LLMSynthesisAgent:
         )
 
         try:
-            response = self.client.responses.create(
-                model=self.model,
-                input=prompt,
-                temperature=self.temperature,
-            )
+            model_name = (self.model or "").strip()
+            request_kwargs = {
+                "model": model_name,
+                "input": prompt,
+            }
+            if self.temperature is not None and model_name.lower() != "gpt-5":
+                request_kwargs["temperature"] = self.temperature
+
+            response = self.client.responses.create(**request_kwargs)
 
             content = getattr(response, "output_text", None)
             if not content:
