@@ -30,6 +30,7 @@ from app.data.csv_parser import CSVProcessor, filter_dataframe_by_relationship_m
 from app.data.gmail_client import EnhancedGmailClient
 from app.data.notion_client import EnhancedNotionClient
 from app.intelligence.news_quality import NewsQualityScorer
+from app.intelligence.news_relevance import CompanyDossierBuilder, NewsRelevanceScorer
 from app.utils.reliability import ParallelProcessor, with_circuit_breaker, with_retry
 
 logger = structlog.get_logger(__name__)
@@ -510,6 +511,8 @@ class NewsService:
         self.notion_client = notion_client
         self.config = config
         self.collector = NewsCollector(config)
+        self.dossier_builder = CompanyDossierBuilder(notion_client)
+        self.relevance_scorer = NewsRelevanceScorer(config)
 
     def fetch_companies_data(self, subject_filter: Optional[str] = None) -> List[Company]:
         """
@@ -700,6 +703,21 @@ class NewsService:
 
             # Collect news items
             news_items = self.collector.collect_company_news(company, enhanced_data)
+
+            # Apply relevance filtering scaffold
+            dossier_snapshot = self.dossier_builder.build(company, enhanced_data)
+            news_items, rejected_items = self.relevance_scorer.filter_items(
+                news_items,
+                dossier_snapshot,
+            )
+
+            if rejected_items:
+                logger.debug(
+                    "news_items_rejected",
+                    callsign=company.callsign,
+                    rejected=len(rejected_items),
+                    snapshot_id=dossier_snapshot.snapshot_id if dossier_snapshot else None,
+                )
 
             # Generate summary
             summary = self.summarize_intelligence(news_items) or f"{len(news_items)} new items."

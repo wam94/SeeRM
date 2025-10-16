@@ -163,6 +163,10 @@ class NewsItem(BaseEntity):
     # Metadata
     source_type: NewsItemSource = Field(default=NewsItemSource.MANUAL)
     callsign: Optional[str] = Field(None, max_length=200)
+    relevance_score: Optional[float] = Field(default=None)
+    relevance_verdict: Optional[str] = Field(default=None, max_length=32)
+    relevance_snapshot_id: Optional[str] = Field(default=None, max_length=100)
+    relevance_reasons: List[str] = Field(default_factory=list)
 
     @field_validator("published_at", mode="before")
     @classmethod
