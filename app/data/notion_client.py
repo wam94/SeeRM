@@ -57,6 +57,60 @@ class EnhancedNotionClient:
             intel_db=bool(config.intel_db_id),
         )
 
+    # ------------------------------------------------------------------ #
+    # Property helpers
+    # ------------------------------------------------------------------ #
+
+    def _extract_rich_text(self, prop: Optional[Dict[str, Any]]) -> str:
+        """Return concatenated plain text from a rich text or title property."""
+        if not prop:
+            return ""
+        if prop.get("type") == "rich_text":
+            segments = prop.get("rich_text") or []
+            return "".join(seg.get("plain_text", "").strip() for seg in segments if seg).strip()
+        if prop.get("type") == "title":
+            segments = prop.get("title") or []
+            return "".join(seg.get("plain_text", "").strip() for seg in segments if seg).strip()
+        return ""
+
+    def _extract_url(self, prop: Optional[Dict[str, Any]]) -> Optional[str]:
+        """Return url field from property when present."""
+        if not prop:
+            return None
+        if prop.get("type") == "url":
+            url = prop.get("url") or ""
+            return url.strip() or None
+        return None
+
+    def _extract_checkbox(self, prop: Optional[Dict[str, Any]]) -> Optional[bool]:
+        """Return checkbox value if available."""
+        if not prop or prop.get("type") != "checkbox":
+            return None
+        return bool(prop.get("checkbox"))
+
+    def _extract_multi_select(self, prop: Optional[Dict[str, Any]]) -> List[str]:
+        """Return list of values from multi-select property."""
+        if not prop:
+            return []
+        if prop.get("type") == "multi_select":
+            return [
+                (item.get("name") or "").strip()
+                for item in prop.get("multi_select") or []
+                if item and (item.get("name") or "").strip()
+            ]
+        return []
+
+    def _extract_plain_text_list(self, text: str) -> List[str]:
+        """Split plain text into list of values using commas/newlines."""
+        if not text:
+            return []
+        parts: List[str] = []
+        for chunk in text.replace("\n", ",").split(","):
+            cleaned = chunk.strip()
+            if cleaned:
+                parts.append(cleaned)
+        return parts
+
     def _get_headers(self) -> Dict[str, str]:
         """Get headers for Notion API requests."""
         return {
@@ -660,50 +714,62 @@ class EnhancedNotionClient:
                 website = None
                 verified_domain = None
 
-                domain_prop = properties.get("Domain", {})
-                if domain_prop.get("type") == "url":
-                    url = domain_prop.get("url")
-                    if url:
-                        domain = url.replace("https://", "").replace("http://", "").split("/")[0]
-                elif domain_prop.get("type") == "rich_text":
-                    rich_text = domain_prop.get("rich_text", [])
-                    if rich_text and rich_text[0].get("text"):
-                        domain = rich_text[0]["text"].get("content", "").strip()
+                domain_prop = properties.get("Domain")
+                url_prop = self._extract_url(domain_prop)
+                if url_prop:
+                    domain = url_prop.replace("https://", "").replace("http://", "").split("/")[0]
+                elif domain_prop and domain_prop.get("type") == "rich_text":
+                    domain = self._extract_rich_text(domain_prop)
 
-                website_prop = properties.get("Website", {})
-                if website_prop.get("type") == "url":
-                    website = website_prop.get("url")
+                website_prop = properties.get("Website")
+                website = self._extract_url(website_prop) or website
 
-                verified_prop = properties.get("Verified Domain", {})
-                if verified_prop.get("type") == "url":
-                    url = verified_prop.get("url")
-                    if url:
-                        verified_domain = (
-                            url.replace("https://", "").replace("http://", "").split("/")[0]
-                        )
-                elif verified_prop.get("type") == "rich_text":
-                    rich_text = verified_prop.get("rich_text", [])
-                    if rich_text and rich_text[0].get("text"):
-                        verified_domain = rich_text[0]["text"].get("content", "").strip()
+                verified_prop = properties.get("Verified Domain")
+                verified_url = self._extract_url(verified_prop)
+                if verified_url:
+                    verified_domain = (
+                        verified_url.replace("https://", "").replace("http://", "").split("/")[0]
+                    )
+                elif verified_prop and verified_prop.get("type") == "rich_text":
+                    verified_domain = self._extract_rich_text(verified_prop)
 
                 # Extract Latest Intel field
-                latest_intel = None
+                latest_intel = self._extract_rich_text(properties.get("Latest Intel"))
                 latest_intel_at = None
-
-                latest_intel_prop = properties.get("Latest Intel", {})
-                if latest_intel_prop.get("type") == "rich_text":
-                    rich_text = latest_intel_prop.get("rich_text", [])
-                    if rich_text and rich_text[0].get("text"):
-                        latest_intel = rich_text[0]["text"].get("content", "").strip()
-
                 latest_intel_at_prop = properties.get("Latest Intel At", {})
                 if latest_intel_at_prop.get("type") == "date":
                     date_data = latest_intel_at_prop.get("date")
                     if date_data:
                         latest_intel_at = date_data.get("start")
 
+                company_name = self._extract_rich_text(properties.get("Company"))
+                owners_text = self._extract_rich_text(
+                    properties.get("Owners") or properties.get("Beneficial Owners")
+                )
+                aka_text = self._extract_rich_text(
+                    properties.get("AKA")
+                    or properties.get("Also Known As")
+                    or properties.get("Aliases")
+                    or properties.get("AKA Names")
+                )
+                tags = self._extract_multi_select(
+                    properties.get("Tags") or properties.get("Industry Tags")
+                )
+                products = self._extract_multi_select(
+                    properties.get("Products") or properties.get("Product Tags")
+                )
+                needs_dossier = self._extract_checkbox(properties.get("Needs Dossier"))
+                primary_contact = self._extract_rich_text(properties.get("Primary Contact"))
+
                 # Get page ID
                 page_id = page.get("id")
+
+                alias_candidates = []
+                if company_name:
+                    alias_candidates.append(company_name)
+                alias_candidates.extend(self._extract_plain_text_list(aka_text))
+
+                owners_list = self._extract_plain_text_list(owners_text)
 
                 domain_data[callsign] = {
                     "domain": domain,
@@ -712,6 +778,14 @@ class EnhancedNotionClient:
                     "latest_intel": latest_intel,
                     "latest_intel_at": latest_intel_at,
                     "page_id": page_id,
+                    "company": company_name,
+                    "owners": owners_list,
+                    "aliases": alias_candidates,
+                    "aka_names": self._extract_plain_text_list(aka_text),
+                    "tags": [tag for tag in tags if tag],
+                    "products": [prod for prod in products if prod],
+                    "needs_dossier": bool(needs_dossier) if needs_dossier is not None else False,
+                    "primary_contact": primary_contact,
                 }
 
             # Fill in missing callsigns
@@ -724,6 +798,14 @@ class EnhancedNotionClient:
                         "latest_intel": None,
                         "latest_intel_at": None,
                         "page_id": None,
+                        "company": None,
+                        "owners": [],
+                        "aliases": [],
+                        "aka_names": [],
+                        "tags": [],
+                        "products": [],
+                        "needs_dossier": False,
+                        "primary_contact": None,
                     }
 
             logger.info(
@@ -745,9 +827,18 @@ class EnhancedNotionClient:
                 cs.lower(): {
                     "domain": None,
                     "website": None,
+                    "verified_domain": None,
                     "latest_intel": None,
                     "latest_intel_at": None,
                     "page_id": None,
+                    "company": None,
+                    "owners": [],
+                    "aliases": [],
+                    "aka_names": [],
+                    "tags": [],
+                    "products": [],
+                    "needs_dossier": False,
+                    "primary_contact": None,
                 }
                 for cs in callsigns
             }

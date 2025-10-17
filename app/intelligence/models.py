@@ -41,6 +41,9 @@ class NewsItem:
     summary: Optional[str] = None
     news_type: NewsType = NewsType.OTHER_NOTABLE
     relevance_score: float = 0.0
+    relevance_verdict: Optional[str] = None
+    relevance_snapshot_id: Optional[str] = None
+    relevance_reasons: List[str] = field(default_factory=list)
     sentiment: Optional[str] = None  # "positive", "negative", "neutral"
     company_mentions: List[str] = field(default_factory=list)
 

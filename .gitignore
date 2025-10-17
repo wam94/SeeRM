@@ -42,6 +42,7 @@ env/
 ENV/
 .env.local
 .env.*.local
+.env
 
 # OS
 .DS_Store
@@ -55,6 +56,7 @@ logs/
 *.tmp
 *.temp
 /tmp/
+files/news_test.csv
 
 # Node.js dependencies and package lockfiles
 node_modules/

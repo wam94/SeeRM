@@ -105,6 +105,15 @@ class IntelligenceConfig(BaseSettings):
         default_factory=list, alias="NEWS_NEGATIVE_KEYWORDS"
     )
 
+    # Relevance filtering
+    news_relevance_enabled: bool = Field(default=False, alias="NEWS_RELEVANCE_ENABLED")
+    news_relevance_accept_threshold: float = Field(
+        default=0.9, alias="NEWS_RELEVANCE_ACCEPT_THRESHOLD"
+    )
+    news_relevance_review_threshold: float = Field(
+        default=0.4, alias="NEWS_RELEVANCE_REVIEW_THRESHOLD"
+    )
+
     # Intelligence Reports configuration
     reports_enabled: bool = Field(default=True, alias="INTELLIGENCE_REPORTS_ENABLED")
     default_report_days: int = Field(default=7, alias="INTELLIGENCE_DEFAULT_REPORT_DAYS")
@@ -133,6 +142,27 @@ class IntelligenceConfig(BaseSettings):
         if isinstance(v, str):
             return v.lower() in ("1", "true", "yes")
         return bool(v)
+
+    @field_validator("news_relevance_enabled", mode="before")
+    @classmethod
+    def parse_news_relevance_enabled(cls, v):  # noqa: D102
+        if isinstance(v, str):
+            return v.lower() in ("1", "true", "yes")
+        return bool(v)
+
+    @field_validator(
+        "news_relevance_accept_threshold",
+        "news_relevance_review_threshold",
+        mode="before",
+    )
+    @classmethod
+    def parse_thresholds(cls, v):  # noqa: D102
+        if isinstance(v, str):
+            try:
+                return float(v)
+            except ValueError as exc:  # noqa: B904
+                raise ValueError(f"Invalid threshold value: {v}") from exc
+        return float(v)
 
     @field_validator(
         "trusted_domains",
