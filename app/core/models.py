@@ -159,6 +159,7 @@ class NewsItem(BaseEntity):
     url: str = Field(..., max_length=1000)
     source: str = Field(..., max_length=200)
     published_at: Optional[Union[str, datetime]] = None
+    summary: Optional[str] = Field(default=None, max_length=2000)
 
     # Metadata
     source_type: NewsItemSource = Field(default=NewsItemSource.MANUAL)

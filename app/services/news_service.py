@@ -32,6 +32,7 @@ from app.data.notion_client import EnhancedNotionClient
 from app.intelligence.dossier_onboarding import DossierOnboardingService
 from app.intelligence.news_quality import NewsQualityScorer
 from app.intelligence.news_relevance import CompanyDossierBuilder, NewsRelevanceScorer
+from app.intelligence.seen_store import NotionNewsSeenStore
 from app.utils.reliability import ParallelProcessor, with_circuit_breaker, with_retry
 
 logger = structlog.get_logger(__name__)
@@ -518,6 +519,20 @@ class NewsService:
         )
         self.dossier_builder = CompanyDossierBuilder(notion_client)
         self.relevance_scorer = NewsRelevanceScorer(config)
+        self.news_store: Optional[NotionNewsSeenStore] = None
+        if notion_client and config.intel_db_id:
+            try:
+                self.news_store = NotionNewsSeenStore(
+                    notion_client,
+                    config.intel_db_id,
+                    config.companies_db_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to initialize Notion news store",
+                    error=str(exc),
+                    intel_db_id=config.intel_db_id,
+                )
 
     def fetch_companies_data(self, subject_filter: Optional[str] = None) -> List[Company]:
         """
@@ -683,28 +698,55 @@ class NewsService:
 
             text = "\n".join(text_parts)
 
-            # Create OpenAI client
-            client = openai.OpenAI(api_key=self.config.openai_api_key)
-
             prompt = (
                 "Summarize the following items into a crisp 2–3 sentence weekly intel highlight. "
                 "Keep dates and sources implicit; focus on what happened and why it matters:\n\n"
                 + text
             )
 
+            client = openai.OpenAI(api_key=self.config.openai_api_key)
+
+            def extract_output_text(resp):
+                text = (getattr(resp, "output_text", None) or "").strip()
+                if text:
+                    return text
+
+                segments = []
+                for item in getattr(resp, "output", []) or []:
+                    content = getattr(item, "content", None)
+                    if content is None and isinstance(item, dict):
+                        content = item.get("content")
+                    if not content:
+                        continue
+                    for chunk in content:
+                        value = None
+                        if hasattr(chunk, "text"):
+                            value = getattr(chunk.text, "value", None) or getattr(
+                                chunk.text, "text", None
+                            )
+                        elif isinstance(chunk, dict):
+                            value = chunk.get("text")
+                            if isinstance(value, dict):
+                                value = value.get("value") or value.get("text")
+                        if value:
+                            segments.append(str(value).strip())
+                return " ".join(segment for segment in segments if segment).strip()
+
             # Try with temperature first, then without if it fails
             def try_completion(with_temperature: bool = True):
                 kwargs = {
                     "model": self.config.openai_model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 200,
+                    "input": prompt,
+                    "max_output_tokens": 512,
+                    "reasoning": {"effort": "medium"},
+                    "text": {"format": {"type": "text"}},
                 }
 
                 if with_temperature and self.config.openai_temperature is not None:
                     kwargs["temperature"] = self.config.openai_temperature
 
-                response = client.chat.completions.create(**kwargs)
-                return response.choices[0].message.content
+                response = client.responses.create(**kwargs)
+                return extract_output_text(response)
 
             try:
                 summary = try_completion(with_temperature=True)
@@ -907,8 +949,62 @@ class NewsService:
         self, intelligence_by_company: Dict[str, CompanyIntelligence]
     ) -> None:
         """Update Notion with intelligence data."""
-        # Implementation would go here - similar to original but with enhanced error handling
-        logger.info("Notion intelligence updates would be performed here")
+        if self.config.preview_only:
+            logger.info("Notion update skipped in preview mode")
+            return
+
+        if not self.notion_client or not self.news_store:
+            logger.info("Notion update skipped - client or news store unavailable")
+            return
+
+        for callsign, intel in intelligence_by_company.items():
+            items = intel.news_items or []
+            try:
+                new_items, existing_items = self.news_store.ingest(callsign, None, items)
+                logger.info(
+                    "Notion news updated",
+                    callsign=callsign,
+                    new_items=len(new_items),
+                    existing_items=len(existing_items),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to write news items to Notion",
+                    callsign=callsign,
+                    error=str(exc),
+                )
+
+            summary_text = (intel.summary or "").strip()
+            if not summary_text:
+                continue
+
+            if not self.config.companies_db_id:
+                logger.debug("Skipping summary update - companies DB ID missing", callsign=callsign)
+                continue
+
+            try:
+                page_id = self.notion_client.find_company_page(
+                    self.config.companies_db_id, callsign
+                )
+                if not page_id:
+                    logger.debug(
+                        "Skipping summary update - company page not found", callsign=callsign
+                    )
+                    continue
+
+                date_iso = datetime.utcnow().date().isoformat()
+                self.notion_client.set_latest_intel(
+                    page_id,
+                    summary_text,
+                    date_iso=date_iso,
+                    database_id=self.config.companies_db_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to update latest intel summary",
+                    callsign=callsign,
+                    error=str(exc),
+                )
 
     def _send_intelligence_digest(
         self, intelligence_by_company: Dict[str, CompanyIntelligence]

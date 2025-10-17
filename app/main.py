@@ -19,6 +19,9 @@ from app.cli_commands.update import update_check
 from app.core.config import get_settings, print_configuration_summary, validate_required_settings
 from app.core.exceptions import ConfigurationError, SeeRMError
 from app.core.logging import set_correlation_id, setup_logging
+from app.data.gmail_client import EnhancedGmailClient
+from app.data.notion_client import EnhancedNotionClient
+from app.services.news_service import create_news_service
 from app.utils.reliability import get_circuit_breaker_status, reset_circuit_breaker
 from app.workflows.weekly_digest import dry_run_weekly_digest_workflow, run_weekly_digest_workflow
 
@@ -58,6 +61,65 @@ main.add_command(test_email)
 main.add_command(setup_wizard)
 main.add_command(doctor)
 main.add_command(update_check)
+
+
+@main.command()
+@click.option("--callsigns", help="Comma-separated callsigns to limit analysis (optional)")
+@click.option(
+    "--csv-path",
+    type=click.Path(path_type=str),
+    help="Path to a CSV roster (skips Gmail fetch when provided)",
+)
+@click.option(
+    "--no-preview",
+    is_flag=True,
+    help="Disable preview mode and persist results to Notion",
+)
+@click.pass_context
+def news_v2(ctx, callsigns: Optional[str], csv_path: Optional[str], no_preview: bool):
+    """Run the updated news intelligence pipeline."""
+    try:
+        settings = get_settings()
+        if ctx.obj["dry_run"]:
+            settings.dry_run = True
+
+        if csv_path:
+            settings.csv_source_path = csv_path
+
+        if callsigns:
+            parsed = [c.strip().lower() for c in callsigns.split(",") if c.strip()]
+            settings.intelligence.filter_callsigns = parsed
+
+        settings.intelligence.preview_only = not no_preview
+
+        gmail_client = EnhancedGmailClient(settings.gmail, dry_run=settings.dry_run)
+        notion_client = EnhancedNotionClient(settings.notion, dry_run=settings.dry_run)
+        service = create_news_service(gmail_client, notion_client, settings.intelligence)
+
+        console.print("[blue]Starting news intelligence workflow (v2)...[/blue]")
+        if settings.intelligence.preview_only:
+            console.print("[yellow]🔸 Preview mode - Notion writes disabled[/yellow]")
+
+        result = service.run_intelligence_workflow()
+        console.print(
+            f"[green]Status:[/green] {_get_status_value(result.status).title()} | "
+            f"Companies processed: {result.data.get('companies_processed', 0)} | "
+            f"News items: {result.data.get('intelligence_items', 0)}"
+        )
+
+        if result.error_message:
+            console.print(f"[red]Error:[/red] {result.error_message}")
+
+        exit_code = 0 if _get_status_value(result.status) == "completed" else 1
+        sys.exit(exit_code)
+
+    except Exception as e:
+        console.print(f"[red]News v2 Error:[/red] {e}")
+        if ctx.obj and ctx.obj.get("debug"):
+            import traceback
+
+            console.print(traceback.format_exc())
+        sys.exit(1)
 
 
 @main.command()
