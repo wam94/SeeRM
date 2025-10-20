@@ -82,6 +82,7 @@ jobs:
           ENVIRONMENT: 'production'
           DEBUG: 'false'
           DRY_RUN: ${{ inputs.dry_run }}
+          NEWS_RELEVANCE_ENABLED: 'true'
 
         run: |
           # Run the analysis workflow

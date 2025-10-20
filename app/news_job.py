@@ -29,6 +29,7 @@ from app.gmail_client import (
     search_messages,
     send_html_email,
 )
+from app.intelligence.dossier_onboarding import DossierOnboardingService
 from app.intelligence.models import NewsItem, NewsType
 from app.intelligence.news_quality import NewsQualityScorer
 from app.intelligence.seen_store import NotionNewsSeenStore
@@ -1160,6 +1161,53 @@ def main():
             print(f"[ERROR] Failed to fetch domain data from Notion: {e}")
             # Fallback to empty dict
             notion_domain_data = {cs: {"domain": None, "website": None} for cs in roster.keys()}
+
+    # Run dossier onboarding for new/flagged companies so intel uses enriched context
+    if notion_client and companies_db:
+        try:
+            dossier_service = DossierOnboardingService(notion_client, companies_db)
+        except Exception as exc:  # noqa: BLE001
+            dossier_service = None
+            print(f"[WARN] Dossier onboarding unavailable: {exc}")
+
+        if dossier_service and dossier_service.is_available():
+            # Candidates: newly created pages or anything still flagged as needing a dossier.
+            dossier_candidates = {cs.lower() for cs in new_callsigns if cs}
+            for cs, data in notion_domain_data.items():
+                if data.get("needs_dossier") or not data.get("page_id"):
+                    dossier_candidates.add(cs.lower())
+
+            if dossier_candidates:
+                print(
+                    "[DOSSIER] Generating onboarding dossiers for "
+                    f"{len(dossier_candidates)} companies prior to news crawl..."
+                )
+
+            for cs in sorted(dossier_candidates):
+                org = roster.get(cs)
+                if not org:
+                    continue
+                try:
+                    company_model = Company(
+                        callsign=cs,
+                        dba=org.get("dba") or org.get("callsign") or cs,
+                        website=org.get("website"),
+                        domain_root=org.get("domain_root"),
+                        blog_url=org.get("blog_url"),
+                        beneficial_owners=org.get("owners") or [],
+                        aka_names=org.get("aka_names"),
+                        industry_tags=org.get("industry_tags"),
+                        needs_dossier=True,
+                    )
+                    enhanced_entry = notion_domain_data.get(cs)
+                    updated_entry = dossier_service.generate_dossier(company_model, enhanced_entry)
+                    if updated_entry:
+                        notion_domain_data[cs] = {**(enhanced_entry or {}), **updated_entry}
+                        print(f"[DOSSIER] Completed dossier for {cs}")
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[WARN] Dossier onboarding failed for {cs}: {exc}")
+        elif new_callsigns:
+            print("[WARN] Skipping dossier onboarding (service unavailable)")
 
     domain_fetch_time = PERFORMANCE_MONITOR.end_timer("notion_domain_fetch")
     print(f"[PERFORMANCE] Domain data fetch completed in {domain_fetch_time:.2f}s")

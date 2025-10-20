@@ -353,6 +353,7 @@ jobs:
           FETCH_MAX_PER_ORG: ${{ vars.FETCH_MAX_PER_ORG || '2' }}
           ARTICLE_READ_TIMEOUT: ${{ vars.ARTICLE_READ_TIMEOUT || '8' }}
           ARTICLE_MAX_BYTES: ${{ vars.ARTICLE_MAX_BYTES || '250000' }}
+          NEWS_RELEVANCE_ENABLED: 'true'
         run: |
           export FILTER_CALLSIGNS="$(cat /tmp/filter_callsigns.txt)"
           echo "FILTER_CALLSIGNS for this batch: ${FILTER_CALLSIGNS}"

@@ -1,17 +1,20 @@
 # app/performance_utils.py
+"""Utilities for coordinated parallel execution and performance tracking."""
+
 from __future__ import annotations
 
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from functools import lru_cache
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
 
 
 class SmartRateLimiter:
     """Adaptive rate limiter that only delays when necessary."""
 
     def __init__(self, calls_per_second: float = 2.0, burst_size: int = 5):
+        """Initialise the limiter with configurable throughput."""
         self.calls_per_second = calls_per_second
         self.burst_size = burst_size
         self.tokens = burst_size
@@ -83,13 +86,30 @@ class ParallelProcessor:
             }
 
             # Collect results as they complete
-            for future in as_completed(future_to_key, timeout=timeout):
-                key = future_to_key[future]
-                try:
-                    results[key] = future.result()
-                except Exception as e:
-                    print(f"[PARALLEL] Error processing {key}: {e}")
-                    results[key] = None
+            try:
+                iterator = as_completed(future_to_key, timeout=timeout)
+                for future in iterator:
+                    key = future_to_key[future]
+                    try:
+                        results[key] = future.result()
+                    except Exception as e:
+                        print(f"[PARALLEL] Error processing {key}: {e}")
+                        results[key] = None
+            except TimeoutError:
+                print(
+                    "[PARALLEL] Timeout reached while processing batch; "
+                    "collecting partial results and cancelling remaining tasks."
+                )
+                for future, key in future_to_key.items():
+                    if future.done():
+                        try:
+                            results[key] = future.result()
+                        except Exception as e:
+                            print(f"[PARALLEL] Error processing {key}: {e}")
+                            results[key] = None
+                    else:
+                        future.cancel()
+                        results[key] = None
 
         return results
 
@@ -98,6 +118,7 @@ class ConcurrentAPIClient:
     """Utility for making concurrent API calls with rate limiting."""
 
     def __init__(self, rate_limiter: Optional[SmartRateLimiter] = None):
+        """Create a concurrent client backed by the supplied rate limiter."""
         self.rate_limiter = rate_limiter or SmartRateLimiter(calls_per_second=3.0)
 
     def batch_api_calls(
@@ -144,8 +165,8 @@ def cached_text_hash_extract(text_hash: int, extraction_func_name: str) -> str:
 
 
 def has_valid_domain(org: Dict[str, Any]) -> bool:
-    """
-    Check if organization has CSV metabase domain/website data that should be preserved.
+    """Check if organization has CSV domain/website data that should be preserved.
+
     CSV domain_root and website fields are absolute priority over any existing Notion data.
     """
     # CSV metabase fields are priority - if these exist, don't search - handle None values safely
@@ -161,7 +182,6 @@ def has_valid_domain(org: Dict[str, Any]) -> bool:
 
 def should_skip_processing(org: Dict[str, Any], operation_type: str) -> bool:
     """Determine if we can skip expensive operations for this org."""
-
     if operation_type == "domain_resolution":
         return has_valid_domain(org)
 
@@ -198,13 +218,16 @@ class PerformanceMonitor:
     """Simple performance monitoring utility."""
 
     def __init__(self):
+        """Initialise timing containers."""
         self.timings = {}
         self.start_times = {}
 
     def start_timer(self, operation: str):
+        """Record the start time for a tracked operation."""
         self.start_times[operation] = time.time()
 
     def end_timer(self, operation: str):
+        """Stop the timer for the operation and return the elapsed time."""
         if operation in self.start_times:
             elapsed = time.time() - self.start_times[operation]
             if operation not in self.timings:
@@ -215,6 +238,7 @@ class PerformanceMonitor:
         return 0
 
     def get_stats(self) -> Dict[str, Dict[str, float]]:
+        """Return aggregated timing statistics for every tracked operation."""
         stats = {}
         for operation, times in self.timings.items():
             stats[operation] = {
@@ -227,6 +251,7 @@ class PerformanceMonitor:
         return stats
 
     def print_stats(self):
+        """Pretty-print the recorded performance statistics."""
         print("\n=== Performance Stats ===")
         for operation, stats in self.get_stats().items():
             print(f"{operation}:")
