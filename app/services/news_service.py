@@ -512,26 +512,34 @@ class NewsService:
         self.gmail_client = gmail_client
         self.notion_client = notion_client
         self.config = config
+        notion_companies_db = (
+            getattr(notion_client.config, "companies_db_id", None) if notion_client else None
+        )
+        notion_intel_db = (
+            getattr(notion_client.config, "intel_db_id", None) if notion_client else None
+        )
+        self.companies_db_id = getattr(config, "companies_db_id", None) or notion_companies_db
+        self.intel_db_id = getattr(config, "intel_db_id", None) or notion_intel_db
         self.collector = NewsCollector(config)
         self.dossier_service = DossierOnboardingService(
             notion_client,
-            config.companies_db_id,
+            self.companies_db_id,
         )
         self.dossier_builder = CompanyDossierBuilder(notion_client)
         self.relevance_scorer = NewsRelevanceScorer(config)
         self.news_store: Optional[NotionNewsSeenStore] = None
-        if notion_client and config.intel_db_id:
+        if notion_client and self.intel_db_id:
             try:
                 self.news_store = NotionNewsSeenStore(
                     notion_client,
-                    config.intel_db_id,
-                    config.companies_db_id,
+                    self.intel_db_id,
+                    self.companies_db_id,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "Failed to initialize Notion news store",
                     error=str(exc),
-                    intel_db_id=config.intel_db_id,
+                    intel_db_id=self.intel_db_id,
                 )
 
     def fetch_companies_data(self, subject_filter: Optional[str] = None) -> List[Company]:
@@ -617,14 +625,14 @@ class NewsService:
         Returns:
             Dict mapping callsign to enhanced data
         """
-        if not self.notion_client or not self.config.companies_db_id:
+        if not self.notion_client or not self.companies_db_id:
             logger.debug("Notion enhancement skipped - no client or DB ID")
             return {}
 
         try:
             callsigns = [c.callsign for c in companies]
             notion_data = self.notion_client.get_all_companies_domain_data(
-                self.config.companies_db_id, callsigns
+                self.companies_db_id, callsigns
             )
 
             logger.info(
@@ -889,7 +897,7 @@ class NewsService:
                     failed += 1
 
             # Step 4: Update Notion (if configured)
-            if self.notion_client and self.config.companies_db_id and self.config.intel_db_id:
+            if self.notion_client and self.companies_db_id and self.intel_db_id:
                 self._update_notion_intelligence(intelligence_by_company)
 
             # Step 5: Send digest (if configured)
@@ -978,14 +986,12 @@ class NewsService:
             if not summary_text:
                 continue
 
-            if not self.config.companies_db_id:
+            if not self.companies_db_id:
                 logger.debug("Skipping summary update - companies DB ID missing", callsign=callsign)
                 continue
 
             try:
-                page_id = self.notion_client.find_company_page(
-                    self.config.companies_db_id, callsign
-                )
+                page_id = self.notion_client.find_company_page(self.companies_db_id, callsign)
                 if not page_id:
                     logger.debug(
                         "Skipping summary update - company page not found", callsign=callsign
@@ -997,7 +1003,7 @@ class NewsService:
                     page_id,
                     summary_text,
                     date_iso=date_iso,
-                    database_id=self.config.companies_db_id,
+                    database_id=self.companies_db_id,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
