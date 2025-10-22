@@ -30,7 +30,7 @@ on:
       batch_size:
         description: "Orgs per batch (keeps jobs under timeout)"
         required: false
-        default: "40"
+        default: "20"
         type: string
   workflow_run:
     workflows: ["Weekly Digest"]
@@ -190,7 +190,7 @@ jobs:
               calls = [c for c in calls if c in want]
 
           n = len(calls)
-          bs = int(os.environ.get("BATCH_SIZE","40") or "40")
+          bs = int(os.environ.get("BATCH_SIZE","20") or "20")
           num_batches = (n + bs - 1) // bs if bs > 0 else 1
           # we'll recompute slicing in each run job; here we just emit range indices
           batch_list = list(range(num_batches))
@@ -270,7 +270,7 @@ jobs:
               want = [c.strip().lower() for c in filt.split(",") if c.strip()]
               calls = [c for c in calls if c in want]
 
-          bs = int(os.environ.get("BATCH_SIZE","40") or "40")
+          bs = int(os.environ.get("BATCH_SIZE","20") or "20")
           bi = int(os.environ.get("BATCH_INDEX","0") or "0")
           start, end = bi*bs, bi*bs + bs
           part = calls[start:end]

@@ -11,7 +11,7 @@ import re
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set
 
 import feedparser
 import pandas as pd
@@ -862,6 +862,7 @@ def process_company_notion_with_data(
     companies_db: str,
     intel_db: str,
     news_store: Optional[NotionNewsSeenStore],
+    new_company_callsigns: Set[str],
     cs: str,
     org: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
@@ -876,6 +877,7 @@ def process_company_notion_with_data(
         intel_db=intel_db,
         news_store=news_store,
         lookback_days=lookback_days,
+        new_company_callsigns=new_company_callsigns,
     )
 
 
@@ -889,6 +891,7 @@ def process_company_notion(
     intel_db: str,
     news_store: Optional[NotionNewsSeenStore],
     lookback_days: int,
+    new_company_callsigns: Set[str],
 ) -> Optional[Dict[str, Any]]:
     """Process Notion updates for a single company."""
     intel_items = intel_by_cs.get(cs, [])
@@ -903,6 +906,7 @@ def process_company_notion(
             return {"status": "error", "error": f"Invalid org data type: {type(org)}"}
 
         # Upsert company page first (without domain/website to avoid overwriting baseline job data)
+        needs_dossier_flag = cs.lower() in new_company_callsigns
         page_id = upsert_company_page(
             companies_db,
             {
@@ -911,7 +915,7 @@ def process_company_notion(
                     str(org.get("dba") or "").strip() if org.get("dba") is not None else ""
                 ),
                 "owners": org.get("owners") or [],
-                "needs_dossier": False,
+                "needs_dossier": needs_dossier_flag,
             },
         )
 
@@ -1095,6 +1099,7 @@ def main():
 
     # Detect new companies and flag for baseline generation
     new_callsigns: List[str] = []
+    new_callsigns_set: Set[str] = set()
 
     if companies_db:
         for cs, org in roster.items():
@@ -1114,6 +1119,7 @@ def main():
                     )
                     if created:
                         new_callsigns.append(callsign)
+                        new_callsigns_set.add(callsign.lower())
                         # Set needs_dossier flag for new companies
                         try:
                             _set_needs_dossier(page_id, True)
@@ -1141,6 +1147,9 @@ def main():
             print(trigger_msg)
         except Exception as e:
             print(f"[ERROR] Failed to write new callsigns trigger file: {e}")
+    else:
+        # Ensure set is initialised even when Notion is unavailable
+        new_callsigns_set = set()
 
     # Fetch canonical domain data from Notion for all companies (batched for efficiency)
     PERFORMANCE_MONITOR.start_timer("notion_domain_fetch")
@@ -1302,6 +1311,7 @@ def main():
             companies_db,
             intel_db,
             news_store,
+            new_callsigns_set,
         )
 
         # Process Notion updates in parallel (with lower concurrency for API limits)
