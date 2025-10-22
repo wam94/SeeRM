@@ -357,7 +357,7 @@ jobs:
         run: |
           export FILTER_CALLSIGNS="$(cat /tmp/filter_callsigns.txt)"
           echo "FILTER_CALLSIGNS for this batch: ${FILTER_CALLSIGNS}"
-          python -m app.main news_v2 --no-preview
+          python -m app.main news-v2 --no-preview
 
       # Upload new callsigns file as artifact if it exists
       - name: Upload new callsigns artifact
