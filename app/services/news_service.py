@@ -901,7 +901,8 @@ class NewsService:
                 self._update_notion_intelligence(intelligence_by_company)
 
             # Step 5: Send digest (if configured)
-            if not self.config.preview_only and self.config.digest_to:
+            digest_to = getattr(self.config, "digest_to", None)
+            if not self.config.preview_only and digest_to:
                 self._send_intelligence_digest(intelligence_by_company)
 
             # Complete result
