@@ -31,8 +31,14 @@ from app.gmail_client import (
 )
 from app.intelligence.models import NewsItem, NewsType
 from app.intelligence.news_quality import NewsQualityScorer
+from app.intelligence.news_verifier import LLMNewsVerifier
 from app.intelligence.seen_store import NotionNewsSeenStore
-from app.notion_client import get_all_companies_domain_data, set_latest_intel, upsert_company_page
+from app.notion_client import (
+    get_all_companies_domain_data,
+    get_dossier_text,
+    set_latest_intel,
+    upsert_company_page,
+)
 from app.performance_utils import (
     DEFAULT_RATE_LIMITER,
     PERFORMANCE_MONITOR,
@@ -51,6 +57,24 @@ logger = logging.getLogger(__name__)
 def get_quality_scorer() -> NewsQualityScorer:
     """Return shared quality scorer for news weighting."""
     return NewsQualityScorer(IntelligenceConfig())
+
+
+@functools.lru_cache(maxsize=1)
+def get_news_verifier() -> LLMNewsVerifier:
+    """Return shared LLM verifier instance."""
+    return LLMNewsVerifier()
+
+
+@functools.lru_cache(maxsize=256)
+def get_cached_dossier(page_id: str) -> Optional[str]:
+    """Return cached dossier text for a Notion page."""
+    if not page_id:
+        return None
+    try:
+        return get_dossier_text(page_id) or None
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Failed to load dossier text", page_id=page_id, error=str(exc))
+        return None
 
 
 _CORPORATE_SUFFIXES = {
@@ -368,7 +392,16 @@ def _try_feed(url: str) -> tuple[List[Dict[str, Any]], Optional[str]]:
                 if hasattr(e, key):
                     date = getattr(e, key) or ""
                     break
-            out.append({"title": title, "url": link, "source": "", "published_at": date})
+            summary = getattr(e, "summary", "") or getattr(e, "description", "") or ""
+            out.append(
+                {
+                    "title": title,
+                    "url": link,
+                    "source": "",
+                    "published_at": date,
+                    "summary": summary,
+                }
+            )
 
     return out, successful_feed_url
 
@@ -456,6 +489,7 @@ def google_cse_search(
                 "url": link,
                 "source": "",  # normalized later
                 "published_at": dt or snippet,  # fallback: snippet may contain date-ish text
+                "summary": snippet,
             }
         )
     return out
@@ -508,6 +542,7 @@ def _dict_to_news_item(data: Dict[str, Any], callsign: str) -> NewsItem:
         relevance_score=float(data.get("relevance_score") or 0.0),
         sentiment=(data.get("sentiment") or None),
         company_mentions=[callsign.upper()],
+        llm_verdict=data.get("llm_verdict") or None,
     )
 
 
@@ -527,6 +562,7 @@ def _news_item_to_dict(item: NewsItem) -> Dict[str, Any]:
         "relevance_score": item.relevance_score,
         "sentiment": item.sentiment,
         "summary": item.summary,
+        "llm_verdict": item.llm_verdict,
     }
 
 
@@ -604,6 +640,7 @@ def normalize_news_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "title": title,
                 "source": src,
                 "published_at": _iso_date(date),
+                "summary": (it.get("summary") or "").strip(),
             }
         )
     return out
@@ -716,8 +753,6 @@ def collect_recent_news(
                 if result:
                     owned_items += result
 
-    scorer = get_quality_scorer()
-
     # Score and select external items
     external_items = dedupe(external_items, key=lambda x: x.get("url"))
     external_items = [
@@ -727,29 +762,29 @@ def collect_recent_news(
     ]
     external_normalized = normalize_news_items(external_items)
 
-    external_models = [
-        NewsItem(
-            title=item["title"] or item["url"],
-            url=item["url"],
-            source=item["source"],
-            published_at=item.get("published_at"),
-            news_type=NewsType.OTHER_NOTABLE,
-            relevance_score=0.0,
-            sentiment=None,
-            company_mentions=[company_model.callsign.upper()],
-        )
-        for item in external_normalized
-    ]
-
-    ranked_external = scorer.rank_items(company_model, external_models, max_items)
+    max_candidates = max(max_items * 4, max_items)
     external_filtered = [
         {
             "url": item.url,
             "title": item.title,
             "source": item.source,
             "published_at": item.published_at,
+            "summary": item.summary,
         }
-        for item in ranked_external
+        for item in [
+            NewsItem(
+                title=entry["title"] or entry["url"],
+                url=entry["url"],
+                source=entry["source"],
+                published_at=entry.get("published_at"),
+                news_type=NewsType.OTHER_NOTABLE,
+                relevance_score=0.0,
+                sentiment=None,
+                company_mentions=[company_model.callsign.upper()],
+                summary=entry.get("summary") or None,
+            )
+            for entry in external_normalized
+        ][:max_candidates]
     ]
 
     # Always include owned-domain items that are within the lookback window
@@ -771,7 +806,18 @@ def collect_recent_news(
         if url:
             existing_urls.add(url)
 
-    combined_filtered = external_filtered + owned_filtered
+    owned_filtered = [
+        {
+            "url": item.get("url"),
+            "title": item.get("title"),
+            "source": item.get("source"),
+            "published_at": item.get("published_at"),
+            "summary": item.get("summary"),
+        }
+        for item in owned_filtered
+    ]
+
+    combined_filtered = (external_filtered + owned_filtered)[:max_candidates]
 
     return combined_filtered, source_metadata
 
@@ -1265,20 +1311,60 @@ def main():
 
         source_metadata_by_cs[cs] = source_metadata
 
+        org = roster.get(cs, {})
+        company_callsign = str(org.get("callsign") or cs or "").strip() or cs
+        candidate_items = [_dict_to_news_item(item, company_callsign) for item in items_list]
+
+        notion_meta = notion_domain_data.get(cs) or {}
+        page_id = notion_meta.get("page_id")
+        dossier_text = get_cached_dossier(page_id) if page_id else None
+
+        company_context = {
+            "dba": org.get("dba"),
+            "company": org.get("company"),
+            "aka_names": org.get("aka_names"),
+            "owners": org.get("owners"),
+            "website": org.get("website"),
+            "domain_root": org.get("domain_root"),
+            "tags": org.get("industry_tags"),
+        }
+
+        if notion_meta.get("verified_domain"):
+            company_context["domain_root"] = notion_meta.get("verified_domain")
+        elif notion_meta.get("domain"):
+            company_context["domain_root"] = notion_meta.get("domain")
+        if notion_meta.get("website"):
+            company_context["website"] = notion_meta.get("website")
+
+        verifier = get_news_verifier()
+        accepted_items, rejected_items = verifier.filter_items(
+            company_callsign=company_callsign,
+            items=candidate_items,
+            dossier_text=dossier_text,
+            company_context=company_context,
+        )
+
+        if rejected_items:
+            logger.info(
+                "LLM rejected news items",
+                callsign=company_callsign,
+                rejected=len(rejected_items),
+            )
+
+        if len(accepted_items) > max_per_org:
+            accepted_items = accepted_items[:max_per_org]
+
         if news_store:
-            org = roster.get(cs, {})
-            company_callsign = str(org.get("callsign") or cs or "").strip() or cs
-            candidate_items = [_dict_to_news_item(item, company_callsign) for item in items_list]
             new_items, existing_items = news_store.filter_new_items(
                 company_callsign,
-                candidate_items,
+                accepted_items,
             )
             filtered_news_by_cs[cs] = new_items
             if existing_items:
                 print(f"[DEDUP] {cs} skipped {len(existing_items)} archived items")
             intel_by_cs[cs] = [_news_item_to_dict(item) for item in new_items]
         else:
-            intel_by_cs[cs] = items_list
+            intel_by_cs[cs] = [_news_item_to_dict(item) for item in accepted_items]
 
     collection_time = PERFORMANCE_MONITOR.end_timer("intel_collection")
     print(f"[PERFORMANCE] Intel collection completed in {collection_time:.2f}s")

@@ -509,6 +509,69 @@ def replace_dossier_blocks(page_id: str, markdown_body: str) -> None:
 # -------------------- Intel Archive (timeline-only) --------------------
 
 
+def _rich_text_plain_text(rich_text: List[Dict[str, Any]]) -> str:
+    """Return concatenated plain text for a rich-text node list."""
+    if not rich_text:
+        return ""
+    return "".join(segment.get("plain_text", "") or "" for segment in rich_text)
+
+
+def get_dossier_text(page_id: str) -> Optional[str]:
+    """Fetch the plain-text content of the Dossier section for a page."""
+    try:
+        blocks = _list_block_children(page_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Unable to fetch dossier blocks", page_id=page_id, error=str(exc))
+        return None
+
+    collecting = False
+    collected: List[str] = []
+    stop_types = {
+        "heading_1",
+        "heading_2",
+        "heading_3",
+        "divider",
+        "toggle",
+        "column_list",
+        "column",
+        "synced_block",
+        "child_page",
+        "child_database",
+        "table",
+        "table_row",
+    }
+
+    for block in blocks:
+        block_type = block.get("type")
+        if not block_type:
+            continue
+
+        if block_type == "heading_2":
+            heading_text = _rich_text_plain_text(block.get("heading_2", {}).get("rich_text", []))
+            if not collecting and "dossier" in heading_text.lower():
+                collecting = True
+                continue
+            if collecting:
+                break
+
+        if not collecting:
+            continue
+
+        if block_type in stop_types:
+            break
+
+        payload = block.get(block_type, {})
+        if isinstance(payload, dict):
+            text = _rich_text_plain_text(payload.get("rich_text", []))
+            if text.strip():
+                collected.append(text.strip())
+
+    if not collected:
+        return None
+
+    return "\n".join(collected).strip()
+
+
 def _intel_schema_hints(intel_db_id: str) -> Dict[str, Optional[str]]:
     s = get_db_schema(intel_db_id)
     return {
