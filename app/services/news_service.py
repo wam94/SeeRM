@@ -559,7 +559,7 @@ class NewsService:
 
             # Search for CSV with company profiles
             messages = self.gmail_client.search_messages(
-                query='subject:"{subject}" has:attachment filename:csv', max_results=5
+                query=f'subject:"{subject}" has:attachment filename:csv', max_results=5
             )
 
             if not messages:
