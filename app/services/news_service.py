@@ -806,7 +806,7 @@ class NewsService:
                     "news_items_rejected",
                     callsign=company.callsign,
                     rejected=len(rejected_items),
-                    snapshot_id=dossier_snapshot.snapshot_id if dossier_snapshot else None,
+                    snapshot_id=(dossier_snapshot.snapshot_id if dossier_snapshot else None),
                 )
 
             # Generate summary
@@ -882,14 +882,14 @@ class NewsService:
                 )
 
             processor = ParallelProcessor(max_workers=6)  # Conservative for API limits
-            results = processor.process_batch(companies, process_company_wrapper, timeout=300)
+            batch_results = processor.process_batch(companies, process_company_wrapper, timeout=300)
 
             # Collect results
             intelligence_by_company = {}
             successful = 0
             failed = 0
 
-            for company, intel in results.items():
+            for company, intel in batch_results:
                 if intel and intel.processing_status == ProcessingStatus.COMPLETED:
                     intelligence_by_company[company.callsign] = intel
                     successful += 1
@@ -988,14 +988,18 @@ class NewsService:
                 continue
 
             if not self.companies_db_id:
-                logger.debug("Skipping summary update - companies DB ID missing", callsign=callsign)
+                logger.debug(
+                    "Skipping summary update - companies DB ID missing",
+                    callsign=callsign,
+                )
                 continue
 
             try:
                 page_id = self.notion_client.find_company_page(self.companies_db_id, callsign)
                 if not page_id:
                     logger.debug(
-                        "Skipping summary update - company page not found", callsign=callsign
+                        "Skipping summary update - company page not found",
+                        callsign=callsign,
                     )
                     continue
 

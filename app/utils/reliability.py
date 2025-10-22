@@ -10,7 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import Enum
 from functools import wraps
-from typing import Any, Callable, Dict, Optional, Type
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
 import structlog
 from tenacity import (
@@ -328,8 +328,13 @@ class ParallelProcessor:
 
     def process_batch(
         self, items: list, processor_func: Callable, timeout: Optional[float] = None
-    ) -> Dict[Any, Any]:
-        """Process items in parallel with reliability patterns."""
+    ) -> List[Tuple[Any, Any]]:
+        """Process items in parallel with reliability patterns.
+
+        Returns:
+            A list of (item, result) tuples in the same order as the input.
+            The result is None when processing fails or times out for an item.
+        """
 
         def safe_process_item(item):
             # Rate limiting
@@ -343,37 +348,64 @@ class ParallelProcessor:
             else:
                 return processor_func(item)
 
-        results = {}
+        results: List[Optional[Tuple[Any, Any]]] = [None] * len(items)
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             # Submit all tasks
-            future_to_item = {executor.submit(safe_process_item, item): item for item in items}
+            future_to_item: Dict[Any, Any] = {}
+            future_to_index: Dict[Any, int] = {}
+            for index, item in enumerate(items):
+                future = executor.submit(safe_process_item, item)
+                future_to_item[future] = item
+                future_to_index[future] = index
 
-            # Collect results
-            for future in as_completed(future_to_item, timeout=timeout):
-                item = future_to_item[future]
-                try:
-                    result = future.result()
-                    results[item] = result
+            try:
+                # Collect results
+                for future in as_completed(future_to_item, timeout=timeout):
+                    item = future_to_item[future]
+                    index = future_to_index[future]
+                    try:
+                        result = future.result()
+                        results[index] = (item, result)
 
-                    # Update rate limiter on success
-                    if self.rate_limiter:
-                        self.rate_limiter.on_success()
+                        # Update rate limiter on success
+                        if self.rate_limiter:
+                            self.rate_limiter.on_success()
 
-                except Exception as e:
-                    logger.error(
-                        "Parallel processing error",
-                        item=str(item)[:100],
-                        error=str(e),
-                        error_type=type(e).__name__,
-                    )
-                    results[item] = None
+                    except Exception as e:  # noqa: BLE001
+                        logger.error(
+                            "Parallel processing error",
+                            item=str(item)[:100],
+                            error=str(e),
+                            error_type=type(e).__name__,
+                        )
+                        results[index] = (item, None)
 
-                    # Update rate limiter on error
-                    if self.rate_limiter:
-                        self.rate_limiter.on_error()
+                        # Update rate limiter on error
+                        if self.rate_limiter:
+                            self.rate_limiter.on_error()
+            except TimeoutError:
+                logger.warning("Parallel processing timed out; cancelling unfinished tasks.")
+                for future, item in future_to_item.items():
+                    index = future_to_index[future]
+                    if results[index] is not None:
+                        continue
+                    if future.done():
+                        try:
+                            results[index] = (item, future.result())
+                        except Exception as e:  # noqa: BLE001
+                            logger.error(
+                                "Parallel processing error",
+                                item=str(item)[:100],
+                                error=str(e),
+                                error_type=type(e).__name__,
+                            )
+                            results[index] = (item, None)
+                    else:
+                        future.cancel()
+                        results[index] = (item, None)
 
-        return results
+        return [entry for entry in results if entry is not None]
 
 
 class HealthChecker:

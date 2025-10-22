@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# flake8: noqa
 # scripts/probe_funding.py
 """
 Probe likely funding events for a company using Google CSE + (optional) page fetch + heuristics.
@@ -107,7 +108,8 @@ FUNDING_VERBS = [
 
 # Regex for money + common units
 AMOUNT_RE = re.compile(
-    r"(?<![\d$])(?:USD\s*)?\$?\s*([0-9][\d,\.]*)\s*(billion|bn|million|mm|m|thousand|k)?", re.I
+    r"(?<![\d$])(?:USD\s*)?\$?\s*([0-9][\d,\.]*)\s*(billion|bn|million|mm|m|thousand|k)?",
+    re.I,
 )
 
 # Round types
@@ -233,7 +235,11 @@ def extract_funding_facts(raw_text: str) -> Dict[str, Any]:
 
 
 def google_cse_search(
-    query: str, api_key: str, cse_id: str, num: int = 10, date_restrict: Optional[str] = None
+    query: str,
+    api_key: str,
+    cse_id: str,
+    num: int = 10,
+    date_restrict: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Minimal Google CSE client. Returns list of items with url, title, snippet, source(host).
@@ -382,7 +388,10 @@ def crunchbase_enrich(name: Optional[str], domain_root: Optional[str]) -> Dict[s
         org_id = None
         for body in payloads:
             r = requests.post(
-                f"{BASE}/searches/organizations", headers=H, json=body, timeout=DEFAULT_TIMEOUT
+                f"{BASE}/searches/organizations",
+                headers=H,
+                json=body,
+                timeout=DEFAULT_TIMEOUT,
             )
             if r.status_code != 200:
                 continue
@@ -408,7 +417,10 @@ def crunchbase_enrich(name: Optional[str], domain_root: Optional[str]) -> Dict[s
             ]
         }
         r = requests.post(
-            f"{BASE}/entities/organizations/{org_id}", headers=H, json=body, timeout=DEFAULT_TIMEOUT
+            f"{BASE}/entities/organizations/{org_id}",
+            headers=H,
+            json=body,
+            timeout=DEFAULT_TIMEOUT,
         )
         if r.status_code != 200:
             return {}
@@ -564,7 +576,13 @@ def probe_funding(
 
                 item["text"] = text or ""
                 item["facts"] = extract_funding_facts(
-                    " ".join([item.get("title", ""), item.get("snippet", ""), item.get("text", "")])
+                    " ".join(
+                        [
+                            item.get("title", ""),
+                            item.get("snippet", ""),
+                            item.get("text", ""),
+                        ]
+                    )
                 )
                 item["published_at"] = (
                     parse_date_from_text(" ".join([item["url"], item["text"]])) or None
@@ -578,9 +596,9 @@ def probe_funding(
             )
 
             # Update hits with processed results
-            for i, item in enumerate(limited_hits):
-                if item in processed_results and processed_results[item]:
-                    limited_hits[i] = processed_results[item]
+            for idx, (_, processed) in enumerate(processed_results):
+                if processed:
+                    limited_hits[idx] = processed
 
             hits = limited_hits
 
@@ -725,7 +743,11 @@ def pretty_print(result: Dict[str, Any]) -> None:
                 "  Last round:",
                 cb.get("last_round_type") or "?",
                 "|",
-                f"${cb.get('last_round_amount_usd'):,}" if cb.get("last_round_amount_usd") else "?",
+                (
+                    f"${cb.get('last_round_amount_usd'):,}"
+                    if cb.get("last_round_amount_usd")
+                    else "?"
+                ),
                 "|",
                 cb.get("last_round_date") or "?",
             )
@@ -744,7 +766,9 @@ def main():
     p.add_argument("--lookback-days", type=int, default=365)
     p.add_argument("--max-results", type=int, default=8)
     p.add_argument(
-        "--fetch-pages", type=lambda s: str(s).lower() in ("1", "true", "yes", "y"), default=True
+        "--fetch-pages",
+        type=lambda s: str(s).lower() in ("1", "true", "yes", "y"),
+        default=True,
     )
     p.add_argument("--out-json", help="Path to write JSON (optional)")
     p.add_argument("--out-csv", help="Path to write CSV (optional)")

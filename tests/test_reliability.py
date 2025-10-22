@@ -142,7 +142,7 @@ class TestParallelProcessor:
             return x * x
 
         items = [1, 2, 3, 4, 5]
-        results = processor.process_batch(items, square_func, timeout=5.0)
+        results = dict(processor.process_batch(items, square_func, timeout=5.0))
 
         expected = {1: 1, 2: 4, 3: 9, 4: 16, 5: 25}
         assert results == expected
@@ -157,7 +157,7 @@ class TestParallelProcessor:
             return x * 2
 
         items = [1, 2, 3, 4, 5]
-        results = processor.process_batch(items, sometimes_fail, timeout=5.0)
+        results = dict(processor.process_batch(items, sometimes_fail, timeout=5.0))
 
         # Should have results for successful items and None for failed
         assert results[1] == 2
@@ -177,7 +177,7 @@ class TestParallelProcessor:
 
         items = [1, 2, 3, 4, 5]
         start_time = time.time()
-        results = processor.process_batch(items, slow_func, timeout=5.0)
+        results = dict(processor.process_batch(items, slow_func, timeout=5.0))
         elapsed = time.time() - start_time
 
         # All should succeed
@@ -333,10 +333,9 @@ class TestIntegrationReliability:
             return x * 2
 
         items = [1, 2, 3, 4]
-        results = processor.process_batch(items, reliable_func, timeout=5.0)
+        results = dict(processor.process_batch(items, reliable_func, timeout=5.0))
 
         # Some should succeed, some may fail due to reliability patterns
-        assert isinstance(results, dict)
         assert len(results) == len(items)
 
         # Verify rate limiter adapted to errors

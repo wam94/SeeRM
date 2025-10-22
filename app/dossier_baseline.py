@@ -609,7 +609,11 @@ def _openai_write_narrative(prompt: str) -> Optional[str]:
                     "model": model,
                     "input": prompt,
                     "tools": tools,
-                    "tool_choice": {"type": "allowed_tools", "mode": "required", "tools": tools},
+                    "tool_choice": {
+                        "type": "allowed_tools",
+                        "mode": "required",
+                        "tools": tools,
+                    },
                 }
                 r = client.responses.create(**kwargs)
                 return r.output_text
@@ -1068,7 +1072,10 @@ def main():
                         news_items = []
                         people_bg = []
 
-                    profile_hints = {"news_items": news_items, "people_background": people_bg}
+                    profile_hints = {
+                        "news_items": news_items,
+                        "people_background": people_bg,
+                    }
                     profile_intel: Optional[CompanyProfileIntel] = None
                     try:
                         print(f"[TIERED LLM] {cs}: Building structured profile...")
@@ -1117,7 +1124,7 @@ def main():
                         "mode": "tiered_llm",
                         "identity_confidence": identity.confidence,
                         "funding_confidence": funding_intel.confidence,
-                        "profile_confidence": profile_intel.confidence if profile_intel else 0.0,
+                        "profile_confidence": (profile_intel.confidence if profile_intel else 0.0),
                     }
 
                 except Exception as exc:
@@ -1240,11 +1247,13 @@ def main():
         batch = targets_keys[i : i + batch_size]
         print(f"Processing batch {i//batch_size + 1} ({len(batch)} companies)")
 
-        batch_results = ParallelProcessor.process_batch(
-            batch,
-            process_single_company,
-            max_workers=batch_size,
-            timeout=600,  # 10 minutes per batch
+        batch_results = dict(
+            ParallelProcessor.process_batch(
+                batch,
+                process_single_company,
+                max_workers=batch_size,
+                timeout=600,  # 10 minutes per batch
+            )
         )
 
         # Collect results
