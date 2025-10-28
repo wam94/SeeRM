@@ -271,46 +271,45 @@ def get_company_domain_data(companies_db_id: str, callsign: str) -> Dict[str, Op
 def get_all_companies_domain_data(
     companies_db_id: str, callsigns: List[str]
 ) -> Dict[str, Dict[str, Optional[str]]]:
-    """Efficiently fetch domain/website data for multiple companies from Notion."""
+    """Efficiently fetch Notion metadata for multiple companies."""
     schema = get_db_schema(companies_db_id)
     title_prop = get_title_prop_name(schema)
+    has_needs_dossier = prop_exists(schema, "Needs Dossier", "checkbox")
 
-    # Fetch all company pages (paginated)
-    all_results = []
+    all_results: List[Dict[str, Any]] = []
     has_more = True
     start_cursor = None
 
     while has_more:
-        query_params = {"page_size": 100}  # Max page size
+        query_params: Dict[str, Any] = {"page_size": 100}
         if start_cursor:
             query_params["start_cursor"] = start_cursor
 
         data = notion_query_db(companies_db_id, query_params)
-        results = data.get("results", [])
-        all_results.extend(results)
+        all_results.extend(data.get("results", []))
 
         has_more = data.get("has_more", False)
         start_cursor = data.get("next_cursor")
 
-    # Extract domain data for requested callsigns
-    domain_data = {}
-    callsigns_set = set(cs.lower() for cs in callsigns)
+    callsigns_set = {cs.lower() for cs in callsigns}
+    enriched: Dict[str, Dict[str, Optional[str]]] = {}
 
     for page in all_results:
         properties = page.get("properties", {})
-
-        # Get callsign from title
         title_prop_data = properties.get(title_prop, {})
         title_array = title_prop_data.get("title", [])
         if not title_array:
             continue
 
-        callsign = title_array[0].get("text", {}).get("content", "").strip().lower()
-        if callsign not in callsigns_set:
+        raw_callsign = title_array[0].get("text", {}).get("content", "").strip()
+        callsign_key = raw_callsign.lower()
+        if callsign_key not in callsigns_set:
             continue
 
-        # Extract domain
         domain = None
+        website = None
+        verified_domain = None
+
         domain_prop = properties.get("Domain")
         if domain_prop:
             if domain_prop.get("type") == "url":
@@ -322,20 +321,73 @@ def get_all_companies_domain_data(
                 if rich_text and rich_text[0].get("text"):
                     domain = rich_text[0]["text"].get("content", "").strip()
 
-        # Extract website
-        website = None
         website_prop = properties.get("Website")
         if website_prop and website_prop.get("type") == "url":
             website = website_prop.get("url")
 
-        domain_data[callsign] = {"domain": domain, "website": website}
+        verified_prop = properties.get("Verified Domain")
+        if verified_prop:
+            if verified_prop.get("type") == "url":
+                url = verified_prop.get("url")
+                if url:
+                    verified_domain = (
+                        url.replace("https://", "").replace("http://", "").split("/")[0]
+                    )
+            elif verified_prop.get("type") == "rich_text":
+                rich_text = verified_prop.get("rich_text", [])
+                if rich_text and rich_text[0].get("text"):
+                    verified_domain = rich_text[0]["text"].get("content", "").strip()
 
-    # Fill in missing callsigns with None values
+        latest_intel = None
+        latest_intel_at = None
+
+        latest_intel_prop = properties.get("Latest Intel")
+        if latest_intel_prop and latest_intel_prop.get("type") == "rich_text":
+            rich_text = latest_intel_prop.get("rich_text", [])
+            if rich_text and rich_text[0].get("text"):
+                latest_intel = rich_text[0]["text"].get("content", "").strip()
+
+        latest_intel_at_prop = properties.get("Last Intel At")
+        if latest_intel_at_prop and latest_intel_at_prop.get("type") == "date":
+            date_data = latest_intel_at_prop.get("date") or {}
+            latest_intel_at = date_data.get("start")
+
+        needs_dossier = False
+        if has_needs_dossier:
+            needs_prop = properties.get("Needs Dossier")
+            if needs_prop and needs_prop.get("type") == "checkbox":
+                needs_dossier = bool(needs_prop.get("checkbox"))
+
+        enriched[callsign_key] = {
+            "callsign": raw_callsign,
+            "company_name": raw_callsign,
+            "domain": domain,
+            "website": website,
+            "verified_domain": verified_domain,
+            "latest_intel": latest_intel,
+            "latest_intel_at": latest_intel_at,
+            "needs_dossier": needs_dossier,
+            "page_id": page.get("id"),
+        }
+
+    default_entry = {
+        "callsign": None,
+        "company_name": None,
+        "domain": None,
+        "website": None,
+        "verified_domain": None,
+        "latest_intel": None,
+        "latest_intel_at": None,
+        "needs_dossier": False,
+        "page_id": None,
+    }
+
     for cs in callsigns:
-        if cs.lower() not in domain_data:
-            domain_data[cs.lower()] = {"domain": None, "website": None}
+        key = cs.lower()
+        if key not in enriched:
+            enriched[key] = dict(default_entry)
 
-    return domain_data
+    return enriched
 
 
 def get_companies_needing_dossiers(companies_db_id: str) -> List[Tuple[str, str]]:

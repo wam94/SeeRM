@@ -36,6 +36,7 @@ from app.intelligence.seen_store import NotionNewsSeenStore
 from app.notion_client import (
     get_all_companies_domain_data,
     get_dossier_text,
+    page_has_dossier,
     set_latest_intel,
     upsert_company_page,
 )
@@ -1147,6 +1148,36 @@ def main():
     new_callsigns: List[str] = []
     new_callsigns_set: Set[str] = set()
 
+    def register_new_callsign(callsign: str) -> bool:
+        """Record a callsign for baseline processing if not already tracked."""
+        key = (callsign or "").strip().lower()
+        if not key or key in new_callsigns_set:
+            return False
+        new_callsigns.append(callsign)
+        new_callsigns_set.add(key)
+        return True
+
+    def emit_new_callsign_trigger() -> None:
+        """Persist newly detected callsigns for the baseline workflow."""
+        if not new_callsigns:
+            return
+
+        displayed = ", ".join(new_callsigns[:8])
+        if len(new_callsigns) > 8:
+            displayed += " ..."
+        print(f"[NEW COMPANIES] Flagged {len(new_callsigns)} company pages: {displayed}")
+
+        trigger_path = Path(tempfile.gettempdir()) / "new_callsigns.txt"
+        try:
+            trigger_path.write_text(",".join(new_callsigns), encoding="utf-8")
+            print(
+                "[TRIGGER] Wrote "
+                f"{len(new_callsigns)} new callsigns to {trigger_path} "
+                "for baseline generation"
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[ERROR] Failed to write new callsigns trigger file: {exc}")
+
     if companies_db:
         for cs, org in roster.items():
             callsign = str(org.get("callsign") or "").strip()
@@ -1164,8 +1195,7 @@ def main():
                         company=dba,
                     )
                     if created:
-                        new_callsigns.append(callsign)
-                        new_callsigns_set.add(callsign.lower())
+                        register_new_callsign(callsign)
                         # Set needs_dossier flag for new companies
                         try:
                             _set_needs_dossier(page_id, True)
@@ -1174,28 +1204,6 @@ def main():
                             print(f"[ERROR] Failed to set needs_dossier for {callsign}: {e}")
                 except Exception as e:
                     print(f"[ERROR] Failed to ensure company page for {callsign}: {e}")
-
-    if new_callsigns:
-        displayed = ", ".join(new_callsigns[:8])
-        if len(new_callsigns) > 8:
-            displayed += " ..."
-        print(f"[NEW COMPANIES] Created {len(new_callsigns)} new company pages: {displayed}")
-
-        # Write new callsigns to trigger baseline generation
-        trigger_path = Path(tempfile.gettempdir()) / "new_callsigns.txt"
-        try:
-            trigger_path.write_text(",".join(new_callsigns), encoding="utf-8")
-            trigger_msg = (
-                "[TRIGGER] Wrote "
-                f"{len(new_callsigns)} new callsigns to {trigger_path} "
-                "for baseline generation"
-            )
-            print(trigger_msg)
-        except Exception as e:
-            print(f"[ERROR] Failed to write new callsigns trigger file: {e}")
-    else:
-        # Ensure set is initialised even when Notion is unavailable
-        new_callsigns_set = set()
 
     # Fetch canonical domain data from Notion for all companies (batched for efficiency)
     PERFORMANCE_MONITOR.start_timer("notion_domain_fetch")
@@ -1214,7 +1222,47 @@ def main():
         except Exception as e:
             print(f"[ERROR] Failed to fetch domain data from Notion: {e}")
             # Fallback to empty dict
-            notion_domain_data = {cs: {"domain": None, "website": None} for cs in roster.keys()}
+            notion_domain_data = {
+                cs: {
+                    "callsign": roster.get(cs, {}).get("callsign"),
+                    "company_name": roster.get(cs, {}).get("callsign"),
+                    "domain": None,
+                    "website": None,
+                    "verified_domain": None,
+                    "latest_intel": None,
+                    "latest_intel_at": None,
+                    "needs_dossier": False,
+                    "page_id": None,
+                }
+                for cs in roster.keys()
+            }
+
+    if notion_domain_data:
+        # Promote existing Needs Dossier flags and detect missing dossiers
+        for cs_lower, data in notion_domain_data.items():
+            roster_entry = roster.get(cs_lower, {})
+            display_callsign = roster_entry.get("callsign") or data.get("callsign") or cs_lower
+            page_id = data.get("page_id")
+
+            if data.get("needs_dossier"):
+                if register_new_callsign(display_callsign):
+                    print(
+                        f"[NOTION] {display_callsign} already flagged for baseline (Needs Dossier)"
+                    )
+                continue
+
+            if not page_id:
+                continue
+
+            try:
+                if not page_has_dossier(page_id):
+                    _set_needs_dossier(page_id, True)
+                    if register_new_callsign(display_callsign):
+                        print(f"[NOTION] Flagged {display_callsign} for baseline (missing dossier)")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[NOTION] Unable to inspect dossier for {display_callsign}: {exc}")
+
+    emit_new_callsign_trigger()
 
     domain_fetch_time = PERFORMANCE_MONITOR.end_timer("notion_domain_fetch")
     print(f"[PERFORMANCE] Domain data fetch completed in {domain_fetch_time:.2f}s")
@@ -1279,6 +1327,7 @@ def main():
         collect_news_for_company,
         max_workers=6,  # Conservative for API rate limits
         timeout=300,  # 5 minutes total
+        log_prefix="intel",
     )
 
     intel_by_cs: Dict[str, List[Dict[str, Any]]] = {}
@@ -1406,6 +1455,8 @@ def main():
             bound_processor,
             max_workers=3,  # Conservative for Notion API limits
             timeout=300,
+            log_prefix="notion",
+            suppress_timeout=True,
         )
 
         notion_time = PERFORMANCE_MONITOR.end_timer("notion_updates")
