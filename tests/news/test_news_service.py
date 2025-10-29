@@ -54,8 +54,8 @@ def test_collect_company_news_filters_blocked_domains(monkeypatch):
     assert results[0].source == "good.com"
 
 
-def test_collect_company_news_applies_scoring(monkeypatch):
-    """Scoring should prioritise high-quality recent items."""
+def test_collect_company_news_preserves_all_items_for_llm(monkeypatch):
+    """Collector should retain all non-blocked items for downstream LLM filtering."""
     collector = NewsCollector(make_config())
     company = make_company()
 
@@ -72,7 +72,7 @@ def test_collect_company_news_applies_scoring(monkeypatch):
                 title="Acme posts blog update",
                 url="https://unknown.com/blog",
                 source="unknown.com",
-                published_at=(datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%d"),
+                published_at=(datetime.utcnow() - timedelta(days=1)).isoformat(),
             ),
         ]
 
@@ -80,6 +80,8 @@ def test_collect_company_news_applies_scoring(monkeypatch):
 
     results = collector.collect_company_news(company)
 
-    assert results  # not empty
-    assert results[0].source == "good.com"
-    assert results[0].relevance_score >= 0.2
+    assert len(results) == 2
+    assert results[0].source == "good.com"  # query order preserved
+    assert results[1].source == "unknown.com"
+    assert results[0].relevance_score >= 0.0
+    assert results[1].relevance_score >= 0.0

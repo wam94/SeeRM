@@ -30,6 +30,8 @@ from app.data.csv_parser import CSVProcessor, filter_dataframe_by_relationship_m
 from app.data.gmail_client import EnhancedGmailClient
 from app.data.notion_client import EnhancedNotionClient
 from app.intelligence.news_quality import NewsQualityScorer
+from app.intelligence.news_verifier import LLMNewsVerifier
+from app.notion_client import get_dossier_text
 from app.utils.reliability import ParallelProcessor, with_circuit_breaker, with_retry
 
 logger = structlog.get_logger(__name__)
@@ -198,6 +200,7 @@ class NewsCollector:
                             break
 
                     if title and link:
+                        summary = getattr(entry, "summary", "") or getattr(entry, "description", "")
                         items.append(
                             NewsItem(
                                 title=title[:500],  # Truncate long titles
@@ -205,6 +208,7 @@ class NewsCollector:
                                 source=tldextract.extract(link).registered_domain or "RSS",
                                 published_at=date,
                                 source_type=NewsItemSource.RSS,
+                                summary=(summary[:1000] or None),
                             )
                         )
 
@@ -310,6 +314,7 @@ class NewsCollector:
                             source=tldextract.extract(link).registered_domain or "Google",
                             published_at=date or snippet[:100],  # Fallback to snippet
                             source_type=NewsItemSource.GOOGLE_SEARCH,
+                            summary=(snippet[:1000] or None),
                         )
                     )
 
@@ -481,19 +486,27 @@ class NewsCollector:
         all_items = self.deduplicate_items(all_items)
         all_items = self.filter_by_date_range(all_items, self.config.lookback_days)
 
-        ranked_items = self.quality_scorer.rank_items(company, all_items, self.config.max_per_org)
+        max_candidates = max(self.config.max_per_org * 4, self.config.max_per_org)
 
-        for item in ranked_items:
+        # Deprecated deterministic ranking: we now pass the full candidate set to the LLM, only
+        # pruning hard-blocked domains while retaining relative order for transparency.
+        filtered_items = []
+        for item in all_items[:max_candidates]:
+            score, blocked = self.quality_scorer.score_item(company, item)
+            if blocked:
+                continue
+            item.relevance_score = score
             item.callsign = company.callsign
+            filtered_items.append(item)
 
         logger.info(
             "Company news collection completed",
             callsign=company.callsign,
-            items_collected=len(ranked_items),
+            items_collected=len(filtered_items),
             sources_checked=(["rss", "google_search"] if not self.config.cse_disable else ["rss"]),
         )
 
-        return ranked_items
+        return filtered_items
 
 
 class NewsService:
@@ -510,6 +523,20 @@ class NewsService:
         self.notion_client = notion_client
         self.config = config
         self.collector = NewsCollector(config)
+        self.verifier = LLMNewsVerifier()
+        self._dossier_cache: Dict[str, Optional[str]] = {}
+
+    def _get_dossier_text(self, page_id: Optional[str]) -> Optional[str]:
+        """Return cached dossier text for a company page."""
+        if not page_id:
+            return None
+        if page_id not in self._dossier_cache:
+            try:
+                self._dossier_cache[page_id] = get_dossier_text(page_id) or None
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Failed to load dossier text", page_id=page_id, error=str(exc))
+                self._dossier_cache[page_id] = None
+        return self._dossier_cache[page_id]
 
     def fetch_companies_data(self, subject_filter: Optional[str] = None) -> List[Company]:
         """
@@ -700,6 +727,41 @@ class NewsService:
 
             # Collect news items
             news_items = self.collector.collect_company_news(company, enhanced_data)
+
+            dossier_text = self._get_dossier_text((enhanced_data or {}).get("page_id"))
+            company_context = {
+                "dba": company.dba,
+                "company": getattr(company, "dba", None) or company.callsign,
+                "aka_names": company.aka_names,
+                "owners": company.beneficial_owners,
+                "website": company.website,
+                "domain_root": company.domain_root,
+                "tags": company.industry_tags,
+            }
+            if enhanced_data:
+                for key in ("owners", "website", "domain", "tags"):
+                    value = enhanced_data.get(key)
+                    if value:
+                        company_context[key if key != "domain" else "domain_root"] = value
+
+            verified_items, rejected_items = self.verifier.filter_items(
+                company_callsign=company.callsign,
+                items=news_items,
+                dossier_text=dossier_text,
+                company_context=company_context,
+            )
+
+            if rejected_items:
+                logger.info(
+                    "LLM rejected news items",
+                    callsign=company.callsign,
+                    rejected=len(rejected_items),
+                )
+
+            if len(verified_items) > self.config.max_per_org:
+                verified_items = verified_items[: self.config.max_per_org]
+
+            news_items = verified_items
 
             # Generate summary
             summary = self.summarize_intelligence(news_items) or f"{len(news_items)} new items."

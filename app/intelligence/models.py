@@ -43,6 +43,7 @@ class NewsItem:
     relevance_score: float = 0.0
     sentiment: Optional[str] = None  # "positive", "negative", "neutral"
     company_mentions: List[str] = field(default_factory=list)
+    llm_verdict: Optional[str] = None  # STRICT_YES / STRICT_NO from verifier
 
 
 @dataclass

@@ -31,8 +31,15 @@ from app.gmail_client import (
 )
 from app.intelligence.models import NewsItem, NewsType
 from app.intelligence.news_quality import NewsQualityScorer
+from app.intelligence.news_verifier import LLMNewsVerifier
 from app.intelligence.seen_store import NotionNewsSeenStore
-from app.notion_client import get_all_companies_domain_data, set_latest_intel, upsert_company_page
+from app.notion_client import (
+    get_all_companies_domain_data,
+    get_dossier_text,
+    page_has_dossier,
+    set_latest_intel,
+    upsert_company_page,
+)
 from app.performance_utils import (
     DEFAULT_RATE_LIMITER,
     PERFORMANCE_MONITOR,
@@ -51,6 +58,24 @@ logger = logging.getLogger(__name__)
 def get_quality_scorer() -> NewsQualityScorer:
     """Return shared quality scorer for news weighting."""
     return NewsQualityScorer(IntelligenceConfig())
+
+
+@functools.lru_cache(maxsize=1)
+def get_news_verifier() -> LLMNewsVerifier:
+    """Return shared LLM verifier instance."""
+    return LLMNewsVerifier()
+
+
+@functools.lru_cache(maxsize=256)
+def get_cached_dossier(page_id: str) -> Optional[str]:
+    """Return cached dossier text for a Notion page."""
+    if not page_id:
+        return None
+    try:
+        return get_dossier_text(page_id) or None
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Failed to load dossier text", page_id=page_id, error=str(exc))
+        return None
 
 
 _CORPORATE_SUFFIXES = {
@@ -368,7 +393,16 @@ def _try_feed(url: str) -> tuple[List[Dict[str, Any]], Optional[str]]:
                 if hasattr(e, key):
                     date = getattr(e, key) or ""
                     break
-            out.append({"title": title, "url": link, "source": "", "published_at": date})
+            summary = getattr(e, "summary", "") or getattr(e, "description", "") or ""
+            out.append(
+                {
+                    "title": title,
+                    "url": link,
+                    "source": "",
+                    "published_at": date,
+                    "summary": summary,
+                }
+            )
 
     return out, successful_feed_url
 
@@ -456,6 +490,7 @@ def google_cse_search(
                 "url": link,
                 "source": "",  # normalized later
                 "published_at": dt or snippet,  # fallback: snippet may contain date-ish text
+                "summary": snippet,
             }
         )
     return out
@@ -508,6 +543,7 @@ def _dict_to_news_item(data: Dict[str, Any], callsign: str) -> NewsItem:
         relevance_score=float(data.get("relevance_score") or 0.0),
         sentiment=(data.get("sentiment") or None),
         company_mentions=[callsign.upper()],
+        llm_verdict=data.get("llm_verdict") or None,
     )
 
 
@@ -527,6 +563,7 @@ def _news_item_to_dict(item: NewsItem) -> Dict[str, Any]:
         "relevance_score": item.relevance_score,
         "sentiment": item.sentiment,
         "summary": item.summary,
+        "llm_verdict": item.llm_verdict,
     }
 
 
@@ -604,6 +641,7 @@ def normalize_news_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "title": title,
                 "source": src,
                 "published_at": _iso_date(date),
+                "summary": (it.get("summary") or "").strip(),
             }
         )
     return out
@@ -716,8 +754,6 @@ def collect_recent_news(
                 if result:
                     owned_items += result
 
-    scorer = get_quality_scorer()
-
     # Score and select external items
     external_items = dedupe(external_items, key=lambda x: x.get("url"))
     external_items = [
@@ -727,29 +763,29 @@ def collect_recent_news(
     ]
     external_normalized = normalize_news_items(external_items)
 
-    external_models = [
-        NewsItem(
-            title=item["title"] or item["url"],
-            url=item["url"],
-            source=item["source"],
-            published_at=item.get("published_at"),
-            news_type=NewsType.OTHER_NOTABLE,
-            relevance_score=0.0,
-            sentiment=None,
-            company_mentions=[company_model.callsign.upper()],
-        )
-        for item in external_normalized
-    ]
-
-    ranked_external = scorer.rank_items(company_model, external_models, max_items)
+    max_candidates = max(max_items * 4, max_items)
     external_filtered = [
         {
             "url": item.url,
             "title": item.title,
             "source": item.source,
             "published_at": item.published_at,
+            "summary": item.summary,
         }
-        for item in ranked_external
+        for item in [
+            NewsItem(
+                title=entry["title"] or entry["url"],
+                url=entry["url"],
+                source=entry["source"],
+                published_at=entry.get("published_at"),
+                news_type=NewsType.OTHER_NOTABLE,
+                relevance_score=0.0,
+                sentiment=None,
+                company_mentions=[company_model.callsign.upper()],
+                summary=entry.get("summary") or None,
+            )
+            for entry in external_normalized
+        ][:max_candidates]
     ]
 
     # Always include owned-domain items that are within the lookback window
@@ -771,7 +807,18 @@ def collect_recent_news(
         if url:
             existing_urls.add(url)
 
-    combined_filtered = external_filtered + owned_filtered
+    owned_filtered = [
+        {
+            "url": item.get("url"),
+            "title": item.get("title"),
+            "source": item.get("source"),
+            "published_at": item.get("published_at"),
+            "summary": item.get("summary"),
+        }
+        for item in owned_filtered
+    ]
+
+    combined_filtered = (external_filtered + owned_filtered)[:max_candidates]
 
     return combined_filtered, source_metadata
 
@@ -1101,6 +1148,36 @@ def main():
     new_callsigns: List[str] = []
     new_callsigns_set: Set[str] = set()
 
+    def register_new_callsign(callsign: str) -> bool:
+        """Record a callsign for baseline processing if not already tracked."""
+        key = (callsign or "").strip().lower()
+        if not key or key in new_callsigns_set:
+            return False
+        new_callsigns.append(callsign)
+        new_callsigns_set.add(key)
+        return True
+
+    def emit_new_callsign_trigger() -> None:
+        """Persist newly detected callsigns for the baseline workflow."""
+        if not new_callsigns:
+            return
+
+        displayed = ", ".join(new_callsigns[:8])
+        if len(new_callsigns) > 8:
+            displayed += " ..."
+        print(f"[NEW COMPANIES] Flagged {len(new_callsigns)} company pages: {displayed}")
+
+        trigger_path = Path(tempfile.gettempdir()) / "new_callsigns.txt"
+        try:
+            trigger_path.write_text(",".join(new_callsigns), encoding="utf-8")
+            print(
+                "[TRIGGER] Wrote "
+                f"{len(new_callsigns)} new callsigns to {trigger_path} "
+                "for baseline generation"
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[ERROR] Failed to write new callsigns trigger file: {exc}")
+
     if companies_db:
         for cs, org in roster.items():
             callsign = str(org.get("callsign") or "").strip()
@@ -1118,8 +1195,7 @@ def main():
                         company=dba,
                     )
                     if created:
-                        new_callsigns.append(callsign)
-                        new_callsigns_set.add(callsign.lower())
+                        register_new_callsign(callsign)
                         # Set needs_dossier flag for new companies
                         try:
                             _set_needs_dossier(page_id, True)
@@ -1128,28 +1204,6 @@ def main():
                             print(f"[ERROR] Failed to set needs_dossier for {callsign}: {e}")
                 except Exception as e:
                     print(f"[ERROR] Failed to ensure company page for {callsign}: {e}")
-
-    if new_callsigns:
-        displayed = ", ".join(new_callsigns[:8])
-        if len(new_callsigns) > 8:
-            displayed += " ..."
-        print(f"[NEW COMPANIES] Created {len(new_callsigns)} new company pages: {displayed}")
-
-        # Write new callsigns to trigger baseline generation
-        trigger_path = Path(tempfile.gettempdir()) / "new_callsigns.txt"
-        try:
-            trigger_path.write_text(",".join(new_callsigns), encoding="utf-8")
-            trigger_msg = (
-                "[TRIGGER] Wrote "
-                f"{len(new_callsigns)} new callsigns to {trigger_path} "
-                "for baseline generation"
-            )
-            print(trigger_msg)
-        except Exception as e:
-            print(f"[ERROR] Failed to write new callsigns trigger file: {e}")
-    else:
-        # Ensure set is initialised even when Notion is unavailable
-        new_callsigns_set = set()
 
     # Fetch canonical domain data from Notion for all companies (batched for efficiency)
     PERFORMANCE_MONITOR.start_timer("notion_domain_fetch")
@@ -1168,7 +1222,47 @@ def main():
         except Exception as e:
             print(f"[ERROR] Failed to fetch domain data from Notion: {e}")
             # Fallback to empty dict
-            notion_domain_data = {cs: {"domain": None, "website": None} for cs in roster.keys()}
+            notion_domain_data = {
+                cs: {
+                    "callsign": roster.get(cs, {}).get("callsign"),
+                    "company_name": roster.get(cs, {}).get("callsign"),
+                    "domain": None,
+                    "website": None,
+                    "verified_domain": None,
+                    "latest_intel": None,
+                    "latest_intel_at": None,
+                    "needs_dossier": False,
+                    "page_id": None,
+                }
+                for cs in roster.keys()
+            }
+
+    if notion_domain_data:
+        # Promote existing Needs Dossier flags and detect missing dossiers
+        for cs_lower, data in notion_domain_data.items():
+            roster_entry = roster.get(cs_lower, {})
+            display_callsign = roster_entry.get("callsign") or data.get("callsign") or cs_lower
+            page_id = data.get("page_id")
+
+            if data.get("needs_dossier"):
+                if register_new_callsign(display_callsign):
+                    print(
+                        f"[NOTION] {display_callsign} already flagged for baseline (Needs Dossier)"
+                    )
+                continue
+
+            if not page_id:
+                continue
+
+            try:
+                if not page_has_dossier(page_id):
+                    _set_needs_dossier(page_id, True)
+                    if register_new_callsign(display_callsign):
+                        print(f"[NOTION] Flagged {display_callsign} for baseline (missing dossier)")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[NOTION] Unable to inspect dossier for {display_callsign}: {exc}")
+
+    emit_new_callsign_trigger()
 
     domain_fetch_time = PERFORMANCE_MONITOR.end_timer("notion_domain_fetch")
     print(f"[PERFORMANCE] Domain data fetch completed in {domain_fetch_time:.2f}s")
@@ -1233,6 +1327,7 @@ def main():
         collect_news_for_company,
         max_workers=6,  # Conservative for API rate limits
         timeout=300,  # 5 minutes total
+        log_prefix="intel",
     )
 
     intel_by_cs: Dict[str, List[Dict[str, Any]]] = {}
@@ -1265,20 +1360,60 @@ def main():
 
         source_metadata_by_cs[cs] = source_metadata
 
+        org = roster.get(cs, {})
+        company_callsign = str(org.get("callsign") or cs or "").strip() or cs
+        candidate_items = [_dict_to_news_item(item, company_callsign) for item in items_list]
+
+        notion_meta = notion_domain_data.get(cs) or {}
+        page_id = notion_meta.get("page_id")
+        dossier_text = get_cached_dossier(page_id) if page_id else None
+
+        company_context = {
+            "dba": org.get("dba"),
+            "company": org.get("company"),
+            "aka_names": org.get("aka_names"),
+            "owners": org.get("owners"),
+            "website": org.get("website"),
+            "domain_root": org.get("domain_root"),
+            "tags": org.get("industry_tags"),
+        }
+
+        if notion_meta.get("verified_domain"):
+            company_context["domain_root"] = notion_meta.get("verified_domain")
+        elif notion_meta.get("domain"):
+            company_context["domain_root"] = notion_meta.get("domain")
+        if notion_meta.get("website"):
+            company_context["website"] = notion_meta.get("website")
+
+        verifier = get_news_verifier()
+        accepted_items, rejected_items = verifier.filter_items(
+            company_callsign=company_callsign,
+            items=candidate_items,
+            dossier_text=dossier_text,
+            company_context=company_context,
+        )
+
+        if rejected_items:
+            logger.info(
+                "LLM rejected news items",
+                callsign=company_callsign,
+                rejected=len(rejected_items),
+            )
+
+        if len(accepted_items) > max_per_org:
+            accepted_items = accepted_items[:max_per_org]
+
         if news_store:
-            org = roster.get(cs, {})
-            company_callsign = str(org.get("callsign") or cs or "").strip() or cs
-            candidate_items = [_dict_to_news_item(item, company_callsign) for item in items_list]
             new_items, existing_items = news_store.filter_new_items(
                 company_callsign,
-                candidate_items,
+                accepted_items,
             )
             filtered_news_by_cs[cs] = new_items
             if existing_items:
                 print(f"[DEDUP] {cs} skipped {len(existing_items)} archived items")
             intel_by_cs[cs] = [_news_item_to_dict(item) for item in new_items]
         else:
-            intel_by_cs[cs] = items_list
+            intel_by_cs[cs] = [_news_item_to_dict(item) for item in accepted_items]
 
     collection_time = PERFORMANCE_MONITOR.end_timer("intel_collection")
     print(f"[PERFORMANCE] Intel collection completed in {collection_time:.2f}s")
@@ -1320,6 +1455,8 @@ def main():
             bound_processor,
             max_workers=3,  # Conservative for Notion API limits
             timeout=300,
+            log_prefix="notion",
+            suppress_timeout=True,
         )
 
         notion_time = PERFORMANCE_MONITOR.end_timer("notion_updates")
