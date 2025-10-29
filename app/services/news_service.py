@@ -487,19 +487,21 @@ class NewsCollector:
         all_items = self.filter_by_date_range(all_items, self.config.lookback_days)
 
         max_candidates = max(self.config.max_per_org * 4, self.config.max_per_org)
-        all_items = all_items[:max_candidates]
+        ranked_items = self.quality_scorer.rank_items(
+            company, all_items[:max_candidates], self.config.max_per_org
+        )
 
-        for item in all_items:
+        for item in ranked_items:
             item.callsign = company.callsign
 
         logger.info(
             "Company news collection completed",
             callsign=company.callsign,
-            items_collected=len(all_items),
+            items_collected=len(ranked_items),
             sources_checked=(["rss", "google_search"] if not self.config.cse_disable else ["rss"]),
         )
 
-        return all_items
+        return ranked_items
 
 
 class NewsService:
