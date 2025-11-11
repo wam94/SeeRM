@@ -5,7 +5,7 @@ Provides command-line interface for generating company deep dives,
 new client summaries, and weekly news digests.
 """
 
-from typing import Optional
+from typing import List, Optional
 
 import click
 import structlog
@@ -154,9 +154,15 @@ def new_clients(callsigns: Optional[str], no_email: bool, config_file: Optional[
 
 @reports.command()
 @click.option("--days", default=7, help="Number of days to look back for news")
+@click.option("--callsigns", help="Comma-separated callsigns to limit analysis")
 @click.option("--no-email", is_flag=True, help="Skip email delivery")
 @click.option("--config-file", type=click.Path(exists=True), help="Configuration file path")
-def weekly_news(days: int, no_email: bool, config_file: Optional[str]):
+def weekly_news(
+    days: int,
+    callsigns: Optional[str],
+    no_email: bool,
+    config_file: Optional[str],
+):
     """
     Generate weekly news digest report.
 
@@ -166,14 +172,27 @@ def weekly_news(days: int, no_email: bool, config_file: Optional[str]):
         settings = Settings(_env_file=config_file if config_file else None)
         aggregator, notion_client = _create_services(settings)
 
-        click.echo(f"Generating weekly news digest ({days} days)...")
+        filter_callsigns: Optional[List[str]] = None
+        if callsigns:
+            filter_callsigns = [cs.strip().upper() for cs in callsigns.split(",") if cs.strip()]
+            if filter_callsigns:
+                click.echo(
+                    f"Generating weekly news digest ({days} days) for "
+                    f"{', '.join(filter_callsigns)}..."
+                )
+        if not filter_callsigns:
+            click.echo(f"Generating weekly news digest ({days} days)...")
 
         # Generate report
         report_generator = WeeklyNewsReport(
             aggregator=aggregator, notion_client=notion_client, settings=settings
         )
 
-        report = report_generator.generate(days=days, include_email=not no_email)
+        report = report_generator.generate(
+            days=days,
+            include_email=not no_email,
+            callsigns=filter_callsigns,
+        )
 
         if report:
             click.echo(f"✓ Report generated: {report.title}")
