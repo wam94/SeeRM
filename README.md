@@ -32,9 +32,8 @@ SeeRM is an enterprise-grade client intelligence platform that automates portfol
 - [Development](#-development)
 - [Testing](#-testing)
 - [Deployment](#-deployment)
- - [Mac Onboarding](#-mac-onboarding)
 - [Contributing](#-contributing)
- - [Releases](#-releases)
+- [Releases](#-releases)
 
 ## 🏗️ System Overview
 
@@ -59,15 +58,23 @@ SeeRM/
 ├── app/
 │   ├── core/              # Configuration, models, logging
 │   ├── data/              # Data access (Gmail, Notion, CSV)
-│   ├── services/          # Business logic
-│   ├── workflows/         # End-to-end orchestration
-│   ├── intelligence/      # Intelligence reports system
+│   ├── services/          # Next-gen business logic (under development)
+│   ├── workflows/         # Digest orchestration (click CLI)
+│   ├── intelligence/      # LLM enrichment + report generation
 │   ├── reports/           # Report generators
 │   └── utils/             # Reliability patterns
 ├── tests/                 # Comprehensive test suite
 ├── .github/workflows/     # GitHub Actions automation
-└── archive/               # Legacy scripts
+└── archive/               # Legacy helpers kept for reference
 ```
+
+#### Production workflow map
+
+- **Weekly digest + CSV ingestion**: `app/workflows/weekly_digest.py` orchestrates Gmail ingestion through the legacy helpers in `app/gmail_client.py`. This path is invoked by `.github/workflows/main.yml`.
+- **News intelligence + baseline dossiers**: `.github/workflows/news.yml` and `.github/workflows/baseline.yml` call directly into `app/news_job.py` and `app/dossier_baseline.py`. These legacy modules own the current Notion writes and inbox delivery.
+- **Next-gen services**: `app/services/digest_service.py` and `app/services/render_service.py` power the Click CLI. News/baseline intelligence remains in `app/news_job.py` / `app/dossier_baseline.py` now that we moved fully to the LLM-driven flow.
+
+> 📦 **Sample data**: sanitized CSVs for local testing live in `files/`. `pytest` fixtures consume `files/Will Accounts Demographics_2025-09-01T09_09_22.742205229Z.csv`. Another roster snapshot (`files/SeeRM_Master_Query_2025-09-01T09_05_03.416470514Z.csv`) matches the production “Org Profile — Will Mitchell” export.
 
 ## ⚡ Quick Start
 
@@ -291,22 +298,13 @@ pre-commit install
 python -m app.main --debug --dry-run digest-dry-run
 ```
 
-## 💻 Mac Onboarding
+## 💻 Deployment Footprint
 
-For a zero-terminal teammate experience on macOS, the repository ships
-scaffolding in `scripts/onboarding/` plus a detailed playbook in
-[`docs/mac_onboarding.md`](docs/mac_onboarding.md). The flow covers:
-
-- Pulling secrets from 1Password via a double-clickable bootstrapper
-- Guiding teammates through the Gmail OAuth consent screen
-- Providing a Tkinter-based “Control Center” for common SeeRM jobs
-- Publishing update manifests so non-technical users can self-service upgrades
-
-Generate the `.app` bundles with `python scripts/onboarding/build_mac_apps.py`
-before packaging the release DMG or zip.
-
-Use this alongside the regular GitHub Actions deployment so teammates can run
-local dry runs while production continues in your central automation.
+SeeRM now runs exclusively through hosted automation (GitHub Actions in production
+and the CLI for local testing). We no longer ship desktop installers, setup wizards,
+or DMG bundles—those responsibilities move to the downstream engineering team that
+operates the platform. Use the CLI (`python -m app.main …`) or the scheduled workflows
+for every environment.
 
 ## 🧪 Testing
 
@@ -544,21 +542,12 @@ week to week.
 
 ## 🏷️ Releases
 
-We publish wheels to GitHub Releases. Two options:
-
-- Tag-driven release (recommended):
-  1. Bump `version` in `pyproject.toml`.
-  2. Create a tag: `git tag v0.1.0 && git push origin v0.1.0`.
-  3. GitHub Actions builds the wheel/sdist and attaches them to the new Release.
-
-- Manual release via workflow_dispatch:
-  1. Open GitHub → Actions → `Release` workflow → `Run workflow`.
-  2. Provide the `tag` (e.g., `v0.1.0`) and optionally mark as prerelease.
-  3. The workflow builds artifacts and creates/updates the Release.
-
-Artifacts:
-- Wheel and sdist appear under the Release assets.
-- Consumers can install with `pipx install https://github.com/<org>/<repo>/releases/download/vX.Y.Z/seerm-X.Y.Z-py3-none-any.whl`.
+Binary installers and wheel publishing have been retired. The hosted engineering
+team now owns packaging and deployment, so this repository focuses solely on the
+automation workflows (`main.yml`, `news.yml`, `baseline.yml`, etc.) and the CLI.
+If you need to run locally, install via `pip install -r requirements.txt` and
+invoke `python -m app.main …`; there is no longer a pipx/DMG distribution path
+inside this repo.
 
 ## 🔐 Security & Privacy
 
