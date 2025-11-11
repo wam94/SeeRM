@@ -75,12 +75,17 @@ def news(ctx, callsigns: Optional[str], lookback_days: int, no_email: bool):
     the expected interface for the news intelligence workflow.
     """
     try:
+        filter_callsigns = None
+        if callsigns:
+            filter_callsigns = [cs.strip().upper() for cs in callsigns.split(",") if cs.strip()]
+
         # Use the existing weekly-news report functionality
         ctx.invoke(
             reports.commands["weekly-news"],
             days=lookback_days,
             no_email=no_email,
             config_file=None,
+            callsigns=filter_callsigns,
         )
     except Exception as e:
         console.print(f"[red]News Intelligence Error:[/red] {e}")

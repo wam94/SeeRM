@@ -7,7 +7,6 @@ information during ad-hoc dossier refreshes.
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from dataclasses import dataclass, field
@@ -16,6 +15,7 @@ from typing import Any, Dict, List, Optional
 import structlog
 
 from app.core.exceptions import OpenAIError
+from app.intelligence.json_utils import coerce_json_payload
 
 try:  # Optional dependency, only needed when flag is enabled
     from openai import OpenAI
@@ -299,33 +299,6 @@ def _parse_amount(value: Any) -> Optional[float]:
 _CACHE: Dict[str, LLMCompanyIntel] = {}
 
 
-def _coerce_json_payload(text: Optional[str]) -> Dict[str, Any]:
-    if not text:
-        raise ValueError("Empty payload")
-
-    candidate = text.strip()
-
-    if candidate.startswith("```"):
-        parts = candidate.split("```")
-        for part in parts:
-            part = part.strip()
-            if part.startswith("{"):
-                candidate = part
-                break
-
-    try:
-        return json.loads(candidate)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", candidate, re.DOTALL)
-        if match:
-            snippet = match.group(0)
-            try:
-                return json.loads(snippet)
-            except json.JSONDecodeError:
-                pass
-        raise ValueError("Could not extract JSON from payload")
-
-
 def resolve_company_intel(org: Dict[str, Any], *, force_refresh: bool = False) -> LLMCompanyIntel:
     """Resolve domain and funding using the OpenAI Responses API with web search."""
     cache_key = (org.get("callsign") or org.get("dba") or "").strip().lower()
@@ -371,7 +344,7 @@ def resolve_company_intel(org: Dict[str, Any], *, force_refresh: bool = False) -
         raise OpenAIError("Empty response from OpenAI", {"model": model})
 
     try:
-        data = _coerce_json_payload(raw_text)
+        data = coerce_json_payload(raw_text)
     except ValueError as exc:  # noqa: BLE001
         raise OpenAIError("Failed to parse OpenAI JSON payload", {"payload": raw_text}) from exc
 

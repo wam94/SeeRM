@@ -7,7 +7,7 @@ and organized by company for portfolio intelligence.
 
 import html
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import structlog
 
@@ -45,7 +45,12 @@ class WeeklyNewsReport:
         logger.info("Weekly news report generator initialized")
 
     @track_performance("generate_weekly_news_report")
-    def generate(self, days: int = 7, include_email: bool = True) -> Optional[Report]:
+    def generate(
+        self,
+        days: int = 7,
+        include_email: bool = True,
+        callsigns: Optional[List[str]] = None,
+    ) -> Optional[Report]:
         """
         Generate weekly news digest report.
 
@@ -69,7 +74,9 @@ class WeeklyNewsReport:
 
         try:
             # Step 1: Gather news data
-            news_items = self.aggregator.get_news_stream(days=days)
+            if callsigns:
+                logger.info("Applying callsign filter to weekly news", callsigns=callsigns)
+            news_items = self.aggregator.get_news_stream(days=days, callsigns=callsigns)
 
             if not news_items:
                 logger.info("No news items found for this period")
@@ -91,7 +98,11 @@ class WeeklyNewsReport:
                 report_type="weekly_news_digest",
                 generated_at=start_time,
                 data_sources=["notion_intel"],
-                parameters={"days": days, "week_of": week_of},
+                parameters={
+                    "days": days,
+                    "week_of": week_of,
+                    "callsigns": callsigns or [],
+                },
                 duration_seconds=(datetime.utcnow() - start_time).total_seconds(),
             )
 

@@ -419,16 +419,21 @@ class IntelligenceAggregator:
         return categorized
 
     @track_performance("get_news_stream")
-    def get_news_stream(self, days: int = 7) -> List[NewsItem]:
+    def get_news_stream(
+        self, days: int = 7, callsigns: Optional[List[str]] = None
+    ) -> List[NewsItem]:
         """
         Get all news across the portfolio for a time period.
 
         Args:
             days: Number of days to look back
+            callsigns: Optional subset of callsigns to include
 
         Returns:
             List of all NewsItem objects across portfolio
         """
+        callsign_filter = {cs.strip().lower() for cs in (callsigns or []) if cs.strip()}
+
         # Get all companies from movements
         movements = self.get_latest_movements()
 
@@ -438,6 +443,20 @@ class IntelligenceAggregator:
                 days=days,
             )
             return []
+
+        if callsign_filter:
+            movements = [
+                movement
+                for movement in movements
+                if movement.callsign and movement.callsign.lower() in callsign_filter
+            ]
+            if not movements:
+                logger.info(
+                    "No movements matched callsign filter",
+                    callsigns=list(callsign_filter),
+                    days=days,
+                )
+                return []
 
         # Use parallel processing to fetch news for all companies
         worker_count = max(1, min(10, len(movements)))
@@ -471,10 +490,19 @@ class IntelligenceAggregator:
         # Sort by date (most recent first)
         all_news.sort(key=lambda x: x.published_at, reverse=True)
 
+        if callsign_filter:
+            filtered_news = []
+            for item in all_news:
+                mentions = [m.lower() for m in (item.company_mentions or [])]
+                if any(m in callsign_filter for m in mentions):
+                    filtered_news.append(item)
+            all_news = filtered_news
+
         logger.info(
             "News stream compiled and classified",
             total_items=len(all_news),
             days=days,
+            callsign_filter=list(callsign_filter) if callsign_filter else None,
             companies=len(movements),
         )
 

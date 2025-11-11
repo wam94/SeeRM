@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 
 import structlog
 
+from app.intelligence.json_utils import coerce_json_payload
 from app.intelligence.llm_identity_agent import CompanyIdentity
 from app.intelligence.research_models import CompanyResearchContext
 
@@ -172,6 +173,8 @@ class LLMFundingAgent:
             }
             if self.temperature is not None and not model_name.lower().startswith("gpt-5"):
                 request_kwargs["temperature"] = self.temperature
+            if model_name.lower().startswith("gpt-5"):
+                request_kwargs["response_format"] = {"type": "json_object"}
 
             response = self.client.responses.create(**request_kwargs)
 
@@ -179,7 +182,7 @@ class LLMFundingAgent:
             if not payload:
                 raise ValueError("Empty response payload from funding agent")
 
-            result = json.loads(payload)
+            result = coerce_json_payload(payload)
             funding = self._parse_response(result)
 
             logger.info(

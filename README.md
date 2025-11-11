@@ -189,6 +189,7 @@ python -m app.main reports new-clients
 
 # News summary
 python -m app.main reports weekly-news
+python -m app.main reports weekly-news --callsigns "ACME,BETA"
 ```
 
 📖 **[Full Intelligence Reports Documentation →](INTELLIGENCE_REPORTS.md)**
@@ -249,6 +250,7 @@ python -m app.main reports new-clients --callsigns "ACME,BETA,GAMMA"
 # Portfolio news digest
 python -m app.main reports weekly-news
 python -m app.main reports weekly-news --days 14
+python -m app.main reports weekly-news --callsigns "ACME,BETA"
 ```
 
 ### Advanced Options
