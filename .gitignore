@@ -60,3 +60,6 @@ logs/
 node_modules/
 package-lock.json
 package.json
+
+# PII datasets
+files/
