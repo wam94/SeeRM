@@ -341,6 +341,78 @@ class IntelligenceAggregator:
             logger.warning("Failed to get company news", callsign=callsign, error=str(e))
             return []
 
+    def _get_latest_intel_items(self, callsigns: List[str], days: int = 7) -> List[NewsItem]:
+        """Return LLM-filtered blurbs from the Companies database for supplied callsigns."""
+        if not self.notion_client or not self.settings.notion.companies_db_id:
+            logger.debug("Latest intel unavailable - Notion not configured")
+            return []
+
+        filtered_callsigns = [cs for cs in callsigns if cs]
+        if not filtered_callsigns:
+            return []
+
+        try:
+            companies_data = self.notion_client.get_all_companies_domain_data(
+                self.settings.notion.companies_db_id, filtered_callsigns
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to fetch latest intel blurbs", error=str(exc))
+            return []
+
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        items: List[NewsItem] = []
+
+        for callsign in filtered_callsigns:
+            data = companies_data.get(callsign.lower())
+            if not data:
+                continue
+
+            latest_intel = data.get("latest_intel")
+            latest_intel_at = data.get("latest_intel_at")
+            if (
+                not latest_intel
+                or not latest_intel.strip()
+                or latest_intel.startswith("0 new items")
+            ):
+                continue
+
+            intel_date = datetime.utcnow()
+            if latest_intel_at:
+                try:
+                    intel_date = datetime.fromisoformat(latest_intel_at.replace("Z", "+00:00"))
+                except ValueError:
+                    logger.debug(
+                        "Could not parse intel date",
+                        callsign=callsign,
+                        date=latest_intel_at,
+                    )
+
+            if intel_date < cutoff_date:
+                continue
+
+            items.append(
+                NewsItem(
+                    title=f"{callsign.upper()} Weekly Intel",
+                    url="",
+                    source="Notion Companies DB",
+                    published_at=intel_date.isoformat(),
+                    summary=latest_intel,
+                    news_type=NewsType.OTHER_NOTABLE,
+                    relevance_score=0.85,
+                    sentiment="neutral",
+                    company_mentions=[callsign.upper()],
+                )
+            )
+
+        logger.info(
+            "Latest intel blurbs retrieved",
+            requested=len(filtered_callsigns),
+            returned=len(items),
+            days=days,
+        )
+
+        return items
+
     @track_performance("get_company_360")
     def get_company_360(self, callsign: str) -> CompanyIntelligence:
         """
@@ -420,7 +492,10 @@ class IntelligenceAggregator:
 
     @track_performance("get_news_stream")
     def get_news_stream(
-        self, days: int = 7, callsigns: Optional[List[str]] = None
+        self,
+        days: int = 7,
+        callsigns: Optional[List[str]] = None,
+        use_latest_intel: bool = False,
     ) -> List[NewsItem]:
         """
         Get all news across the portfolio for a time period.
@@ -458,34 +533,44 @@ class IntelligenceAggregator:
                 )
                 return []
 
-        # Use parallel processing to fetch news for all companies
-        worker_count = max(1, min(10, len(movements)))
-        processor = get_parallel_processor(max_workers=worker_count)
         callsigns = [movement.callsign for movement in movements]
 
-        # Fetch news in parallel
-        news_by_company = processor.parallel_fetch_news(
-            companies=callsigns, fetch_news_func=self.get_company_news, days=days
-        )
+        if use_latest_intel:
+            all_news = self._get_latest_intel_items(callsigns, days)
+            processor = None
+        else:
+            # Use parallel processing to fetch news for all companies
+            worker_count = max(1, min(10, len(movements)))
+            processor = get_parallel_processor(max_workers=worker_count)
 
-        # Flatten news items
-        all_news = []
-        for company_news in news_by_company.values():
-            all_news.extend(company_news)
+            # Fetch news in parallel
+            news_by_company = processor.parallel_fetch_news(
+                companies=callsigns, fetch_news_func=self.get_company_news, days=days
+            )
+
+            # Flatten news items
+            all_news = []
+            for company_news in news_by_company.values():
+                all_news.extend(company_news)
 
         # Classify news items using intelligent categorization
         if all_news:
-            # Batch news items for parallel classification
             batch_size = 20
             news_batches = [
                 all_news[i : i + batch_size] for i in range(0, len(all_news), batch_size)
             ]
 
-            # Classify in parallel batches
-            all_news = processor.batch_classify_news(
-                news_items_batches=news_batches,
-                classify_func=self.news_classifier.classify_news_items,
-            )
+            classify_func = self.news_classifier.classify_news_items
+            if processor:
+                all_news = processor.batch_classify_news(
+                    news_items_batches=news_batches,
+                    classify_func=classify_func,
+                )
+            else:
+                classified: List[NewsItem] = []
+                for batch in news_batches:
+                    classified.extend(classify_func(batch))
+                all_news = classified
 
         # Sort by date (most recent first)
         all_news.sort(key=lambda x: x.published_at, reverse=True)
@@ -504,6 +589,7 @@ class IntelligenceAggregator:
             days=days,
             callsign_filter=list(callsign_filter) if callsign_filter else None,
             companies=len(movements),
+            latest_intel_mode=use_latest_intel,
         )
 
         return all_news
