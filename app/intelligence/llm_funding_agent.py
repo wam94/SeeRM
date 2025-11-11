@@ -164,7 +164,6 @@ class LLMFundingAgent:
                 "model": model_name,
                 "input": prompt,
                 "tools": tools,
-                "text": {"format": {"type": "json_object"}},
                 "tool_choice": {
                     "type": "allowed_tools",
                     "mode": "required",

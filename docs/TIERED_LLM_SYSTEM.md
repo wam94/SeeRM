@@ -10,6 +10,11 @@ Instead of rigid rules and regex parsing, the system now relies on GPT-4o-mini/G
 - Map products, target customers, and GTM motions into structured fields
 - Generate fact-based dossiers adapted to confidence level
 
+> ℹ️ **Sample CSVs**  
+> You can reproduce production behaviour without Gmail by pointing `CSV_SOURCE_PATH`
+> (or the baseline helpers) at the sanitized fixtures in `files/`
+> such as `files/SeeRM_Master_Query_2025-09-01T09_05_03.416470514Z.csv`.
+
 ## Architecture
 
 ```

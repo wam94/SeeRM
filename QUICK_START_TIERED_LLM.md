@@ -8,6 +8,11 @@
 
 ## Quick Test (Single Company)
 
+> 💡 **Sample data**: If you just want to smoke-test the pipeline, point `CSV_SOURCE_PATH`
+> (or drop the Gmail requirement entirely) at one of the sanitized fixtures in `files/`
+> such as `files/SeeRM_Master_Query_2025-09-01T09_05_03.416470514Z.csv`.
+> These snapshots mirror the “Org Profile — Will Mitchell” Gmail export that the cron jobs ingest.
+
 ### 1. Set Environment Variables
 
 ```bash
@@ -35,6 +40,9 @@ export BASELINE_CALLSIGNS="test-company-callsign"  # Single company for testing
 ```
 
 ### 2. Run Baseline Generator
+
+The production cron job (`.github/workflows/baseline.yml`) invokes this same module, so
+running it locally exercises the exact code path that updates Notion.
 
 ```bash
 python -m app.dossier_baseline
