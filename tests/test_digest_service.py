@@ -8,6 +8,7 @@ from app.core.config import DigestConfig
 from app.core.models import Company, DigestData, DigestStats
 from app.services.digest_service import DigestService
 from app.services.render_service import DigestRenderer
+from tests.sample_data import SANITIZED_ACCOUNTS_CSV
 
 
 class TestDigestService:
@@ -188,9 +189,7 @@ class TestPerformanceBenchmarks:
 
         try:
             start_time = time.time()
-            companies, digest_data = parse_csv_file(
-                "files/Will Accounts Demographics_2025-09-01T09_09_22.742205229Z.csv"
-            )
+            companies, digest_data = parse_csv_file(SANITIZED_ACCOUNTS_CSV)
             parse_time = (time.time() - start_time) * 1000  # Convert to ms
 
             # Performance assertions
@@ -245,9 +244,7 @@ class TestOriginalCompatibility:
         from app.data.csv_parser import parse_csv_file
 
         try:
-            companies, digest_data = parse_csv_file(
-                "files/Will Accounts Demographics_2025-09-01T09_09_22.742205229Z.csv"
-            )
+            companies, digest_data = parse_csv_file(SANITIZED_ACCOUNTS_CSV)
 
             # Test output structure matches original parse_csv_to_context format
             assert "stats" in digest_data

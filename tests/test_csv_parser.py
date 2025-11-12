@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from app.data.csv_parser import CSVProcessor, parse_csv_data
+from tests.sample_data import SANITIZED_ACCOUNTS_CSV
 
 
 class TestCSVProcessor:
@@ -118,7 +119,7 @@ testco,Test Company,test.com,"[""John Doe""]"
 @pytest.fixture
 def real_csv_file():
     """Return sample path for real CSV file testing."""
-    return "files/Will Accounts Demographics_2025-09-01T09_09_22.742205229Z.csv"
+    return SANITIZED_ACCOUNTS_CSV
 
 
 def test_real_csv_processing(real_csv_file):

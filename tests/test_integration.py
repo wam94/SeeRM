@@ -14,6 +14,7 @@ from app.data.notion_client import EnhancedNotionClient
 from app.services.digest_service import DigestService
 from app.services.render_service import DigestRenderer
 from app.workflows.weekly_digest import WeeklyDigestWorkflow
+from tests.sample_data import SANITIZED_ACCOUNTS_CSV
 
 
 class TestWorkflowIntegration:
@@ -157,7 +158,7 @@ class TestOriginalSystemComparison:
 
     def setup_method(self):
         """Prepare shared CSV path for comparison tests."""
-        self.test_csv_path = "files/Will Accounts Demographics_2025-09-01T09_09_22.742205229Z.csv"
+        self.test_csv_path = SANITIZED_ACCOUNTS_CSV
 
     def test_csv_parsing_compatibility(self):
         """Ensure CSV parsing produces compatible output."""
@@ -224,7 +225,7 @@ class TestEndToEndValidation:
 
     def test_complete_pipeline_with_real_csv(self):
         """Process a real CSV through the complete pipeline."""
-        csv_path = "files/Will Accounts Demographics_2025-09-01T09_09_22.742205229Z.csv"
+        csv_path = SANITIZED_ACCOUNTS_CSV
 
         if not os.path.exists(csv_path):
             pytest.skip("Real CSV file not available for E2E test")
