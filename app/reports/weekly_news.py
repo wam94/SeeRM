@@ -7,7 +7,7 @@ and organized by company for portfolio intelligence.
 
 import html
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import structlog
 
@@ -35,12 +35,14 @@ class WeeklyNewsReport:
         aggregator: IntelligenceAggregator,
         notion_client: Optional[EnhancedNotionClient] = None,
         settings: Optional[Settings] = None,
+        use_latest_intel: bool = True,
     ):
         """Initialize the weekly news report generator."""
         self.aggregator = aggregator
         self.notion_client = notion_client
         self.settings = settings or Settings()
         self.news_analyzer = NewsAnalyzer()
+        self.use_latest_intel = use_latest_intel
 
         logger.info("Weekly news report generator initialized")
 
@@ -76,7 +78,11 @@ class WeeklyNewsReport:
             # Step 1: Gather news data
             if callsigns:
                 logger.info("Applying callsign filter to weekly news", callsigns=callsigns)
-            news_items = self.aggregator.get_news_stream(days=days, callsigns=callsigns)
+            news_items = self.aggregator.get_news_stream(
+                days=days,
+                callsigns=callsigns,
+                use_latest_intel=self.use_latest_intel,
+            )
 
             if not news_items:
                 logger.info("No news items found for this period")
@@ -144,6 +150,14 @@ class WeeklyNewsReport:
         company_activity = [(company, len(items)) for company, items in digest.by_company.items()]
         company_activity.sort(key=lambda x: x[1], reverse=True)
 
+        company_categories = [
+            {
+                "company": company,
+                "categories": [category.value for category in categories],
+            }
+            for company, categories in self._build_company_category_matrix(digest)
+        ]
+
         return {
             "week_of": digest.week_of,
             "summary_stats": {
@@ -155,6 +169,7 @@ class WeeklyNewsReport:
             "by_type": type_counts,
             "most_active_companies": company_activity[:10],
             "key_themes": digest.key_themes,
+            "company_categories": company_categories,
             "notable_items": [
                 {
                     "title": item.title,
@@ -224,6 +239,15 @@ class WeeklyNewsReport:
                         "</div>",
                     ]
                 )
+
+        # Company highlights
+        company_matrix = self._build_company_category_matrix(digest)
+        if company_matrix:
+            html_parts.extend(["<h2>Company Highlights</h2>", "<ul>"])
+            for company, categories in company_matrix:
+                labels = ", ".join(self._format_category_name(category) for category in categories)
+                html_parts.append(f"<li><strong>{company}:</strong> {labels}</li>")
+            html_parts.extend(["</ul>"])
 
         # By category
         html_parts.extend(
@@ -301,6 +325,15 @@ class WeeklyNewsReport:
                         "",
                     ]
                 )
+
+        # Company highlights
+        company_matrix = self._build_company_category_matrix(digest)
+        if company_matrix:
+            md_parts.extend(["## Company Highlights", ""])
+            for company, categories in company_matrix:
+                labels = ", ".join(self._format_category_name(category) for category in categories)
+                md_parts.append(f"- **{company}:** {labels}")
+            md_parts.append("")
 
         # By category
         md_parts.extend(["## News by Category", ""])
@@ -483,70 +516,36 @@ class WeeklyNewsReport:
             "<hr>",
         ]
 
-        # Group companies by category from the digest data
-        companies_by_category = {}
-        for news_type, items in digest.by_type.items():
-            if items:
-                companies = set()
-                for item in items:
-                    companies.update(item.company_mentions)
-                companies_by_category[news_type] = sorted(list(companies))
+        company_matrix = self._build_company_category_matrix(digest)
 
-        # Display categories with activity (scannable format)
-        active_categories = []
-
-        # Priority order for display
-        category_priority = [
-            NewsType.FUNDING,
-            NewsType.ACQUISITION,
-            NewsType.PRODUCT_LAUNCH,
-            NewsType.PARTNERSHIPS,
-            NewsType.LEADERSHIP,
-            NewsType.GROWTH_METRICS,
-            NewsType.LEGAL_REGULATORY,
-            NewsType.TECHNICAL,
-            NewsType.OTHER_NOTABLE,
-        ]
-
-        for category in category_priority:
-            if category in companies_by_category and companies_by_category[category]:
-                info = category_info.get(category, {"emoji": "📰", "title": category.value.title()})
-                companies = companies_by_category[category]
-
-                # Create company links
-                # (HTML links for companies with page URLs, plain text for others)
-                company_links = []
-                for company in companies:
-                    page_url = company_urls.get(company)
-                    if page_url:
-                        # Escape both the URL and company name to prevent XSS
-                        escaped_url = html.escape(page_url, quote=True)
-                        escaped_company = html.escape(company)
-                        company_links.append(
-                            (
-                                f'<a href="{escaped_url}" '
-                                f'style="text-decoration: none; color: #0066cc;">'
-                                f"{escaped_company}</a>"
-                            )
-                        )
-                    else:
-                        company_links.append(html.escape(company))
-
-                companies_str = ", ".join(company_links)
-                parts.append(
-                    (
-                        f"<p><strong>{info['emoji']} {info['title'].upper()} "
-                        f"({len(companies)} companies)</strong><br>"
-                        f"• {companies_str}</p>"
+        # Build company-to-category mapping
+        parts.append("<h3>Company Highlights</h3>")
+        category_usage: Dict[NewsType, int] = {}
+        if company_matrix:
+            parts.append("<ul>")
+            for company, categories in company_matrix:
+                info_links = self._format_company_link(company, company_urls.get(company))
+                labels = []
+                for category in categories:
+                    info = category_info.get(
+                        category,
+                        {"emoji": "📰", "title": self._format_category_name(category)},
                     )
-                )
-                active_categories.append(category)
+                    labels.append(f"{info['emoji']} {info['title']}")
+                    category_usage[category] = category_usage.get(category, 0) + 1
 
-        # Show empty categories (for completeness)
+                parts.append(f"<li><strong>{info_links}</strong><br>" f"{' · '.join(labels)}</li>")
+            parts.append("</ul>")
+        else:
+            parts.append("<p>No companies reported new intel this week.</p>")
+
         empty_categories = []
-        for category in category_priority:
-            if category not in companies_by_category or not companies_by_category[category]:
-                info = category_info.get(category, {"emoji": "📰", "title": category.value.title()})
+        for category in self._category_priority():
+            if category_usage.get(category, 0) == 0:
+                info = category_info.get(
+                    category,
+                    {"emoji": "📰", "title": self._format_category_name(category)},
+                )
                 empty_categories.append(f"{info['emoji']} {info['title']}")
 
         if empty_categories:
@@ -562,8 +561,11 @@ class WeeklyNewsReport:
             [
                 "<hr>",
                 "<p><strong>📈 Activity Summary</strong><br>",
-                f"• {len(active_categories)} categories with activity<br>",
-                f"• {len(set().union(*companies_by_category.values()))} companies with news<br>",
+                (
+                    f"• {len(self._category_priority()) - len(empty_categories)} "
+                    "categories with activity<br>"
+                ),
+                f"• {len(company_matrix)} companies with news<br>",
                 f"• {digest.total_items} total intelligence items</p>",
                 "",
                 (
@@ -574,6 +576,47 @@ class WeeklyNewsReport:
         )
 
         return "\n".join(parts)
+
+    def _category_priority(self) -> List[NewsType]:
+        """Return category priority list."""
+        return self._CATEGORY_PRIORITY
+
+    def _category_sort_key(self, news_type: NewsType) -> int:
+        """Return sort key for consistent category ordering."""
+        try:
+            return self._CATEGORY_PRIORITY.index(news_type)
+        except ValueError:
+            return len(self._CATEGORY_PRIORITY)
+
+    def _format_category_name(self, news_type: NewsType) -> str:
+        """Return human-readable category label."""
+        return news_type.value.replace("_", " ").title()
+
+    def _build_company_category_matrix(
+        self, digest: WeeklyNewsDigest
+    ) -> List[Tuple[str, List[NewsType]]]:
+        """Return ordered list of companies and their active categories."""
+        matrix: List[Tuple[str, List[NewsType]]] = []
+        for company, items in digest.by_company.items():
+            categories = {item.news_type for item in items if item.news_type}
+            if not categories:
+                continue
+            ordered = sorted(categories, key=self._category_sort_key)
+            matrix.append((company, ordered))
+
+        matrix.sort(key=lambda entry: (-len(entry[1]), entry[0]))
+        return matrix
+
+    def _format_company_link(self, company: str, page_url: Optional[str]) -> str:
+        """Return HTML link for a company name when Notion URL is available."""
+        escaped_company = html.escape(company)
+        if page_url:
+            escaped_url = html.escape(page_url, quote=True)
+            return (
+                f'<a href="{escaped_url}" style="text-decoration: none; color: #0066cc;">'
+                f"{escaped_company}</a>"
+            )
+        return escaped_company
 
     def _create_notion_report(self, report: Report, digest: WeeklyNewsDigest) -> Optional[str]:
         """Create report page in Notion."""
@@ -625,3 +668,15 @@ class WeeklyNewsReport:
                 error=str(e),
             )
             return None
+
+    _CATEGORY_PRIORITY: List[NewsType] = [
+        NewsType.FUNDING,
+        NewsType.ACQUISITION,
+        NewsType.PRODUCT_LAUNCH,
+        NewsType.PARTNERSHIPS,
+        NewsType.LEADERSHIP,
+        NewsType.GROWTH_METRICS,
+        NewsType.LEGAL_REGULATORY,
+        NewsType.TECHNICAL,
+        NewsType.OTHER_NOTABLE,
+    ]
