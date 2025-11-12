@@ -43,6 +43,7 @@ class WeeklyNewsReport:
         self.settings = settings or Settings()
         self.news_analyzer = NewsAnalyzer()
         self.use_latest_intel = use_latest_intel
+        self._category_display_info: Optional[Dict[NewsType, Dict[str, str]]] = None
 
         logger.info("Weekly news report generator initialized")
 
@@ -240,14 +241,33 @@ class WeeklyNewsReport:
                     ]
                 )
 
-        # Company highlights
-        company_matrix = self._build_company_category_matrix(digest)
-        if company_matrix:
-            html_parts.extend(["<h2>Company Highlights</h2>", "<ul>"])
-            for company, categories in company_matrix:
-                labels = ", ".join(self._format_category_name(category) for category in categories)
-                html_parts.append(f"<li><strong>{company}:</strong> {labels}</li>")
-            html_parts.extend(["</ul>"])
+        # Category highlights (category -> companies)
+        company_urls = self._get_company_page_urls(digest)
+        companies_by_category = self._build_companies_by_category(digest)
+        category_info = self._get_category_display_info()
+
+        html_parts.append("<h2>Category Highlights</h2>")
+        categories_rendered = False
+        for category in self._category_priority():
+            companies = companies_by_category.get(category)
+            if not companies:
+                continue
+
+            info = category_info.get(
+                category,
+                {"emoji": "📰", "title": self._format_category_name(category)},
+            )
+            html_parts.append(f"<h3>{info['emoji']} {info['title']} ({len(companies)})</h3>")
+            html_parts.append("<ul>")
+            for company in companies:
+                html_parts.append(
+                    f"<li>{self._format_company_link(company, company_urls.get(company))}</li>"
+                )
+            html_parts.append("</ul>")
+            categories_rendered = True
+
+        if not categories_rendered:
+            html_parts.append("<p>No categorized company activity this week.</p>")
 
         # By category
         html_parts.extend(
@@ -326,13 +346,32 @@ class WeeklyNewsReport:
                     ]
                 )
 
-        # Company highlights
-        company_matrix = self._build_company_category_matrix(digest)
-        if company_matrix:
-            md_parts.extend(["## Company Highlights", ""])
-            for company, categories in company_matrix:
-                labels = ", ".join(self._format_category_name(category) for category in categories)
-                md_parts.append(f"- **{company}:** {labels}")
+        # Category highlights (category -> companies)
+        company_urls = self._get_company_page_urls(digest)
+        companies_by_category = self._build_companies_by_category(digest)
+        category_info = self._get_category_display_info()
+
+        md_parts.extend(["## Category Highlights", ""])
+        categories_rendered = False
+        for category in self._category_priority():
+            companies = companies_by_category.get(category)
+            if not companies:
+                continue
+
+            info = category_info.get(
+                category,
+                {"emoji": "📰", "title": self._format_category_name(category)},
+            )
+            md_parts.append(f"### {info['emoji']} {info['title']} ({len(companies)})")
+            for company in companies:
+                md_parts.append(
+                    f"- {self._format_company_markdown_link(company, company_urls.get(company))}"
+                )
+            md_parts.append("")
+            categories_rendered = True
+
+        if not categories_rendered:
+            md_parts.append("No categorized company activity this week.")
             md_parts.append("")
 
         # By category
@@ -498,14 +537,9 @@ class WeeklyNewsReport:
 
     def _create_email_bulletin(self, digest: WeeklyNewsDigest) -> str:
         """Create scannable intelligence digest optimized for executive review."""
-        # Get category display information
-        from app.intelligence.news_classifier import create_news_classifier
-
-        classifier = create_news_classifier(self.settings)
-        category_info = classifier.get_category_display_info()
-
-        # Get Notion page URLs for all companies in the digest
+        category_info = self._get_category_display_info()
         company_urls = self._get_company_page_urls(digest)
+        companies_by_category = self._build_companies_by_category(digest)
 
         parts = [
             "<h2>📊 Portfolio Intelligence Digest</h2>",
@@ -516,43 +550,51 @@ class WeeklyNewsReport:
             "<hr>",
         ]
 
-        company_matrix = self._build_company_category_matrix(digest)
+        active_categories: List[NewsType] = []
+        all_active_companies: set[str] = set()
 
-        # Build company-to-category mapping
-        parts.append("<h3>Company Highlights</h3>")
-        category_usage: Dict[NewsType, int] = {}
-        if company_matrix:
-            parts.append("<ul>")
-            for company, categories in company_matrix:
-                info_links = self._format_company_link(company, company_urls.get(company))
-                labels = []
-                for category in categories:
-                    info = category_info.get(
-                        category,
-                        {"emoji": "📰", "title": self._format_category_name(category)},
-                    )
-                    labels.append(f"{info['emoji']} {info['title']}")
-                    category_usage[category] = category_usage.get(category, 0) + 1
-
-                parts.append(f"<li><strong>{info_links}</strong><br>" f"{' · '.join(labels)}</li>")
-            parts.append("</ul>")
-        else:
-            parts.append("<p>No companies reported new intel this week.</p>")
-
-        empty_categories = []
         for category in self._category_priority():
-            if category_usage.get(category, 0) == 0:
+            companies = companies_by_category.get(category)
+            info = category_info.get(
+                category,
+                {"emoji": "📰", "title": self._format_category_name(category)},
+            )
+
+            if not companies:
+                continue
+
+            active_categories.append(category)
+
+            company_links = []
+            for company in companies:
+                all_active_companies.add(company)
+                company_links.append(self._format_company_link(company, company_urls.get(company)))
+
+            parts.append(
+                (
+                    f"<p><strong>{info['emoji']} {info['title'].upper()} "
+                    f"({len(companies)} companies)</strong><br>"
+                    f"• {', '.join(company_links)}</p>"
+                )
+            )
+
+        empty_categories = [
+            category for category in self._category_priority() if category not in active_categories
+        ]
+
+        if empty_categories:
+            empty_labels = []
+            for category in empty_categories:
                 info = category_info.get(
                     category,
                     {"emoji": "📰", "title": self._format_category_name(category)},
                 )
-                empty_categories.append(f"{info['emoji']} {info['title']}")
+                empty_labels.append(f"{info['emoji']} {info['title']}")
 
-        if empty_categories:
             parts.extend(
                 [
                     "<hr>",
-                    f"<p><small>No activity in: {', '.join(empty_categories)}</small></p>",
+                    f"<p><small>No activity in: {', '.join(empty_labels)}</small></p>",
                 ]
             )
 
@@ -561,11 +603,8 @@ class WeeklyNewsReport:
             [
                 "<hr>",
                 "<p><strong>📈 Activity Summary</strong><br>",
-                (
-                    f"• {len(self._category_priority()) - len(empty_categories)} "
-                    "categories with activity<br>"
-                ),
-                f"• {len(company_matrix)} companies with news<br>",
+                (f"• {len(active_categories)} " "categories with activity<br>"),
+                f"• {len(all_active_companies) or len(digest.by_company)} companies with news<br>",
                 f"• {digest.total_items} total intelligence items</p>",
                 "",
                 (
@@ -617,6 +656,34 @@ class WeeklyNewsReport:
                 f"{escaped_company}</a>"
             )
         return escaped_company
+
+    def _format_company_markdown_link(self, company: str, page_url: Optional[str]) -> str:
+        """Return Markdown link for a company when URL available."""
+        if page_url:
+            return f"[{company}]({page_url})"
+        return company
+
+    def _build_companies_by_category(self, digest: WeeklyNewsDigest) -> Dict[NewsType, List[str]]:
+        """Return mapping of news categories to sorted company lists."""
+        companies_by_category: Dict[NewsType, List[str]] = {}
+        for news_type, items in digest.by_type.items():
+            if not items:
+                continue
+            companies = set()
+            for item in items:
+                companies.update(item.company_mentions)
+            if companies:
+                companies_by_category[news_type] = sorted(companies)
+        return companies_by_category
+
+    def _get_category_display_info(self) -> Dict[NewsType, Dict[str, str]]:
+        """Return cached category display info (emoji/title)."""
+        if self._category_display_info is None:
+            from app.intelligence.news_classifier import create_news_classifier
+
+            classifier = create_news_classifier(self.settings)
+            self._category_display_info = classifier.get_category_display_info()
+        return self._category_display_info
 
     def _create_notion_report(self, report: Report, digest: WeeklyNewsDigest) -> Optional[str]:
         """Create report page in Notion."""
