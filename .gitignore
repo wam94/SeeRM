@@ -63,3 +63,5 @@ package.json
 
 # Sensitive fixtures
 files/
+!apps/seerm/files/
+!apps/seerm/files/**
