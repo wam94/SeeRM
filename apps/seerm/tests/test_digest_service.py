@@ -49,7 +49,12 @@ class TestDigestService:
                 balance_pct_delta_pct=-20.0,
                 any_change=True,
             ),
-            Company(callsign="test3", dba="Test Company 3", is_new_account=True, any_change=True),
+            Company(
+                callsign="test3",
+                dba="Test Company 3",
+                is_new_account=True,
+                any_change=True,
+            ),
         ]
 
         digest_data = self.service.generate_digest_data(companies, top_n=5)
@@ -124,7 +129,10 @@ class TestDigestRenderer:
         digest_data = DigestData(
             subject="Test Weekly Digest",
             stats=DigestStats(
-                total_accounts=100, changed_accounts=25, new_accounts=5, removed_accounts=2
+                total_accounts=100,
+                changed_accounts=25,
+                new_accounts=5,
+                removed_accounts=2,
             ),
             top_pct_gainers=[],
             top_pct_losers=[],

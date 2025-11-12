@@ -120,7 +120,10 @@ class TestWorkflowIntegration:
 
         # Create mock objects
         mock_gmail = Mock()
-        mock_gmail.health_check.return_value = {"status": "healthy", "user": "test@example.com"}
+        mock_gmail.health_check.return_value = {
+            "status": "healthy",
+            "user": "test@example.com",
+        }
 
         mock_digest = Mock()
         mock_digest.health_check.return_value = {"status": "healthy", "config": {}}
@@ -182,7 +185,12 @@ class TestOriginalSystemComparison:
 
         # Test stats structure
         stats = digest_data["stats"]
-        required_stats = ["total_accounts", "changed_accounts", "new_accounts", "removed_accounts"]
+        required_stats = [
+            "total_accounts",
+            "changed_accounts",
+            "new_accounts",
+            "removed_accounts",
+        ]
         for stat in required_stats:
             assert stat in stats
             assert isinstance(stats[stat], int)
@@ -322,7 +330,10 @@ class TestDryRunValidation:
         """Ensure dry-run mode prevents actual changes."""
         # Create clients in dry-run mode
         gmail_config = GmailConfig(
-            client_id="test", client_secret="test", refresh_token="test", user="test@example.com"
+            client_id="test",
+            client_secret="test",
+            refresh_token="test",
+            user="test@example.com",
         )
         notion_config = NotionConfig(api_key="test")
 

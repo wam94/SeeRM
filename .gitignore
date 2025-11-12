@@ -60,3 +60,8 @@ logs/
 node_modules/
 package-lock.json
 package.json
+
+# Sensitive fixtures
+files/
+!apps/seerm/files/
+!apps/seerm/files/**
