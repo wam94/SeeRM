@@ -1,0 +1,16 @@
+[
+  {
+    "id": "warm-intro",
+    "title": "Warm Intro",
+    "description": "Baseline greeting for a newly assigned company.",
+    "tags": ["greeting", "intro"],
+    "body": "Hi {{first_name}},\\n\\nI’m Will, your RM at Mercury. I’ve been digging into what you’re building and thought I’d share a quick observation: {{external_summary}}\\n\\nCurious to hear what’s next or where I can be helpful."
+  },
+  {
+    "id": "news-checkin",
+    "title": "News Check-in",
+    "description": "Use when reacting to a fresh announcement or milestone.",
+    "tags": ["follow-up", "news"],
+    "body": "Hey {{first_name}}, saw the latest on {{news_hook}} — {{external_summary}}.\\n\\nLet me know if a quick sync would help keep things moving."
+  }
+]

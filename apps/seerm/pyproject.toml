@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seerm"
+version = "0.1.0"
+description = "SeeRM - Automated Client Intelligence & Weekly News Digest"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "SeeRM Team" }]
+license = { text = "MIT" }
+keywords = ["intelligence", "notion", "gmail", "digest", "news"]
+
+dependencies = [
+  "google-api-python-client==2.137.0",
+  "google-auth==2.32.0",
+  "google-auth-oauthlib==1.2.1",
+  "pandas==2.2.2",
+  "jinja2==3.1.4",
+  "python-dateutil==2.9.0.post0",
+  "feedparser==6.0.11",
+  "tldextract==5.1.2",
+  "openai>=1.40.0,<2",
+  "trafilatura>=1.6,<2",
+  "beautifulsoup4>=4.12,<5",
+  "httpx>=0.25.0",
+  "pydantic>=2.4.0",
+  "pydantic-settings>=2.0.0",
+  "python-dotenv>=1.0.0",
+  "tenacity>=8.2.0",
+  "structlog>=23.1.0",
+  "click>=8.1.0",
+  "rich>=13.5.0",
+]
+
+[project.scripts]
+seerm = "app.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]

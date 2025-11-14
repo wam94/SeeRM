@@ -25,6 +25,7 @@ dependencies = [
   "trafilatura>=1.6,<2",
   "beautifulsoup4>=4.12,<5",
   "httpx>=0.25.0",
+  "notion-client>=2.2.1",
   "pydantic>=2.4.0",
   "pydantic-settings>=2.0.0",
   "python-dotenv>=1.0.0",
@@ -32,6 +33,9 @@ dependencies = [
   "structlog>=23.1.0",
   "click>=8.1.0",
   "rich>=13.5.0",
+  "fastapi>=0.111.0",
+  "uvicorn[standard]>=0.30.0",
+  "sqlmodel>=0.0.21",
 ]
 
 [project.scripts]
@@ -39,4 +43,4 @@ seerm = "app.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["app*"]
+include = ["app*", "shared*"]

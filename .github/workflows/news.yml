@@ -58,6 +58,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install -e ./apps/seerm
       - name: Notion preflight (schema guard)
         env:
           NOTION_API_KEY: ${{ secrets.NOTION_API_KEY || '' }}
@@ -147,7 +148,7 @@ jobs:
       - name: Compute batches
         id: out
         env:
-          PYTHONPATH: ${{ github.workspace }}
+          PYTHONPATH: ${{ github.workspace }}/apps/seerm:${{ github.workspace }}
 
           # Gmail (for roster CSV)
           GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
@@ -226,10 +227,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install -e ./apps/seerm
       - name: Build callsign slice for this batch
         id: slice
         env:
-          PYTHONPATH: ${{ github.workspace }}
+          PYTHONPATH: ${{ github.workspace }}/apps/seerm:${{ github.workspace }}
 
           # Gmail
           GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
@@ -311,7 +313,7 @@ jobs:
 
       - name: Run external intel for this batch
         env:
-          PYTHONPATH: ${{ github.workspace }}
+          PYTHONPATH: ${{ github.workspace }}/apps/seerm:${{ github.workspace }}
 
           # Gmail
           GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
@@ -381,6 +383,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install -e ./apps/seerm
 
       - name: Download all new callsigns artifacts
         uses: actions/download-artifact@v4
@@ -497,7 +500,7 @@ jobs:
       - name: Generate baselines for new accounts
         if: ${{ steps.baseline_targets.outputs.count != '0' }}
         env:
-          PYTHONPATH: ${{ github.workspace }}
+          PYTHONPATH: ${{ github.workspace }}/apps/seerm:${{ github.workspace }}
 
           GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
           GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}

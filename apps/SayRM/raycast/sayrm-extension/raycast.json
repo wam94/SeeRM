@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "name": "sayrm",
+  "title": "SayRM",
+  "description": "Keyboard-first helpers for the SayRM workflow",
+  "author": "Will Mitchell",
+  "commands": [
+    {
+      "name": "client-brief",
+      "title": "Client Brief",
+      "subtitle": "External Context",
+      "description": "Fetch the latest external context summary",
+      "mode": "view"
+    },
+    {
+      "name": "company-context",
+      "title": "Company Context",
+      "description": "Compile external + internal context with templates",
+      "mode": "view"
+    },
+    {
+      "name": "usage-snapshot",
+      "title": "Usage Snapshot",
+      "description": "Pull internal usage information",
+      "mode": "view"
+    },
+    {
+      "name": "template-picker",
+      "title": "Template Picker",
+      "description": "Browse SayRM email templates",
+      "mode": "view"
+    },
+    {
+      "name": "draft-helper",
+      "title": "Draft Helper",
+      "description": "Compose a draft email using SayRM context",
+      "mode": "view"
+    },
+    {
+      "name": "label-draft",
+      "title": "Label Draft",
+      "description": "Attach quality labels to a stored draft",
+      "mode": "view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "baseUrl",
+      "type": "textfield",
+      "title": "SayRM Service URL",
+      "placeholder": "http://127.0.0.1:8070",
+      "default": "http://127.0.0.1:8070"
+    }
+  ]
+}

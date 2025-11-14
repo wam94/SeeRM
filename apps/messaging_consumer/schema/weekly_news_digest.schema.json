@@ -1,0 +1,190 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://seerm.local/schema/weekly_news_digest.schema.json",
+  "title": "SeeRM Weekly News Digest",
+  "description": "Canonical contract emitted by SeeRM and consumed by the messaging automation.",
+  "type": "object",
+  "required": [
+    "report_id",
+    "week_of",
+    "generated_at",
+    "summary_stats",
+    "by_type",
+    "notable_items",
+    "rendered"
+  ],
+  "properties": {
+    "report_id": {
+      "type": "string",
+      "pattern": "^weekly_news_[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}$"
+    },
+    "week_of": {
+      "type": "string",
+      "format": "date"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "summary_stats": {
+      "type": "object",
+      "required": [
+        "total_items",
+        "unique_companies",
+        "categories_active",
+        "notable_items"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "total_items": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unique_companies": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "categories_active": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "notable_items": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "by_type": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "most_active_companies": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "prefixItems": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer",
+            "minimum": 0
+          }
+        ],
+        "minItems": 2,
+        "maxItems": 2
+      }
+    },
+    "company_categories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["company", "categories"],
+        "additionalProperties": false,
+        "properties": {
+          "company": {
+            "type": "string"
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "key_themes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "summary": {
+      "type": "string"
+    },
+    "notable_items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/notable_item"
+      }
+    },
+    "rendered": {
+      "type": "object",
+      "required": ["html", "markdown"],
+      "additionalProperties": false,
+      "properties": {
+        "html": {
+          "type": "string"
+        },
+        "markdown": {
+          "type": "string"
+        }
+      }
+    },
+    "attachments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["label", "url"],
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "notable_item": {
+      "type": "object",
+      "required": [
+        "title",
+        "source",
+        "url",
+        "companies",
+        "type",
+        "relevance_score"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "companies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "type": {
+          "type": "string"
+        },
+        "relevance_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "excerpt": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

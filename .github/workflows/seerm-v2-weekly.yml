@@ -1,0 +1,44 @@
+name: Weekly Digest (v2 - apps/seerm)
+
+on:
+  schedule:
+    - cron: '30 13 * * MON'   # Mondays 13:30 UTC (staggered from main job)
+  workflow_dispatch: {}       # manual runs for testing
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e ./apps/seerm
+
+      - name: Run weekly digest (apps/seerm)
+        env:
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          DIGEST_TO: ${{ secrets.DIGEST_TO }}
+          DIGEST_CC: ${{ secrets.DIGEST_CC }}
+          DIGEST_BCC: ${{ secrets.DIGEST_BCC }}
+          GMAIL_QUERY: ${{ vars.GMAIL_QUERY }}
+          NOTION_API_KEY: ${{ secrets.NOTION_API_KEY }}
+          NOTION_COMPANIES_DB_ID: ${{ secrets.NOTION_COMPANIES_DB_ID }}
+          ATTACHMENT_REGEX: '.*\.csv$'
+          ENVIRONMENT: 'production'
+          DEBUG: 'false'
+          DRY_RUN: 'false'
+        run: |
+          python -m app.main digest --max-messages 10
+
