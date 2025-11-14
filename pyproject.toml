@@ -42,5 +42,8 @@ dependencies = [
 seerm = "app.main:main"
 
 [tool.setuptools.packages.find]
-where = ["."]
+# Search for the canonical app package under apps/seerm and the shared
+# libraries at the repository root so that installing from the root
+# still ships both `app.*` and `shared.*`.
+where = ["apps/seerm", "."]
 include = ["app*", "shared*"]
