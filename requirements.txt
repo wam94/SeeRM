@@ -13,6 +13,7 @@ beautifulsoup4>=4.12,<5
 
 # Enhanced HTTP client (replaces requests)
 httpx>=0.25.0
+notion-client>=2.2.1
 
 # Configuration & Data Validation
 pydantic>=2.4.0
@@ -26,6 +27,9 @@ structlog>=23.1.0
 # CLI & Output
 click>=8.1.0
 rich>=13.5.0
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+sqlmodel>=0.0.21
 
 # Development & Testing Tools
 pytest>=7.4.0

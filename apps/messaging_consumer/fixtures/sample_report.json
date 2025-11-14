@@ -1,0 +1,69 @@
+{
+  "report_id": "weekly_news_2024-04-12_142233",
+  "week_of": "2024-04-12",
+  "generated_at": "2024-04-19T14:22:33Z",
+  "summary_stats": {
+    "total_items": 42,
+    "unique_companies": 14,
+    "categories_active": 5,
+    "notable_items": 6
+  },
+  "by_type": {
+    "fundraising": 7,
+    "hiring": 8,
+    "product": 12,
+    "partnership": 6,
+    "regulatory": 3,
+    "macro": 6
+  },
+  "most_active_companies": [
+    ["Mercury", 6],
+    ["Rippling", 5],
+    ["Routable", 4]
+  ],
+  "company_categories": [
+    {
+      "company": "Mercury",
+      "categories": ["product", "partnership"]
+    },
+    {
+      "company": "Rippling",
+      "categories": ["fundraising", "hiring"]
+    }
+  ],
+  "key_themes": [
+    "AI copilots moving into treasury",
+    "Payments networks bundling compliance",
+    "International expansion as default roadmap"
+  ],
+  "summary": "AI copilots and treasury automation dominated the week while several companies leaned into cross-border payments and compliance bundling.",
+  "notable_items": [
+    {
+      "title": "Mercury launches FX hedging suite",
+      "source": "TechCrunch",
+      "url": "https://news.example.com/mercury-fx",
+      "companies": ["Mercury"],
+      "type": "product",
+      "relevance_score": 0.94,
+      "excerpt": "The new module offers automated hedging suggestions for CFOs."
+    },
+    {
+      "title": "Rippling raises strategic extension",
+      "source": "Forbes",
+      "url": "https://news.example.com/rippling-funding",
+      "companies": ["Rippling"],
+      "type": "fundraising",
+      "relevance_score": 0.88
+    }
+  ],
+  "rendered": {
+    "html": "<h1>Weekly News Digest - Week of 2024-04-12</h1><p>Total Items: 42</p>",
+    "markdown": "# Weekly News Digest - Week of 2024-04-12\n\nTotal Items: 42"
+  },
+  "attachments": [
+    {
+      "label": "Notion page",
+      "url": "https://www.notion.so/.../weekly-news"
+    }
+  ]
+}
