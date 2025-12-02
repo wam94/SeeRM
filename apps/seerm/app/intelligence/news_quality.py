@@ -8,11 +8,10 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
 import tldextract
-from dateutil import parser as date_parser
-
 from app.core.config import IntelligenceConfig
 from app.core.models import Company
 from app.intelligence.models import NewsItem
+from dateutil import parser as date_parser
 
 # Baseline domain preferences. These can be extended via environment configuration.
 DEFAULT_TRUSTED_DOMAINS: Dict[str, float] = {
@@ -45,11 +44,14 @@ DEFAULT_BLOCKED_DOMAINS = {
     "tiktok.com",
     "eventbrite.com",
     "glassdoor.com",
+    "himalayas.app",
     "lever.co",
     "greenhouse.io",
     "jobvite.com",
     "reddit.com",
     "jooble.com",
+    "jooble.org",
+    "ziprecruiter.com",
 }
 
 DEFAULT_POSITIVE_KEYWORDS = [
