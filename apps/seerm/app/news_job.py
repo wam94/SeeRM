@@ -17,7 +17,6 @@ import feedparser
 import pandas as pd
 import requests
 import tldextract
-
 from app.core.config import IntelligenceConfig, NotionConfig
 from app.core.models import Company
 from app.data.csv_parser import filter_dataframe_by_relationship_manager
@@ -986,6 +985,8 @@ def process_company_notion(
         else:
             summary_items = collected_items
 
+        should_update_latest_intel = True
+
         if summary_items:
             text_blob = "\n".join(
                 f"{item.published_at} — {item.title} — {item.source} {item.url}"
@@ -999,10 +1000,11 @@ def process_company_notion(
                 summary = ai_summary + "\n\nSources:\n" + "\n".join(source_links)
             else:
                 summary = ai_summary
-            should_update_latest_intel = True
         else:
-            summary = ""
-            should_update_latest_intel = False
+            summary = f"0 new items in past {lookback_days} days."
+            summary_items = []
+            source_links: List[str] = []
+            ai_summary = summary
 
         # Set Latest Intel + update Intel archive with new system
         if should_update_latest_intel:
@@ -1020,9 +1022,6 @@ def process_company_notion(
                 )
             except Exception as e:
                 print(f"WARN set_latest_intel for {cs}: {e}")
-        else:
-            print(f"[NO-UPDATE] {cs} leaving Latest Intel unchanged (no new items)")
-
         return {"status": "success", "items": len(intel_items)}
 
     except Exception as e:
