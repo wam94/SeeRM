@@ -21,6 +21,8 @@ except ImportError:  # pragma: no cover
 
 @dataclass
 class ReportIndexEntry:
+    """Metadata for a weekly report stored in Notion."""
+
     report_id: str
     notion_page_id: str
     week_of: date
@@ -29,6 +31,8 @@ class ReportIndexEntry:
 
 @dataclass
 class NewsHighlight:
+    """Compact summary of a company news item."""
+
     title: str
     summary: Optional[str]
     url: Optional[str]
@@ -37,6 +41,8 @@ class NewsHighlight:
 
 @dataclass
 class CompanyContext:
+    """Normalized company context payload pulled from Notion."""
+
     notion_page_id: str
     name: str
     callsign: str
@@ -50,12 +56,17 @@ class NotionReportReader:
     """Thin wrapper around the Notion API for the Reports DB."""
 
     def __init__(self, api_key: str, reports_db_id: str) -> None:
+        """Create a reports DB reader bound to the given API key."""
         if Client is None:  # pragma: no cover
             raise RuntimeError("notion-client is required to use NotionReportReader")
-        self._client = Client(auth=api_key)
+        # Use a Notion API version that still supports the classic
+        # ``POST /databases/{database_id}/query`` endpoint.
+        self._client = Client(auth=api_key, notion_version="2022-06-28")
         self._reports_db_id = reports_db_id
 
-    def list_reports(self, since: Optional[date] = None, page_size: int = 20) -> List[ReportIndexEntry]:
+    def list_reports(
+        self, since: Optional[date] = None, page_size: int = 20
+    ) -> List[ReportIndexEntry]:
         """Return recent reports ordered by week."""
         query: dict = {
             "database_id": self._reports_db_id,
@@ -68,7 +79,7 @@ class NotionReportReader:
                 "date": {"on_or_after": since.isoformat()},
             }
 
-        resp = self._client.databases.query(**query)
+        resp = _databases_query(self._client, query)
         return [self._parse_page(result) for result in resp.get("results", [])]
 
     def _parse_page(self, page: dict) -> ReportIndexEntry:
@@ -94,6 +105,41 @@ class NotionReportReader:
 logger = structlog.get_logger(__name__)
 
 
+def _databases_query(client: "Client", query: dict) -> dict:
+    """
+    Compatibility wrapper for the Notion Python SDK.
+
+    Older versions expose ``client.databases.query`` while newer 2.x releases
+    removed the helper in favour of direct ``POST /databases/{id}/query``.
+    This helper calls ``databases.query`` when available, otherwise falls back
+    to the raw HTTP request.
+    """
+    databases = getattr(client, "databases", None)
+    if databases is not None and hasattr(databases, "query"):
+        return databases.query(**query)
+
+    database_id = query.get("database_id")
+    if not database_id:
+        raise ValueError("database_id is required for Notion database queries")
+
+    # Some environments store database IDs as 32-character hex strings without
+    # dashes. The HTTP API expects the UUID format; normalise if needed.
+    db_id_str = str(database_id)
+    if "-" not in db_id_str and len(db_id_str) == 32:
+        db_id_str = (
+            f"{db_id_str[0:8]}-{db_id_str[8:12]}-"
+            f"{db_id_str[12:16]}-{db_id_str[16:20]}-{db_id_str[20:32]}"
+        )
+
+    body = {k: v for k, v in query.items() if k != "database_id"}
+    # The official client exposes a low-level request helper.
+    return client.request(
+        path=f"databases/{db_id_str}/query",
+        method="POST",
+        body=body,
+    )
+
+
 class NotionContextFetcher:
     """Fetch dossier + news context for a company by callsign."""
 
@@ -106,22 +152,29 @@ class NotionContextFetcher:
         max_news_items: int = 5,
         client: Optional[Client] = None,
     ) -> None:
+        """Create a context fetcher bound to company + intel databases."""
         if client is not None:
             self._client = client
         else:
             if Client is None:  # pragma: no cover
                 raise RuntimeError("notion-client is required to use NotionContextFetcher")
-            self._client = Client(auth=api_key)
+            # Align with the version used in production SeeRM flows so that
+            # database queries keep working even as the SDK evolves.
+            self._client = Client(auth=api_key, notion_version="2022-06-28")
         self._companies_db_id = companies_db_id
         self._intel_db_id = intel_db_id
         self._max_news_items = max_news_items
 
     def get_company_context(self, callsign: str) -> Optional[CompanyContext]:
+        """Return structured context for a callsign, if found."""
         normalized = callsign.strip().lower()
-        resp = self._client.databases.query(
-            database_id=self._companies_db_id,
-            filter={"property": "Callsign", "rich_text": {"equals": normalized}},
-            page_size=1,
+        resp = _databases_query(
+            self._client,
+            {
+                "database_id": self._companies_db_id,
+                "filter": {"property": "Callsign", "rich_text": {"equals": normalized}},
+                "page_size": 1,
+            },
         )
         results = resp.get("results", [])
         if not results:
@@ -165,11 +218,17 @@ class NotionContextFetcher:
                 highlights.append(self._map_news_page(news_page))
 
         if not highlights and self._intel_db_id:
-            resp = self._client.databases.query(
-                database_id=self._intel_db_id,
-                filter={"property": "Callsign", "relation": {"contains": company_page["id"]}},
-                sorts=[{"property": "Last Seen", "direction": "descending"}],
-                page_size=self._max_news_items,
+            resp = _databases_query(
+                self._client,
+                {
+                    "database_id": self._intel_db_id,
+                    "filter": {
+                        "property": "Callsign",
+                        "relation": {"contains": company_page["id"]},
+                    },
+                    "sorts": [{"property": "Last Seen", "direction": "descending"}],
+                    "page_size": self._max_news_items,
+                },
             )
             for item in resp.get("results", []):
                 highlights.append(self._map_news_page(item))
@@ -289,4 +348,3 @@ __all__ = [
     "NotionReportReader",
     "NotionContextFetcher",
 ]
-
