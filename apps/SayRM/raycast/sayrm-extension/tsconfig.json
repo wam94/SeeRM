@@ -9,7 +9,7 @@
     "strict": true,
     "skipLibCheck": true,
     "isolatedModules": true,
-    "outDir": "."
+    "outDir": "dist"
   },
   "include": ["src", "raycast-env.d.ts"]
 }
