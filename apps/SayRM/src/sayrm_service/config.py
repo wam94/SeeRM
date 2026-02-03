@@ -8,7 +8,6 @@ from typing import Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 from . import _ROOT
 
 
@@ -39,7 +38,8 @@ class SayRMSettings(BaseSettings):
     internal_usage_api_key: Optional[str] = Field(None, alias="SAYRM_INTERNAL_API_KEY")
 
     model_config = SettingsConfigDict(
-        env_file=(".env.local", "apps/SayRM/.env.local", ".env"),
+        # Load test defaults from .env first, then allow local overrides.
+        env_file=(".env", ".env.local", "apps/SayRM/.env.local"),
         env_prefix="",
         extra="ignore",
     )
