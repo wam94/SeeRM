@@ -21,7 +21,7 @@ export default function ClientBriefCommand() {
   async function handleSubmit(values: { callsign: string; manualHighlights?: string }) {
     try {
       setIsSubmitting(true);
-      await showToast({ style: Toast.Style.Animated, title: "Fetching brief" });
+      await showToast({ style: Toast.Style.Animated, title: "Fetching brief" });
       const highlights = splitLines(values.manualHighlights || "");
       const brief = await SayRMApi.createExternalBrief(values.callsign, highlights);
       await showHUD("External brief ready");
