@@ -124,7 +124,7 @@ def build_app(settings: SayRMSettings | None = None) -> FastAPI:
         except Exception as exc:  # pragma: no cover - defensive, surfaced for debugging
             raise HTTPException(
                 status_code=502,
-                detail=f"Failed to build external brief: {exc}",
+                detail="Failed to build external brief.",
             ) from exc
         return serialize_external_brief(brief)
 
