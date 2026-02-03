@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional
 
+import structlog
+
 from shared.core.notion_context import CompanyContext, NewsHighlight
 
 from ..clients.internal_client import InternalUsageClient, InternalUsageSnapshot
@@ -14,9 +16,13 @@ from ..clients.llm_client import LLMClient
 from ..clients.notion_client import ExternalContextClient
 from ..store import DataStore
 
+logger = structlog.get_logger(__name__)
+
 
 @dataclass
 class ExternalBrief:
+    """Serialized external summary payload."""
+
     summary_id: int
     callsign: str
     company_name: Optional[str]
@@ -30,6 +36,8 @@ class ExternalBrief:
 
 @dataclass
 class InternalBrief:
+    """Serialized internal summary payload."""
+
     summary_id: int
     callsign: str
     notes: str
@@ -48,6 +56,7 @@ class SummaryService:
         llm_client: LLMClient,
         store: DataStore,
     ) -> None:
+        """Wire summary dependencies for external + internal briefs."""
         self._notion = notion_client
         self._internal = internal_client
         self._llm = llm_client
@@ -55,6 +64,7 @@ class SummaryService:
 
     @property
     def llm_model(self) -> str:
+        """Expose the configured LLM model name."""
         return self._llm.model
 
     def fetch_company_context(self, callsign: str) -> CompanyContext:
@@ -74,22 +84,39 @@ class SummaryService:
         *,
         manual_highlights: Optional[List[str]] = None,
     ) -> ExternalBrief:
+        """Build an external-facing brief from Notion context."""
         company = self.fetch_company_context(callsign)
         context_snapshot = _company_to_dict(company)
 
         prompt = self._compose_external_prompt(company, manual_highlights or [])
         system_msg = (
-            "You help Will Mitchell scan company dossiers and turn them into quick reference cards. "
-            "Write concise, factual bullets with no marketing speak and no emojis."
+            "You help Will Mitchell scan company dossiers and turn them into "
+            "quick reference cards. Write concise, factual bullets with no "
+            "marketing speak and no emojis."
         )
-        response = self._llm.run_chat(
-            [
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": prompt},
-            ],
-            response_format={"type": "json_object"},
-        )
-        parsed = self._parse_external_response(response)
+        try:
+            response = self._llm.run_chat(
+                [
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
+            )
+            parsed = self._parse_external_response(response)
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            # If the LLM call fails (network / model issues), fall back to a
+            # simple summary based on the Notion context so the endpoint still
+            # returns something useful instead of a 500.
+            logger.error(
+                "External brief LLM failed; using fallback summary",
+                error=str(exc),
+                callsign=callsign,
+            )
+            parsed = {
+                "product": company.summary or "No summary recorded.",
+                "news": [item.title for item in company.news_highlights],
+                "announcements": [],
+            }
 
         body = self._format_external_body(parsed)
         summary = self._store.save_summary(
@@ -112,7 +139,9 @@ class SummaryService:
             created_at=summary.created_at,
         )
 
-    def _compose_external_prompt(self, company: CompanyContext, manual_highlights: List[str]) -> str:
+    def _compose_external_prompt(
+        self, company: CompanyContext, manual_highlights: List[str]
+    ) -> str:
         news_lines = []
         for item in company.news_highlights:
             week = item.week_of.isoformat() if item.week_of else "recent"
@@ -124,11 +153,14 @@ class SummaryService:
             news_lines.append(f"- ({week}) {' — '.join(bits)}")
         manual = "\n".join(f"- {line}" for line in manual_highlights if line.strip())
         news_block = "\n".join(news_lines) or "No recent news logged."
+        last_intel = "unknown"
+        if company.last_intel_update:
+            last_intel = company.last_intel_update.isoformat()
         return f"""Company overview
 Name: {company.name}
 Callsign: {company.callsign}
 Summary: {company.summary or 'No summary recorded.'}
-Last Intel Update: {company.last_intel_update.isoformat() if company.last_intel_update else 'unknown'}
+Last Intel Update: {last_intel}
 
 Recent news items:
 {news_block}
@@ -136,7 +168,9 @@ Recent news items:
 Manual highlights:
 {manual or 'None'}
 
-Return JSON with keys product (string), news (list of short bullets), announcements (list of short bullets)."""
+Return JSON with keys product (string), news (list of short bullets),
+announcements (list of short bullets).
+"""
 
     def _parse_external_response(self, text: str) -> dict:
         try:
@@ -179,6 +213,7 @@ Return JSON with keys product (string), news (list of short bullets), announceme
     # ------------------------------------------------------------------ #
 
     def build_internal_brief(self, callsign: str) -> InternalBrief:
+        """Build an internal usage snapshot brief."""
         snapshot = self._internal.fetch(callsign)
         notes = self._format_internal_snapshot(snapshot)
         summary = self._store.save_summary(
@@ -214,9 +249,9 @@ def _company_to_dict(company: CompanyContext) -> dict:
         "name": company.name,
         "callsign": company.callsign,
         "summary": company.summary,
-        "last_intel_update": company.last_intel_update.isoformat()
-        if company.last_intel_update
-        else None,
+        "last_intel_update": (
+            company.last_intel_update.isoformat() if company.last_intel_update else None
+        ),
         "owners": company.owners,
         "news_highlights": [_news_to_dict(item) for item in company.news_highlights],
     }

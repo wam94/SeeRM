@@ -35,7 +35,6 @@ from .store import DataStore
 
 def build_app(settings: SayRMSettings | None = None) -> FastAPI:
     """Create a configured FastAPI instance."""
-
     settings = settings or SayRMSettings()
     engine = create_engine_for_path(settings.resolved_database_path())
     init_db(engine)
@@ -122,6 +121,11 @@ def build_app(settings: SayRMSettings | None = None) -> FastAPI:
             brief = svc.build_external_brief(callsign, manual_highlights=request.manual_highlights)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:  # pragma: no cover - defensive, surfaced for debugging
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to build external brief: {exc}",
+            ) from exc
         return serialize_external_brief(brief)
 
     @app.post("/companies/{callsign}/briefs/internal", response_model=InternalBriefResponse)
@@ -140,7 +144,9 @@ def build_app(settings: SayRMSettings | None = None) -> FastAPI:
         templates: TemplateService = Depends(get_template_service),
     ) -> CompanyContextResponse:
         try:
-            external_brief = svc.build_external_brief(callsign, manual_highlights=request.manual_highlights)
+            external_brief = svc.build_external_brief(
+                callsign, manual_highlights=request.manual_highlights
+            )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -168,7 +174,9 @@ def build_app(settings: SayRMSettings | None = None) -> FastAPI:
         )
 
     @app.get("/templates", response_model=List[TemplateInfo])
-    def list_templates(service: TemplateService = Depends(get_template_service)) -> List[TemplateInfo]:
+    def list_templates(
+        service: TemplateService = Depends(get_template_service),
+    ) -> List[TemplateInfo]:
         return serialize_templates(service)
 
     @app.get("/templates/{template_id}", response_model=TemplateInfo)
